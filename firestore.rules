@@ -1,0 +1,20 @@
+rules_version = '2';
+
+// Phase 1 starter rules. The only collection used so far is `users`,
+// where each authenticated user can read and write their own document.
+//
+// Rules for `organizations`, `projects`, `projects/*/members`, expenses,
+// staff, attendance, files and material requests land in the next PR
+// alongside those features. Until then we DENY everything else by default.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
