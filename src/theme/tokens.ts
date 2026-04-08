@@ -1,74 +1,96 @@
 /**
- * SiteExpens design tokens.
+ * SiteExpens design tokens — aligned with design-system.json v2.0.0.
  *
- * The visual language is "native-dense": iOS/Android conventions, system
- * fonts, tight spacing, list-first layouts. Tokens here are the *only*
- * place magic numbers and hex values are allowed in the codebase. Every
- * screen should consume these via `import { color, space, ... } from '@/src/theme'`.
+ * The visual language is "clean periwinkle": one vivid brand accent
+ * (#5B6CF5) on a near-white canvas, soft shadows, pill buttons, 18pt
+ * rounded cards. Never dense tables, never dark headers, never neon.
  *
- * See the design system section in the plan for the rationale behind
- * each value.
+ * Tokens here are the *only* place magic numbers and hex values are
+ * allowed in the codebase. Every screen should consume these via
+ * `import { color, space, ... } from '@/src/theme'`.
  */
 import type { TextStyle, ViewStyle } from 'react-native';
 
 export const color = {
-  bg: '#FFFFFF', // primary surface
-  bgGrouped: '#F7F8FA', // iOS "grouped" list backdrop
+  // Canvas & surface
+  bg: '#F5F6F8', // legacy alias for bgGrouped
+  bgGrouped: '#F5F6F8', // screen canvas
   surface: '#FFFFFF',
-  separator: '#ECEEF2', // hairline dividers
-  text: '#0B1020', // primary text
-  textMuted: '#6B7280', // secondary / metadata
-  textFaint: '#9AA0A6', // tertiary / placeholders
-  primary: '#4F7CFF',
-  primaryPressed: '#3D5FCC',
-  primarySoft: '#EEF2FF', // tinted background for selected/active states
+  surfaceAlt: '#FAFAFB',
+  separator: '#ECEDF1',
+  border: '#ECEDF1',
+  borderStrong: '#D9DBE3',
+
+  // Text
+  text: '#14151A',
+  textMuted: '#5C5F6B',
+  textFaint: '#9A9DAA',
+
+  // Brand
+  primary: '#5B6CF5',
+  primaryPressed: '#4A5AE8',
+  primarySoft: '#EEF0FE',
   onPrimary: '#FFFFFF',
-  success: '#22A06B',
-  warning: '#F59E0B',
-  danger: '#E5484D',
+
+  // Semantic
+  success: '#15A366',
   successSoft: '#E6F6EE',
-  warningSoft: '#FEF3E2',
+  warning: '#F59E0B',
+  warningSoft: '#FEF4E4',
+  danger: '#E5484D',
   dangerSoft: '#FDECEC',
+  info: '#3B82F6',
+  infoSoft: '#EAF2FE',
 } as const;
 
 export type ColorToken = keyof typeof color;
 
-/** Spacing scale (px). Tighter than the reference: 2/4/6/8/12/16/20/24. */
+/** Spacing scale (px). 4pt base, aligned with design-system.json. */
 export const space = {
-  xxs: 2,
-  xs: 4,
-  sm: 6,
-  md: 8,
+  xxs: 4,
+  xs: 8,
+  sm: 12,
+  md: 16,
+  lg: 20,
+  xl: 24,
+  xxl: 32,
+  xxxl: 40,
+  huge: 56,
+  // Legacy aliases (kept so existing screens still compile)
   base: 12,
-  lg: 16,
-  xl: 20,
-  xxl: 24,
-  xxxl: 32,
 } as const;
 
 export type SpaceToken = keyof typeof space;
 
-/** Border radius. Most rows are square-ish; only buttons/sheets round. */
+/** Border radius. */
 export const radius = {
   none: 0,
-  sm: 6,
-  md: 10,
-  lg: 14,
-  xl: 20,
-  pill: 999,
+  xs: 6,
+  sm: 10,
+  md: 14,
+  lg: 18,
+  xl: 24,
+  pill: 9999,
 } as const;
 
 export type RadiusToken = keyof typeof radius;
 
 /**
- * Type scale, modeled after iOS Human Interface Guidelines.
- * Each variant produces a fully-typed React Native TextStyle.
+ * Type scale, aligned with design-system.json v2. Named to match the
+ * Text component variants already used across the codebase.
  */
 export const type = {
-  caption: {
+  micro: {
     fontSize: 11,
     fontWeight: '500',
     lineHeight: 14,
+    letterSpacing: 0.4,
+  },
+  caption: {
+    fontSize: 12,
+    fontWeight: '500',
+    lineHeight: 16,
+    letterSpacing: 0.1,
   },
   meta: {
     fontSize: 13,
@@ -83,17 +105,18 @@ export const type = {
   body: {
     fontSize: 15,
     fontWeight: '400',
-    lineHeight: 20,
+    lineHeight: 22,
   },
   bodyStrong: {
     fontSize: 15,
     fontWeight: '600',
-    lineHeight: 20,
+    lineHeight: 22,
   },
   rowTitle: {
     fontSize: 16,
     fontWeight: '600',
     lineHeight: 22,
+    letterSpacing: -0.1,
   },
   section: {
     fontSize: 12,
@@ -103,54 +126,61 @@ export const type = {
     textTransform: 'uppercase',
   },
   title: {
-    fontSize: 20,
-    fontWeight: '700',
-    lineHeight: 26,
+    fontSize: 18,
+    fontWeight: '600',
+    lineHeight: 24,
+    letterSpacing: -0.2,
   },
   largeTitle: {
     fontSize: 28,
     fontWeight: '700',
     lineHeight: 34,
+    letterSpacing: -0.4,
   },
 } as const satisfies Record<string, TextStyle>;
 
 export type TypeVariant = keyof typeof type;
 
-/** Elevation. Used sparingly: only on FAB and bottom sheets. */
+/** Elevation — soft, almost imperceptible. */
 export const shadow = {
   none: {} as ViewStyle,
   hairline: {
-    shadowColor: '#000',
+    shadowColor: '#14151A',
     shadowOpacity: 0.04,
-    shadowRadius: 1,
+    shadowRadius: 2,
     shadowOffset: { width: 0, height: 1 },
     elevation: 1,
   } as ViewStyle,
   card: {
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
+    shadowColor: '#14151A',
+    shadowOpacity: 0.05,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 2 },
     elevation: 2,
   } as ViewStyle,
+  lg: {
+    shadowColor: '#14151A',
+    shadowOpacity: 0.08,
+    shadowRadius: 28,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 8,
+  } as ViewStyle,
   fab: {
-    shadowColor: '#000',
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 6,
+    shadowColor: '#5B6CF5',
+    shadowOpacity: 0.28,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
   } as ViewStyle,
 } as const;
 
 export type ShadowToken = keyof typeof shadow;
 
-/** Minimum touch target. Hit areas extend at least this far. */
+/** Minimum touch target. */
 export const minTouchTarget = 44;
 
-/** Standard horizontal screen inset. Lists run edge-to-edge below this. */
-export const screenInset = 16;
+/** Standard horizontal screen inset — 20pt per design system. */
+export const screenInset = 20;
 
-/** Hairline width helper — 0.5pt on iOS, 1px on Android by convention.
- *  RN's StyleSheet.hairlineWidth handles this for us; this constant exists
- *  so we can use it without importing StyleSheet in every consumer. */
+/** Hairline width helper. */
 export const hairline = 0.5;

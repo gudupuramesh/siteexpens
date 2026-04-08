@@ -1,0 +1,770 @@
+{
+  "$schema": "https://siteexpens.local/design-system.schema.json",
+  "name": "SiteExpens Mobile Design System",
+  "version": "2.0.0",
+  "description": "Clean, card-driven mobile design system for a Phase-2 interior-fitout project management app. Aesthetic is soft minimalism — airy layouts, periwinkle accent, pill buttons, rounded cards. Information architecture modeled after category-leading competitors (Onsite/Staart/Simple) BUT with a calmer, interior-designer-appropriate visual language — no dark purple headers, no neon pinks, no harsh borders.",
+
+  "designPhilosophy": {
+    "mood": ["clean", "airy", "friendly", "modern", "trustworthy", "professional"],
+    "targetUser": "Interior designers and small interior-fitout firm owners in India running 3–15 active sites. They live on mobile, need fast data entry between site visits, and value visual calm over information density.",
+    "principles": [
+      "Content floats on top of the canvas inside rounded 'card' surfaces — the canvas itself is never bare content.",
+      "One vivid brand accent (periwinkle / indigo-blue) carries all primary actions, selection states, and brand moments. Everything else is neutral.",
+      "Color is used sparingly and with intent: accent = action, semantic = money/status, neutral = content. Never decorative color.",
+      "Hierarchy is established by weight and size, not by color or borders. Dividers are hairlines or absent.",
+      "Corners are always rounded. Buttons are fully pill-shaped. Cards use 18pt radius.",
+      "Shadows are soft, low-opacity, and large-radius — never harsh. Elevation is a whisper.",
+      "Every interactive target has breathing room — minimum 44pt tap targets, generous padding inside cards.",
+      "Empty states use a single illustration or glyph + short sentence + one CTA. Never walls of text.",
+      "Information density is tiered: dashboards show stats + quick actions + scannable list; detail screens use horizontal tabs to avoid burying content.",
+      "Money is always right-aligned, tabular, and color-coded (green = incoming/settled, red = outgoing/pending)."
+    ],
+    "notMatching": [
+      "dense data tables",
+      "heavy borders or dividers",
+      "dark saturated headers (competitors use dark purple — we do NOT)",
+      "harsh neon pinks / reds on chrome",
+      "skeuomorphism",
+      "brutalist / high-contrast",
+      "gradients as primary surfaces (only as subtle accents on branded hero elements)",
+      "screenshot ads / upsell banners on the dashboard"
+    ]
+  },
+
+  "colorSystem": {
+    "approach": "Monochromatic neutrals + one saturated accent + restrained semantic colors. ~80% of any screen is white/near-white, ~10% is neutral text, ~5% is accent, ~5% is semantic (money, status).",
+    "palette": {
+      "brand": {
+        "primary":        { "value": "#5B6CF5", "role": "Primary actions, selected states, links, brand surfaces, focus rings" },
+        "primaryHover":   { "value": "#4A5AE8", "role": "Pressed / hover state of primary" },
+        "primaryMuted":   { "value": "#EEF0FE", "role": "Tinted backgrounds for icon badges, chip fills, selected-but-subtle states, hero card secondary fill" },
+        "primaryGradient":{ "value": "linear-gradient(135deg, #6B7BF7 0%, #8A97FA 100%)", "role": "Hero summary cards (Party Balances, Wallet, etc). Used sparingly — one per screen max." }
+      },
+      "neutrals": {
+        "canvas":         { "value": "#F5F6F8", "role": "Screen background — the 'paper' everything sits on" },
+        "surface":        { "value": "#FFFFFF", "role": "Card background, sheet background, default surface" },
+        "surfaceAlt":     { "value": "#FAFAFB", "role": "Subtle inset surfaces (input fields, nested tiles)" },
+        "border":         { "value": "#ECEDF1", "role": "Hairline dividers, input borders, card outlines when needed" },
+        "borderStrong":   { "value": "#D9DBE3", "role": "Emphasized dividers, disabled outlines, unselected chip borders" },
+        "textPrimary":    { "value": "#14151A", "role": "Headings, primary body text, amounts" },
+        "textSecondary":  { "value": "#5C5F6B", "role": "Secondary labels, captions, metadata" },
+        "textMuted":      { "value": "#9A9DAA", "role": "Placeholders, disabled text, timestamps, status sub-labels" },
+        "textOnPrimary":  { "value": "#FFFFFF", "role": "Text on top of the primary accent" }
+      },
+      "semantic": {
+        "success":        { "value": "#15A366", "role": "Money IN, advance paid, settled, positive deltas" },
+        "successSoft":    { "value": "#E6F6EE", "role": "Tinted background for 'Received' / 'In' stat tiles" },
+        "warning":        { "value": "#F59E0B", "role": "Pending, ratings, cautions, upsell highlights" },
+        "warningSoft":    { "value": "#FEF4E4", "role": "Tinted background for warning tiles" },
+        "danger":         { "value": "#E5484D", "role": "Money OUT, to pay, destructive actions, errors" },
+        "dangerSoft":     { "value": "#FDECEC", "role": "Tinted background for 'Out' / 'To Pay' stat tiles" },
+        "info":           { "value": "#3B82F6", "role": "Informational badges" },
+        "infoSoft":       { "value": "#EAF2FE", "role": "Tinted background for 'Staff Present' / neutral stat tiles" }
+      }
+    },
+    "usageRules": [
+      "Screens use canvas (#F5F6F8) as the root background; cards use surface (#FFFFFF) on top.",
+      "Primary buttons are filled with brand.primary and text in textOnPrimary. There are no outlined primary buttons — secondary actions are plain text or ghost pills.",
+      "Selected chips, tabs, and list items adopt a brand.primary pill fill with textOnPrimary.",
+      "Unselected chips use surface with textSecondary and a 1px borderStrong outline — never filled in a secondary color.",
+      "Icons inside cards live inside a brand.primaryMuted tinted rounded square/circle badge with the brand.primary glyph.",
+      "Money IN is always semantic.success; money OUT is always semantic.danger. Neutral/settled is textSecondary.",
+      "Stat tiles may optionally use the *Soft backgrounds to color-code (mint for in, peach for out, lavender for neutral) — but only in summary strips, never in list rows.",
+      "Destructive actions (Delete Project, End Session) are the only use of pure semantic.danger on text."
+    ]
+  },
+
+  "typography": {
+    "fontFamily": {
+      "primary": "Inter, SF Pro Text, system-ui, -apple-system, sans-serif",
+      "fallback": "system-ui",
+      "monospace": "SF Mono, Menlo, monospace"
+    },
+    "weights": { "regular": 400, "medium": 500, "semibold": 600, "bold": 700 },
+    "scale": {
+      "displayLarge":  { "size": 28, "lineHeight": 34, "weight": 700, "letterSpacing": -0.4, "usage": "Large-title screen headers ('Projects', 'Parties')" },
+      "displayMedium": { "size": 22, "lineHeight": 28, "weight": 700, "letterSpacing": -0.3, "usage": "Hero card metric values" },
+      "titleLarge":    { "size": 18, "lineHeight": 24, "weight": 600, "letterSpacing": -0.2, "usage": "Nav bar titles, card titles, list item primary text" },
+      "titleMedium":   { "size": 16, "lineHeight": 22, "weight": 600, "letterSpacing": -0.1, "usage": "Section headers, emphasized row labels, amount values in lists" },
+      "bodyLarge":     { "size": 16, "lineHeight": 24, "weight": 400, "letterSpacing": 0,    "usage": "Paragraph text, input values" },
+      "bodyMedium":    { "size": 14, "lineHeight": 20, "weight": 400, "letterSpacing": 0,    "usage": "Default UI text, list secondary lines" },
+      "label":         { "size": 14, "lineHeight": 18, "weight": 500, "letterSpacing": 0,    "usage": "Button labels, tab labels, form field labels" },
+      "caption":       { "size": 12, "lineHeight": 16, "weight": 500, "letterSpacing": 0.1,  "usage": "Metadata, badge text, chip text, timestamps, stat-tile labels" },
+      "micro":         { "size": 11, "lineHeight": 14, "weight": 500, "letterSpacing": 0.4,  "usage": "Tab bar labels, uppercase section headers" }
+    },
+    "rules": [
+      "Screen titles are always centered in the nav bar and paired with a circular back-button on the left.",
+      "Large-title headers are only used on the top-level tab screens (Projects dashboard, Parties dashboard); inner detail screens use titleLarge centered in the nav bar.",
+      "Pair sizes with weights: 600 for titles, 400 for body, 500 for labels/chips. Avoid 700 except for display.",
+      "Letter-spacing is slightly negative on titles, neutral on body, slightly positive on captions — this gives the type a 'calm and intentional' rhythm.",
+      "Two-line list rows use titleLarge (600) + bodyMedium (textSecondary) beneath.",
+      "Amounts (₹) ALWAYS use tabular numerals so stacked columns align. React Native: fontVariant: ['tabular-nums']."
+    ]
+  },
+
+  "spacing": {
+    "base": 4,
+    "scale": {
+      "xxs": 4, "xs": 8, "sm": 12, "md": 16, "lg": 20, "xl": 24, "xxl": 32, "xxxl": 40, "huge": 56
+    },
+    "rules": [
+      "Screen edge inset is 20pt (lg) on all sides.",
+      "Cards have 16pt (md) internal padding; list rows inside a card have 12–16pt vertical padding.",
+      "Vertical rhythm between stacked cards/sections is 16pt (md).",
+      "Between a section header and its first item: 12pt (sm). Between the last item and the next section header: 24pt (xl).",
+      "Primary CTA buttons sit at the bottom of the screen with 20pt horizontal inset and 16–20pt safe-area bottom margin.",
+      "Icon-to-label horizontal gap inside a row: 12pt (sm).",
+      "Bottom tab bar clears floating content with 80pt content bottom padding.",
+      "Never crowd: if in doubt, add 4pt."
+    ]
+  },
+
+  "radii": {
+    "none": 0, "xs": 6, "sm": 10, "md": 14, "lg": 18, "xl": 24, "pill": 9999,
+    "rules": [
+      "Cards: lg (18) — consistently throughout the app.",
+      "Primary buttons and chips: pill — always fully rounded, never sharp.",
+      "Input fields: md (14).",
+      "Icon badges (the tinted squares behind glyphs): md (14) for square, pill for circular.",
+      "Profile avatars and circular action buttons: pill.",
+      "Stat tiles: md (14) — smaller than cards so they read as sub-elements.",
+      "Images inside cards: md (14) — matching input radius so they feel like siblings."
+    ]
+  },
+
+  "elevation": {
+    "approach": "Shadows are soft, diffuse, and almost imperceptible. They exist to separate the card from the canvas, not to demand attention.",
+    "tokens": {
+      "none":  { "shadow": "none" },
+      "xs":    { "shadow": "0 1px 2px rgba(20, 21, 26, 0.04)", "usage": "Default card rest state" },
+      "sm":    { "shadow": "0 2px 8px rgba(20, 21, 26, 0.05)", "usage": "Floating tiles, nav bar, tab bar, sticky action bar" },
+      "md":    { "shadow": "0 6px 16px rgba(20, 21, 26, 0.06)", "usage": "Bottom sheets, modals, FAB" },
+      "lg":    { "shadow": "0 12px 28px rgba(20, 21, 26, 0.08)", "usage": "Hero branded cards (party balances, wallet)" },
+      "brand": { "shadow": "0 8px 20px rgba(91, 108, 245, 0.25)", "usage": "Primary CTA buttons get a tinted drop-shadow in their own brand color" }
+    }
+  },
+
+  "iconography": {
+    "style": "Outlined, rounded, 2px stroke. Monochrome. Sized in 20/24 grid.",
+    "sizes": { "sm": 16, "md": 20, "lg": 24, "xl": 28 },
+    "rules": [
+      "Icons in list items live inside a tinted rounded square (brand.primaryMuted fill, md radius, 40×40 or 48×48). The glyph inside is brand.primary.",
+      "Transaction list row icons use semantic tint: In → successSoft with success glyph, Out → dangerSoft with danger glyph.",
+      "Action icons in the nav bar (back arrow, search, more) are placed inside a 40pt circular surface-white button with a soft shadow (elevation.xs).",
+      "Tab bar icons are outline-only, 24pt. The selected tab shows a brand.primary filled glyph + brand.primary label; unselected is textMuted.",
+      "Never mix filled and outlined icons in the same context."
+    ]
+  },
+
+  "informationArchitecture": {
+    "primaryNav": {
+      "pattern": "bottomTabBar",
+      "tabs": [
+        { "key": "projects", "label": "Projects", "icon": "home",    "role": "Firm dashboard + all projects list" },
+        { "key": "parties",  "label": "Parties",  "icon": "users",   "role": "Firm-wide vendors, clients, staff + balances" },
+        { "key": "crm",      "label": "CRM",      "icon": "sparkle", "role": "Leads, follow-ups, pipeline (Phase 3)" },
+        { "key": "chats",    "label": "Chats",    "icon": "chat",    "role": "Project chats, site team messaging (Phase 3)" }
+      ],
+      "notes": "Exactly 4 tabs. More would crowd. Side drawer (hamburger) holds org-level settings (Roles, Payroll, Company, Backup)."
+    },
+    "sideDrawer": {
+      "pattern": "modalSlideFromLeft",
+      "trigger": "hamburger icon in the top-left of the Projects tab nav bar",
+      "header": "org logo/initial + org name + edit icon",
+      "items": [
+        "Home", "Roles & Access", "Payroll People", "Master Library",
+        "Company Settings", "Business Card", "Invite Friends",
+        "Customer Support", "Backup (with last-synced timestamp)",
+        "Give Feedback", "Logout"
+      ],
+      "footer": "App version + Terms & Conditions link"
+    },
+    "projectDetailTabs": {
+      "pattern": "scrollableTabBar",
+      "tabs": [
+        { "key": "party",       "label": "Party"       },
+        { "key": "transaction", "label": "Transaction" },
+        { "key": "site",        "label": "Site"        },
+        { "key": "task",        "label": "Task"        },
+        { "key": "attendance",  "label": "Attendance"  },
+        { "key": "material",    "label": "Material"    },
+        { "key": "mom",         "label": "MOM"         },
+        { "key": "design",      "label": "Design"      },
+        { "key": "files",       "label": "Files"       }
+      ],
+      "notes": "Horizontally scrollable. Default tab is Transaction (most-used day-to-day). Tab header stays pinned while the body scrolls."
+    }
+  },
+
+  "components": {
+    "screen": {
+      "layout": "SafeArea → NavBar → Scrollable content (cards, sections) → optional pinned StickyActionBar → optional BottomTabBar.",
+      "background": "canvas",
+      "horizontalInset": 20
+    },
+
+    "navBar": {
+      "height": 56,
+      "background": "transparent over canvas",
+      "layout": "Left: 40×40 circular button (back arrow OR hamburger for top-level tabs). Center: title (titleLarge) OR large-title left-aligned. Right: optional 40×40 circular action button (search/notifications/more).",
+      "variants": {
+        "stacked":     "Used on pushed screens. Back button left, title centered, action right.",
+        "largeTitle":  "Used on top-level tab screens. Small org-name caption above a large-title heading, avatar button on the right."
+      },
+      "notes": "No bottom border. No elevation. Never tinted — sits on canvas."
+    },
+
+    "largeHeader": {
+      "layout": "Left: two lines (uppercase org name in caption textMuted, then displayLarge title in textPrimary). Right: 40pt circular avatar button with company initial (primary fill).",
+      "usedOn": "Projects tab, Parties tab, CRM tab, Chats tab",
+      "padding": "20pt horizontal, 12pt top, 8pt bottom"
+    },
+
+    "card": {
+      "background": "surface",
+      "radius": "lg",
+      "padding": 16,
+      "elevation": "xs",
+      "border": "none",
+      "hoverPressed": "scale(0.98) + elevation drops to none",
+      "variants": {
+        "default":   "White surface with tiny shadow, used for list items and panels.",
+        "brandHero": "Gradient fill (brand.primaryGradient), white text, elevation.lg, 20pt padding. Used for summaryHeroCard only.",
+        "imageLed":  "Card where a photo occupies the left ~30% (or fills the top half); right side / below stacks the title + metadata rows. Used for project list cards."
+      }
+    },
+
+    "projectCard": {
+      "pattern": "imageLed card + name row + address row + date range + 3-cell money footer",
+      "structure": [
+        "Top: photo (120pt tall, full card width, radius lg on top corners only) OR 80×80 square on left for compact variant",
+        "Title row: project name (titleLarge, 1 line) + trailing kebab menu (3-dot button)",
+        "Subtitle row: site address (bodyMedium textSecondary, 1 line, ellipsis)",
+        "Date range: start → end (caption textMuted)",
+        "Footer: 3-cell row — VALUE (primary, titleMedium), IN (success, titleMedium), OUT (danger, titleMedium). Each cell has a caption label above."
+      ],
+      "pressed": "scale 0.98",
+      "rightChevron": "subtle textMuted chevron if the whole card is tappable"
+    },
+
+    "summaryHeroCard": {
+      "pattern": "gradient wide card with 1-3 metric cells and a subtle decorative illustration at the right edge",
+      "background": "brand.primaryGradient",
+      "textColor": "textOnPrimary",
+      "elevation": "lg",
+      "radius": "lg",
+      "padding": 20,
+      "examples": [
+        "PARTY BALANCES — two cells: To Pay / To Receive",
+        "WALLET — three cells: Balance / In / Out",
+        "DPR — single cell: today's progress"
+      ],
+      "notes": "Title is a caption in 70%-white. Metric values are displayMedium in pure white. Optional right-edge decorative icon (coins stack, wallet, chart) in 70%-white overlay."
+    },
+
+    "statStrip": {
+      "pattern": "horizontal row of 2–3 stat tiles inside a card, used to summarize a section",
+      "tile": {
+        "radius": "md",
+        "padding": 16,
+        "minHeight": 72,
+        "layout": "label (caption textMuted uppercase) above a large value (titleMedium textPrimary). Optional right-side tiny glyph.",
+        "backgroundVariants": {
+          "neutral": "surfaceAlt",
+          "info":    "infoSoft (lavender)",
+          "success": "successSoft (mint)",
+          "danger":  "dangerSoft (peach)",
+          "warning": "warningSoft (amber)"
+        }
+      },
+      "gap": "8pt between tiles",
+      "examples": [
+        "Projects dashboard header: Approvals / Material / Tasks pending",
+        "Site tab: Site Staff Present / Material Received / Material Used",
+        "Transactions tab: Balance / Total In / Total Out / Invoice / Total Expense (2-row 3-col grid)",
+        "Task tab: Not Started / Ongoing / Progress%"
+      ],
+      "rule": "Never more than 3 cells per row. If you need more, stack rows with 8pt gap."
+    },
+
+    "segmentedChips": {
+      "pattern": "horizontal row of outlined pill chips for filtering content (e.g. Inventory / Request / Received / Used)",
+      "chip": {
+        "shape": "pill",
+        "height": 40,
+        "paddingX": 18,
+        "unselected": {
+          "background": "surface",
+          "label": "textSecondary",
+          "weight": 500,
+          "border": "1px borderStrong"
+        },
+        "selected": {
+          "background": "primaryMuted",
+          "label": "brand.primary",
+          "weight": 600,
+          "border": "1.5px brand.primary"
+        }
+      },
+      "gap": "8pt",
+      "scrollable": true,
+      "distinction": "Different from `scrollableTabBar`: chips are for FILTERING a list, tabs are for SWITCHING between content sections.",
+      "examples": [
+        "Attendance filter: All / Site Staff / Labour Contractor",
+        "Material filter: Inventory / Request / Received / Used",
+        "Design filter: 2D Layout / 3D Layout / Production Files"
+      ]
+    },
+
+    "scrollableTabBar": {
+      "pattern": "horizontal row of text tabs with an animated underline indicator, used inside a detail screen to switch between content sections",
+      "layout": "Horizontally scrollable list of labels. Active label has a 3pt brand.primary underline pill centered beneath, rounded top. Height 44pt.",
+      "background": "surface",
+      "borderBottom": "none (use 16pt spacing to the content instead)",
+      "selected":   { "label": "brand.primary",  "weight": 600 },
+      "unselected": { "label": "textSecondary",  "weight": 500 },
+      "notes": "Tabs do NOT take the dark header chrome competitors use. They sit on the white surface under the nav bar, separated by 8pt.",
+      "usedOn": "ProjectDetail (Party, Transaction, Site, Task, Attendance, Material, MOM, Design, Files)"
+    },
+
+    "dateNavigator": {
+      "pattern": "‹ [date pill] › — used on Site, Attendance and any date-scoped tab",
+      "layout": "Left arrow button (32pt circle surface elevation xs), center date pill (primary tint fill, caption uppercase day name over titleMedium day number), right arrow button",
+      "datePill": {
+        "background": "primaryMuted",
+        "label": "brand.primary",
+        "radius": "md",
+        "paddingX": 14,
+        "paddingY": 8
+      },
+      "alternatePattern": "Single-line scrollable strip of 7 day-chips centered on today, like an iOS date picker."
+    },
+
+    "stickyActionBar": {
+      "pattern": "pinned to the bottom of the screen, above the safe-area, holds primary action(s) for the current tab",
+      "background": "surface",
+      "elevation": "sm",
+      "paddingTop": 12,
+      "paddingBottom": "safeArea + 8pt",
+      "paddingX": 20,
+      "variants": {
+        "singleCTA": {
+          "content": "Full-width primary button (52pt, pill, brand.primary)",
+          "examples": ["Create DPR", "+ Add New Task", "Save"]
+        },
+        "dualCTA": {
+          "content": "Two full-width buttons side by side with 8pt gap — left and right use different semantic fills (success + danger for Payment In/Out; primary muted + primary fill for Request/Received)",
+          "examples": ["Payment In / Payment Out (transactions)", "+ Request / + Received (material)"],
+          "note": "Optional center 56pt FAB sitting on top of the seam — taps open a generic create sheet"
+        }
+      },
+      "rule": "Sticky action bar replaces floating FABs on tabs that have clear primary actions. On tabs with multiple equal actions (Projects list), keep a floating FAB instead."
+    },
+
+    "bottomTabBar": {
+      "pattern": "4-tab primary navigation",
+      "height": 72,
+      "background": "surface",
+      "elevation": "sm",
+      "radius": { "top": 0, "bottom": 0 },
+      "borderTop": "1px border",
+      "itemLayout": "Icon (24pt outline) above label (micro). Selected item has brand.primary filled icon + brand.primary label; unselected is textMuted.",
+      "safeArea": "respects bottom safe area",
+      "notes": "4 tabs exactly: Projects, Parties, CRM, Chats. Icons are outline-only, same style."
+    },
+
+    "button": {
+      "primary": {
+        "shape": "pill",
+        "height": 52,
+        "paddingX": 28,
+        "background": "brand.primary",
+        "label": { "style": "label", "weight": 600, "color": "textOnPrimary" },
+        "elevation": "brand",
+        "pressed": "background = brand.primaryHover, scale 0.98",
+        "disabled": "background = brand.primaryMuted, label = textMuted, no shadow",
+        "layout": "Almost always full-width with 20pt horizontal screen inset."
+      },
+      "success": {
+        "shape": "pill",
+        "height": 52,
+        "background": "semantic.success",
+        "label": { "color": "textOnPrimary", "weight": 600 },
+        "usage": "Payment In button in dual sticky action bar"
+      },
+      "danger": {
+        "shape": "pill",
+        "height": 52,
+        "background": "semantic.danger",
+        "label": { "color": "textOnPrimary", "weight": 600 },
+        "usage": "Payment Out button in dual sticky action bar"
+      },
+      "secondary": {
+        "shape": "pill",
+        "height": 52,
+        "background": "transparent",
+        "label": { "style": "label", "color": "brand.primary" },
+        "border": "none"
+      },
+      "ghost": {
+        "shape": "pill",
+        "height": 44,
+        "background": "surfaceAlt",
+        "label": { "color": "textPrimary" }
+      },
+      "iconCircular": {
+        "shape": "pill",
+        "size": 40,
+        "background": "surface",
+        "elevation": "xs",
+        "usage": "Back buttons, nav actions, drawer hamburger, date navigator arrows"
+      },
+      "destructiveText": {
+        "style": "plain-text row with danger color, leading trash icon",
+        "usage": "Delete Project row at bottom of Project Settings"
+      }
+    },
+
+    "chip": {
+      "shape": "pill",
+      "height": 36,
+      "paddingX": 18,
+      "unselected": { "background": "transparent", "label": "textSecondary", "weight": 500 },
+      "selected":   { "background": "brand.primary", "label": "textOnPrimary", "weight": 600 },
+      "layout": "Horizontal scrollable row with 8pt gaps. First chip is usually 'All'.",
+      "notes": "Chips are for mutually-exclusive mode switching inside a tab. For filter-style mode, use segmentedChips (outlined) instead."
+    },
+
+    "input": {
+      "height": 52,
+      "background": "surfaceAlt",
+      "border": "1px solid border",
+      "radius": "md",
+      "paddingX": 16,
+      "label": { "position": "above", "style": "label", "color": "textSecondary", "gap": 8 },
+      "placeholder": "textMuted",
+      "focus": { "border": "1.5px solid brand.primary" },
+      "error":  { "border": "1px solid semantic.danger", "helperText": "semantic.danger" }
+    },
+
+    "searchField": {
+      "height": 48,
+      "background": "surface",
+      "border": "1px solid border",
+      "radius": "md",
+      "paddingX": 16,
+      "leadingIcon": "magnifier textMuted 20pt",
+      "placeholder": "textMuted",
+      "notes": "When inline in a toolbar row, drop the leading icon and put it trailing instead."
+    },
+
+    "toolbarRow": {
+      "pattern": "single row of small action buttons + optional inline search/filter controls, sits above a list",
+      "height": 48,
+      "paddingX": 20,
+      "layout": "Left: icon buttons (filter, sort, search) — 36pt squares with subtle surface + border. Right: primary inline action (+ New Party / + Project) in brand.primary text.",
+      "examples": ["Parties global dashboard toolbar", "Projects list toolbar"]
+    },
+
+    "listRow": {
+      "layout": "[leading icon-badge or avatar 40×40] — [title (titleLarge) + subtitle (bodyMedium textSecondary)] — [trailing: amount+status OR price OR chevron OR radio]",
+      "height": "min 64pt, grows with content",
+      "dividers": "none inside a card; between cards use 16pt spacing instead",
+      "tappable": "entire row, pressed state = surfaceAlt fill"
+    },
+
+    "partyRow": {
+      "pattern": "list row for a vendor/client/staff",
+      "leading": "40pt circular avatar with initial (colored fill — primary, success, warning, or info — hashed from the party id)",
+      "body": "name (titleMedium) + role subtitle (bodyMedium textSecondary — e.g. 'Material Supplier', 'Staff', 'Client')",
+      "trailing": "amountStatus cell",
+      "examples": ["Parties global list", "Party tab inside a project"]
+    },
+
+    "amountStatus": {
+      "pattern": "right-aligned money value with a tiny status label underneath",
+      "layout": "Top line: amount in titleMedium, color-coded (success for incoming/advance paid, danger for to pay, textSecondary for settled). Bottom line: tiny caption textMuted label ('Advance Paid', 'To Pay', 'Settled', 'I Have Advance').",
+      "alignment": "right",
+      "rule": "Amount and status ALWAYS colored as a pair — they must agree."
+    },
+
+    "transactionRow": {
+      "pattern": "list row for a payment",
+      "leading": "40pt rounded square tile — successSoft fill with success up-arrow (In) OR dangerSoft fill with danger down-arrow (Out)",
+      "body": "top line: date + type ('08 Apr 26, Payment Out') in caption textMuted. Main line: party name (titleMedium). Optional subtitle: description (bodyMedium textSecondary).",
+      "trailing": "amount in titleMedium, color-coded same as the leading tile",
+      "dividers": "1px border separator between rows inside the list card"
+    },
+
+    "sectionHeaderInlineAction": {
+      "pattern": "section label on the left + colored action text on the right, used above a list inside a card",
+      "height": 40,
+      "layout": "Left: label (titleMedium textPrimary). Right: action (label brand.primary, e.g. '+ Add Material', '+ Add Site Staff', '+ New Party', 'View All ›')",
+      "rule": "Use for in-card actions that don't warrant a sticky button."
+    },
+
+    "trustCard": {
+      "pattern": "two-row card with icon + title + subtitle each, used to communicate assurance",
+      "rows": [
+        "[green shield glyph] 100% Safe — Onsite is safe",
+        "[green database glyph] 100% Auto Data Backup — All data is linked to your phone number"
+      ],
+      "glyphColor": "semantic.success",
+      "usedOn": "Project Settings, Profile, Onboarding finish"
+    },
+
+    "memberRow": {
+      "pattern": "list row for a team member with a role badge",
+      "leading": "40pt circular avatar",
+      "body": "name (titleMedium) + phone (bodyMedium textSecondary)",
+      "trailing": "statusBadge outlined ('Super Admin', 'Admin', 'Member')",
+      "variant": "In Project Settings, this row sits inside a card with a 'Project Access N Members' header and a 'View All' footer link."
+    },
+
+    "statusBadge": {
+      "shape": "pill",
+      "height": 24,
+      "paddingX": 10,
+      "outline": "1px borderStrong",
+      "background": "surface",
+      "label": "caption textPrimary weight 600",
+      "variants": {
+        "default":  "neutral outline",
+        "success":  "semantic.success outline + semantic.success label",
+        "warning":  "semantic.warning outline + semantic.warning label",
+        "danger":   "semantic.danger outline + semantic.danger label",
+        "primary":  "brand.primary outline + brand.primary label"
+      }
+    },
+
+    "destructiveRow": {
+      "pattern": "card row with a trash icon on the left and 'Delete Project' (or similar) in semantic.danger on the right",
+      "layout": "[trash glyph danger] — label (titleMedium danger). Right-aligned chevron optional.",
+      "confirmation": "Tapping opens a confirmation bottom sheet with a danger primary button and a cancel secondary."
+    },
+
+    "drawerNav": {
+      "pattern": "side drawer (slide from left) with org header, nav list, demo upsell, and version footer",
+      "header": "[org initial square] + org name + edit icon",
+      "navItem": {
+        "height": 52,
+        "layout": "[leading icon 24pt textSecondary] + [label bodyLarge textPrimary]",
+        "active": "brand.primary label + primaryMuted row fill",
+        "radius": "md"
+      },
+      "footer": "app version + terms & conditions link in caption textMuted"
+    },
+
+    "bottomSheet": {
+      "radius": { "top": "xl", "bottom": 0 },
+      "background": "surface",
+      "handle": "36×4 pill, borderStrong, centered 8pt from top",
+      "elevation": "md",
+      "paddingTop": 20
+    },
+
+    "fab": {
+      "size": 56,
+      "shape": "pill",
+      "background": "brand.primary",
+      "elevation": "brand",
+      "glyph": "white plus, 24pt",
+      "usage": "Projects list dashboard only. Replaced by stickyActionBar on tabs with dedicated primary actions."
+    },
+
+    "avatar": {
+      "shape": "circle",
+      "sizes": { "sm": 32, "md": 40, "lg": 56, "xl": 96 },
+      "placeholderFill": "deterministic from id hash → primary, success, warning, or info",
+      "presenceDot": { "size": 10, "color": "success", "border": "2px surface", "position": "bottom-right" }
+    }
+  },
+
+  "layoutPatterns": {
+    "screenStructure": [
+      "1. NavBar (56pt) — large-title on top-level tabs, centered-title on pushed screens.",
+      "2. Optional horizontal scrollable chip / scrollableTabBar (44–56pt tall).",
+      "3. Scrollable body of cards separated by 16pt.",
+      "4. Optional pinned stickyActionBar OR floating FAB.",
+      "5. BottomTabBar on top-level tab screens."
+    ],
+    "projectsDashboard": [
+      "largeHeader (org + 'Projects')",
+      "statStrip (Approvals / Material / Tasks pending) — 3 colored tiles",
+      "toolbarRow (filter, sort, search) + inline '+ Project' action",
+      "FlatList of projectCards with 16pt gaps",
+      "FAB (+ in the bottom-right, above the bottom tab bar)"
+    ],
+    "projectDetail": [
+      "navBar (back, project name centered, settings kebab right)",
+      "hero photo 200pt",
+      "summary card (value / timeline)",
+      "scrollableTabBar (Party, Transaction, Site, Task, Attendance, Material, MOM, Design, Files)",
+      "tab body — empty state OR its own structure (see per-tab patterns)",
+      "optional stickyActionBar depending on tab"
+    ],
+    "transactionTab": [
+      "statStrip (Balance / Total In / Total Out + Invoice / Total Expense — 2-row 3-col grid)",
+      "sectionHeaderInlineAction toolbar (filter, Request, Unbilled, Approvals)",
+      "transaction list (transactionRow inside one card with dividers)",
+      "dualCTA stickyActionBar (Payment In / + / Payment Out)"
+    ],
+    "partyTabInProject": [
+      "Team Members row with 'Manage Access ›' link",
+      "statStrip 2-cell (Advance Paid / Pending To Pay)",
+      "searchField",
+      "sectionHeaderInlineAction ('Active ⌄' + sort)",
+      "party list (partyRow inside a single card)"
+    ],
+    "partiesGlobal": [
+      "largeHeader",
+      "summaryHeroCard (Party Balances — To Pay / To Receive)",
+      "toolbarRow (filter, sort, search, Active, PDF, + New Party)",
+      "party list"
+    ],
+    "siteTab": [
+      "progress bar + Material Requests link",
+      "dateNavigator",
+      "statStrip (Staff Present / Material Received / Material Used)",
+      "Site Photos horizontal strip with '+' tile",
+      "Ongoing Tasks section",
+      "singleCTA stickyActionBar (Create DPR)"
+    ],
+    "formFlow": "Forms present each field as label (above) + input (surfaceAlt fill), stacked with 16pt gaps, scrolled, with a single pinned stickyActionBar.singleCTA at the bottom.",
+    "successFlow": "Success screens center a large illustration or iconic circular check badge, followed by displayLarge headline, one line of bodyLarge textSecondary, then a primary CTA and a secondary text action beneath."
+  },
+
+  "featureModules": {
+    "phase1_done": [
+      "Auth (phone OTP native RNFirebase)",
+      "Organization onboarding",
+      "Profile screen",
+      "Projects: list + create + detail (with empty tab bodies)"
+    ],
+    "phase2_current": [
+      "Design system v2 (this document)",
+      "Bottom tab bar restructure (Projects / Parties / CRM / Chats)",
+      "New UI primitives (StatStrip, SegmentedChips, ScrollableTabBar, DateNavigator, StickyActionBar, SummaryHeroCard)",
+      "Projects dashboard: statStrip + new projectCard layout",
+      "Project detail: scrollable tab bar with full 9-tab set"
+    ],
+    "phase3_next": [
+      "Parties feature: types, Firestore rules, list screens (global + project-scoped), create/edit, avatar color hashing",
+      "Transactions feature: types, Firestore rules, payment in/out forms (cost code, photo attach, reference), list screens, summary calculations",
+      "R2 photo upload via Cloud Function presigned URL (replaces local URI storage)"
+    ],
+    "phase4_later": [
+      "Site tab: DPR creation, site photos, daily progress",
+      "Task tab: tasks with status / member / schedule",
+      "Attendance tab: site staff + labour contractor, daily attendance, payroll",
+      "Material tab: inventory / requests / received / used"
+    ],
+    "phase5_later": [
+      "MOM (Meeting of Minutes) tab",
+      "Design tab (2D / 3D / production files)",
+      "Files tab (drawings, documents)",
+      "Drawer: Roles & Access, Payroll People, Master Library, Company Settings, Business Card, Invite Friends, Backup"
+    ],
+    "phase6_later": [
+      "CRM tab: leads, pipeline, follow-ups",
+      "Chats tab: per-project chat threads",
+      "Invoicing and expense reports",
+      "Multi-org support"
+    ]
+  },
+
+  "motion": {
+    "easing": {
+      "standard":   "cubic-bezier(0.2, 0, 0, 1)",
+      "emphasized": "cubic-bezier(0.2, 0, 0, 1.2)"
+    },
+    "durations": { "instant": 100, "fast": 180, "base": 240, "slow": 320 },
+    "rules": [
+      "Press feedback: 120ms scale to 0.98 with standard easing.",
+      "Screen transitions: 280ms slide-in from right with emphasized easing.",
+      "Bottom sheet: 320ms spring from bottom.",
+      "List item appearance on mount: stagger of 40ms per item, 240ms fade+rise 8pt.",
+      "Tab switch inside scrollableTabBar: 240ms cross-fade of bodies + 200ms underline slide.",
+      "Never animate color — always animate opacity, scale, or position."
+    ]
+  },
+
+  "accessibility": {
+    "minTapTarget": 44,
+    "minContrastBodyText": 4.5,
+    "minContrastLargeText": 3,
+    "focusRing": "2px brand.primary offset 2px",
+    "rules": [
+      "All icons that are actions must have an accessible label.",
+      "Do not convey state with color alone — pair with weight, icon, or label.",
+      "Primary buttons must meet 4.5:1 against their fill (our brand.primary + white clears 4.7:1).",
+      "Money color coding (green / red) must be paired with a status word ('Advance Paid', 'To Pay') — never color alone."
+    ]
+  },
+
+  "doAndDont": {
+    "do": [
+      "Use white cards on a grey canvas for ALL content grouping.",
+      "Use one accent color for actions and selection — nothing else.",
+      "Round every corner; pill every button and chip.",
+      "Let the layout breathe — whitespace is a design element.",
+      "Put primary actions at the bottom of the screen, always full-width.",
+      "Use tinted icon badges (muted brand fill + brand glyph) for all list-row icons.",
+      "Use circular white elevated icon buttons for navigation actions.",
+      "Color-code money with a green/red/neutral triad AND a status label beneath.",
+      "Keep stat tiles to max 3 per row — stack if more.",
+      "Use segmentedChips (outlined) for filtering, scrollableTabBar (underline) for section switching — never confuse the two."
+    ],
+    "dont": [
+      "Don't use borders where a shadow or spacing will do.",
+      "Don't use multiple accent colors.",
+      "Don't mix icon styles (outlined + filled).",
+      "Don't use rectangular sharp-corner buttons.",
+      "Don't stack more than 2 lines of text in a list row.",
+      "Don't let a card touch another card — always 16pt of canvas between them.",
+      "Don't use harsh drop shadows — elevation should be a whisper.",
+      "Don't use color to convey meaning without a secondary cue (icon/label).",
+      "Don't copy the competitor's dark purple header — we live on canvas.",
+      "Don't put ads or upsell banners in the main dashboard."
+    ]
+  },
+
+  "codeMapping": {
+    "reactNative": {
+      "tokenLocation": "src/theme/tokens.ts",
+      "componentLocation": "src/ui/*",
+      "primitives": {
+        "Button":          "src/ui/Button.tsx",
+        "Screen":          "src/ui/Screen.tsx",
+        "Text":            "src/ui/Text.tsx",
+        "TextField":       "src/ui/TextField.tsx",
+        "ListRow":         "src/ui/ListRow.tsx",
+        "SectionHeader":   "src/ui/SectionHeader.tsx",
+        "Separator":       "src/ui/Separator.tsx",
+        "ProjectCard":     "src/ui/ProjectCard.tsx",
+        "StatStrip":       "src/ui/StatStrip.tsx",
+        "SegmentedChips":  "src/ui/SegmentedChips.tsx",
+        "ScrollableTabBar":"src/ui/ScrollableTabBar.tsx",
+        "DateNavigator":   "src/ui/DateNavigator.tsx",
+        "StickyActionBar": "src/ui/StickyActionBar.tsx",
+        "SummaryHeroCard": "src/ui/SummaryHeroCard.tsx",
+        "LargeHeader":     "src/ui/LargeHeader.tsx",
+        "AmountStatus":    "src/ui/AmountStatus.tsx"
+      },
+      "navigation": {
+        "bottomTabs": "app/(app)/(tabs)/_layout.tsx",
+        "tabs": [
+          "app/(app)/(tabs)/index.tsx (Projects)",
+          "app/(app)/(tabs)/parties.tsx",
+          "app/(app)/(tabs)/crm.tsx",
+          "app/(app)/(tabs)/chats.tsx"
+        ],
+        "pushedScreens": [
+          "app/(app)/projects/new.tsx",
+          "app/(app)/projects/[id].tsx",
+          "app/(app)/profile.tsx"
+        ]
+      }
+    }
+  }
+}

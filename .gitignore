@@ -41,6 +41,8 @@ firebase-debug.log
 firebase-debug.*.log
 functions/lib/
 functions/node_modules/
+google-services.json
+GoogleService-Info.plist
 
 # typescript
 *.tsbuildinfo

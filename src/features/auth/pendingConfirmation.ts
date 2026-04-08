@@ -3,14 +3,14 @@
  * sign-in and verify screens. We cannot pass this object through router
  * params because it contains non-serializable methods.
  */
-import type { ConfirmationResult } from 'firebase/auth';
+import type { PhoneConfirmation } from './phoneAuth';
 
-let pending: ConfirmationResult | null = null;
+let pending: PhoneConfirmation | null = null;
 
-export function setPendingConfirmation(c: ConfirmationResult | null): void {
+export function setPendingConfirmation(c: PhoneConfirmation | null): void {
   pending = c;
 }
 
-export function getPendingConfirmation(): ConfirmationResult | null {
+export function getPendingConfirmation(): PhoneConfirmation | null {
   return pending;
 }

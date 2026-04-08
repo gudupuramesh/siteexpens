@@ -24,9 +24,25 @@ R2 keys never touch the client.
 
 - **Node 20** (the `functions/` workspace targets Node 20)
 - **npm** 10+
-- A **Firebase project** with the Phone Auth provider enabled
+- A **Firebase project** with the Phone Auth provider enabled, plus an
+  Android and an iOS app registered (bundle id `com.siteexpens.app`)
 - (Optional, later) **Cloudflare R2** bucket + access key
-- For native builds: an **EAS** account (`npx eas-cli@latest login`)
+- An **EAS** account (`npx eas-cli@latest login`) — a dev build is required,
+  Expo Go is **not** supported
+
+## Firebase setup
+
+1. Firebase Console → *Authentication* → *Sign-in method* → enable **Phone**.
+2. Register an **Android** app with package `com.siteexpens.app`. Download
+   `google-services.json` and drop it at the repo root.
+3. Register an **iOS** app with bundle id `com.siteexpens.app`. Download
+   `GoogleService-Info.plist` and drop it at the repo root.
+   Both files are gitignored.
+4. Android phone auth requires SHA-1/SHA-256 fingerprints in the Firebase
+   Android app — after `eas build`, run `eas credentials` to read the
+   keystore fingerprints and paste them into the Firebase console.
+5. iOS phone auth uses silent APNs — upload an APNs **auth key** to Firebase
+   Cloud Messaging (Project settings → Cloud Messaging → Apple app config).
 
 ## Getting started
 
@@ -37,32 +53,28 @@ npm install
 # 2. Install Cloud Functions deps
 npm --prefix functions install
 
-# 3. Configure environment
-cp .env.example .env
-# Fill in EXPO_PUBLIC_FIREBASE_* from Firebase Console -> Project settings.
+# 3. Place google-services.json / GoogleService-Info.plist at the repo root
+#    (see Firebase setup above)
 
-# 4. Run the app
-npm run start
+# 4. Build a dev client (once per machine / whenever native deps change)
+npx expo prebuild --clean
+npx eas build --profile development --platform android
+# or --platform ios
 ```
 
-Open the project in Expo Go on your phone, or press `w` to open it in a
-browser.
+Install the resulting dev-client build on a physical device, then:
 
-## Phone OTP — current limitation
+```bash
+npm run start          # metro bundler
+# press `a` to open on Android, `i` on iOS
+```
 
-The Firebase JS SDK's `signInWithPhoneNumber` works on **web** but requires
-extra setup on **native** (either an EAS dev build with
-`@react-native-firebase/auth`, or an in-app reCAPTCHA via WebView). For now,
-test phone auth in the browser using a Firebase Auth **test phone number**:
+## Phone OTP
 
-1. Firebase Console -> Authentication -> Sign-in method -> Phone -> Phone
-   numbers for testing -> add `+919999999999 / 123456`.
-2. `npm run start`, press `w`.
-3. Enter `+919999999999`, then `123456`.
-4. You should land on the empty "My Projects" screen and see a `users/{uid}`
-   document appear in Firestore.
-
-Native phone auth is tracked for the next PR.
+Phone auth is delivered by `@react-native-firebase/auth` — the first Send
+code tap will trigger a real SMS. For development you can add test numbers
+in Firebase Console → *Authentication* → *Sign-in method* → *Phone* →
+*Phone numbers for testing* (e.g. `+919999999999 / 123456`).
 
 ## Cloud Functions
 

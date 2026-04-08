@@ -1,30 +1,17 @@
 /**
- * Firebase client initialization.
+ * Firebase client handles.
  *
- * We intentionally guard against double-initialization for Fast Refresh:
- * the module may be re-evaluated in development, and calling `initializeApp`
- * twice throws.
+ * We use `@react-native-firebase` which auto-initializes from the native
+ * config files (`google-services.json` on Android, `GoogleService-Info.plist`
+ * on iOS) wired up via `app.json`. No JS-side `initializeApp` call is needed.
+ *
+ * This module exists so the rest of the app can import `auth` / `db` from a
+ * single path without knowing which transport is underneath.
  */
-import { getApp, getApps, initializeApp, type FirebaseApp } from 'firebase/app';
-import { getAuth, type Auth } from 'firebase/auth';
-import { getFirestore, type Firestore } from 'firebase/firestore';
+import authModule, { type FirebaseAuthTypes } from '@react-native-firebase/auth';
+import firestoreModule, {
+  type FirebaseFirestoreTypes,
+} from '@react-native-firebase/firestore';
 
-import { env } from './env';
-
-function getOrInitApp(): FirebaseApp {
-  if (getApps().length > 0) {
-    return getApp();
-  }
-  return initializeApp({
-    apiKey: env.firebase.apiKey,
-    authDomain: env.firebase.authDomain,
-    projectId: env.firebase.projectId,
-    appId: env.firebase.appId,
-    storageBucket: env.firebase.storageBucket,
-    messagingSenderId: env.firebase.messagingSenderId,
-  });
-}
-
-export const firebaseApp: FirebaseApp = getOrInitApp();
-export const auth: Auth = getAuth(firebaseApp);
-export const db: Firestore = getFirestore(firebaseApp);
+export const auth: FirebaseAuthTypes.Module = authModule();
+export const db: FirebaseFirestoreTypes.Module = firestoreModule();
