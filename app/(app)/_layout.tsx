@@ -11,7 +11,8 @@ export default function AppLayout() {
   return (
     <Stack
       screenOptions={{
-        headerTitleAlign: 'center',
+        headerShown: false,
+        contentStyle: { backgroundColor: '#F7F8FA' },
       }}
     />
   );

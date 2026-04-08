@@ -1,143 +1,141 @@
 /**
- * Sign-in screen. The user enters their phone number (with country code)
- * and taps "Send OTP". We then navigate to the verify screen.
+ * Sign-in screen. The user enters their phone number and taps "Send code".
+ * On success we navigate to the verify screen.
  *
  * IMPORTANT: the current JS SDK phone-auth implementation only works on
  * web. The sign-in screen still renders on native (useful for UI review),
- * but tapping "Send OTP" on native will surface a clear error. Wiring up
+ * but tapping "Send code" on native will surface a clear error. Wiring up
  * native phone auth lands in a follow-up PR.
  */
 import { router } from 'expo-router';
 import { useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
   StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
   View,
 } from 'react-native';
 
 import { createWebRecaptchaVerifier, sendOtp } from '@/src/features/auth/phoneAuth';
 import { setPendingConfirmation } from '@/src/features/auth/pendingConfirmation';
-import { colors } from '@/src/theme/colors';
+import { Button } from '@/src/ui/Button';
+import { Screen } from '@/src/ui/Screen';
+import { Text } from '@/src/ui/Text';
+import { TextField } from '@/src/ui/TextField';
+import { space } from '@/src/theme';
 
 const RECAPTCHA_CONTAINER_ID = 'recaptcha-container';
+const COUNTRY_CODE = '+91';
 
 export default function SignInScreen() {
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+
+  const digits = phone.replace(/\D/g, '');
+  const canSubmit = digits.length >= 10 && !submitting;
 
   async function handleSendOtp() {
-    const trimmed = phone.trim();
-    if (!trimmed.startsWith('+') || trimmed.length < 8) {
-      Alert.alert(
-        'Invalid phone number',
-        'Enter your phone number in international format, e.g. +919876543210.',
-      );
+    setError(undefined);
+    if (digits.length < 10) {
+      setError('Enter a 10-digit mobile number');
       return;
     }
+    const e164 = `${COUNTRY_CODE}${digits}`;
 
     setSubmitting(true);
     try {
       const verifier = createWebRecaptchaVerifier(RECAPTCHA_CONTAINER_ID);
-      const confirmation = await sendOtp(trimmed, verifier);
+      const confirmation = await sendOtp(e164, verifier);
       setPendingConfirmation(confirmation);
-      router.push('/(auth)/verify');
+      router.push({ pathname: '/(auth)/verify', params: { phone: e164 } });
     } catch (err) {
-      Alert.alert('Could not send OTP', (err as Error).message);
+      const message = (err as Error).message;
+      // On native we surface the platform limitation as a friendly alert too,
+      // since users won't read inline error text the same way.
+      if (Platform.OS !== 'web') {
+        Alert.alert('Phone auth not yet available on device', message);
+      }
+      setError(message);
     } finally {
       setSubmitting(false);
     }
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <View style={styles.inner}>
-        <Text style={styles.title}>SiteExpens</Text>
-        <Text style={styles.subtitle}>Sign in with your mobile number</Text>
+    <Screen bg="plain">
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <View style={styles.body}>
+          <Text variant="largeTitle" color="text">
+            Sign in
+          </Text>
+          <Text variant="body" color="textMuted" style={styles.subtitle}>
+            We&apos;ll text you a 6-digit code to verify your number.
+          </Text>
 
-        <TextInput
-          style={styles.input}
-          value={phone}
-          onChangeText={setPhone}
-          placeholder="+91 98765 43210"
-          placeholderTextColor={colors.textMuted}
-          keyboardType="phone-pad"
-          autoComplete="tel"
-          autoCorrect={false}
-          editable={!submitting}
-        />
+          <View style={styles.field}>
+            <TextField
+              label="Mobile number"
+              leading={COUNTRY_CODE}
+              value={phone}
+              onChangeText={(t) => {
+                setPhone(t);
+                if (error) setError(undefined);
+              }}
+              placeholder="98765 43210"
+              keyboardType="phone-pad"
+              autoComplete="tel"
+              autoCorrect={false}
+              maxLength={12}
+              editable={!submitting}
+              error={error}
+              returnKeyType="done"
+              onSubmitEditing={handleSendOtp}
+            />
+          </View>
 
-        <TouchableOpacity
-          style={[styles.button, submitting && styles.buttonDisabled]}
-          onPress={handleSendOtp}
-          disabled={submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator color={colors.primaryText} />
-          ) : (
-            <Text style={styles.buttonText}>Send OTP</Text>
-          )}
-        </TouchableOpacity>
+          <Button
+            label="Send code"
+            onPress={handleSendOtp}
+            loading={submitting}
+            disabled={!canSubmit}
+          />
+        </View>
+
+        <View style={styles.footer}>
+          <Text variant="caption" color="textFaint" align="center">
+            By continuing you agree to our Terms &amp; Privacy Policy.
+          </Text>
+        </View>
 
         {/* Invisible reCAPTCHA mount point — only used on web. nativeID
             renders as a DOM id when react-native-web is the target. */}
         {Platform.OS === 'web' ? <View nativeID={RECAPTCHA_CONTAINER_ID} /> : null}
-      </View>
-    </KeyboardAvoidingView>
+      </KeyboardAvoidingView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  flex: {
     flex: 1,
-    backgroundColor: colors.background,
   },
-  inner: {
+  body: {
     flex: 1,
-    padding: 24,
     justifyContent: 'center',
-    gap: 16,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: '700',
-    color: colors.text,
   },
   subtitle: {
-    fontSize: 16,
-    color: colors.textMuted,
-    marginBottom: 16,
+    marginTop: space.md,
+    marginBottom: space.xxl,
   },
-  input: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    color: colors.text,
-    backgroundColor: colors.surface,
+  field: {
+    marginBottom: space.xl,
   },
-  button: {
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: colors.primaryText,
-    fontSize: 16,
-    fontWeight: '600',
+  footer: {
+    paddingBottom: space.lg,
   },
 });

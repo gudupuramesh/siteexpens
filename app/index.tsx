@@ -1,6 +1,6 @@
 /**
  * Entry redirect. Decides where the user should land based on auth state:
- *   - still checking -> render a spinner
+ *   - still checking -> render a centered spinner
  *   - signed in      -> /(app)
  *   - signed out     -> /(auth)/sign-in
  */
@@ -8,7 +8,7 @@ import { Redirect } from 'expo-router';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { useAuth } from '@/src/features/auth/useAuth';
-import { colors } from '@/src/theme/colors';
+import { color } from '@/src/theme';
 
 export default function Index() {
   const { user, loading } = useAuth();
@@ -16,7 +16,7 @@ export default function Index() {
   if (loading) {
     return (
       <View style={styles.container}>
-        <ActivityIndicator color={colors.primary} />
+        <ActivityIndicator color={color.primary} />
       </View>
     );
   }
@@ -29,6 +29,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.background,
+    backgroundColor: color.bg,
   },
 });
