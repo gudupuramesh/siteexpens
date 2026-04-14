@@ -24,5 +24,7 @@ export type Project = {
   status: ProjectStatus;
   ownerId: string;
   memberIds: string[];
+  /** UIDs who can approve material requests (in addition to ownerId). */
+  approverIds?: string[];
   createdAt: FirebaseFirestoreTypes.Timestamp | null;
 };

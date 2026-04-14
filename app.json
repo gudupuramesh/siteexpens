@@ -52,6 +52,12 @@
           }
         }
       ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "SiteExpens needs access to your contacts to quickly add parties."
+        }
+      ],
       "@react-native-community/datetimepicker",
       [
         "expo-image-picker",
