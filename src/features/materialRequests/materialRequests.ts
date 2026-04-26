@@ -10,6 +10,12 @@ export type CreateMaterialRequestInput = {
   createdBy: string;
 };
 
+export type UpdateMaterialRequestInput = {
+  requestId: string;
+  title: string;
+  items: MaterialRequestItem[];
+};
+
 export async function createMaterialRequest(
   input: CreateMaterialRequestInput,
 ): Promise<string> {
@@ -26,6 +32,18 @@ export async function createMaterialRequest(
     createdAt: firestore.FieldValue.serverTimestamp(),
   });
   return ref.id;
+}
+
+export async function updateMaterialRequest(
+  input: UpdateMaterialRequestInput,
+): Promise<void> {
+  const totalValue = input.items.reduce((sum, i) => sum + i.totalCost, 0);
+  await db.collection('materialRequests').doc(input.requestId).update({
+    title: input.title || `Request #${Date.now().toString(36).slice(-4).toUpperCase()}`,
+    items: input.items,
+    totalValue,
+    updatedAt: firestore.FieldValue.serverTimestamp(),
+  });
 }
 
 export async function approveRequest(

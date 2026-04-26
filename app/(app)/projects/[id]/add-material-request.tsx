@@ -5,7 +5,7 @@
  * category-specific fields.
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -24,10 +24,11 @@ import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useMaterialLibrary } from '@/src/features/materialLibrary/useMaterialLibrary';
 import { createLibraryItem } from '@/src/features/materialLibrary/materialLibrary';
-import { createMaterialRequest } from '@/src/features/materialRequests/materialRequests';
+import { createMaterialRequest, updateMaterialRequest } from '@/src/features/materialRequests/materialRequests';
 import type { MaterialLibraryItem, MaterialCategory } from '@/src/features/materialLibrary/types';
 import { MATERIAL_CATEGORIES, getCategoryConfig } from '@/src/features/materialLibrary/types';
 import type { MaterialRequestItem } from '@/src/features/materialRequests/types';
+import { useMaterialRequest } from '@/src/features/materialRequests/useMaterialRequest';
 import { Button } from '@/src/ui/Button';
 import { Screen } from '@/src/ui/Screen';
 import { Text } from '@/src/ui/Text';
@@ -41,7 +42,7 @@ type CategoryFilter = 'all' | MaterialCategory;
 type RequestLineItem = MaterialRequestItem & { _key: string };
 
 export default function AddMaterialRequestScreen() {
-  const { id: projectId } = useLocalSearchParams<{ id: string }>();
+  const { id: projectId, reqId } = useLocalSearchParams<{ id: string; reqId?: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
@@ -51,8 +52,23 @@ export default function AddMaterialRequestScreen() {
   const [showLibrary, setShowLibrary] = useState(false);
   const [showManual, setShowManual] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const isEditMode = !!reqId;
+  const prefilledRef = useRef(false);
+  const { data: existingRequest, loading: requestLoading } = useMaterialRequest(reqId);
 
   const totalValue = items.reduce((s, i) => s + i.totalCost, 0);
+
+  useEffect(() => {
+    if (!isEditMode || !existingRequest || prefilledRef.current) return;
+    setTitle(existingRequest.title ?? '');
+    setItems(
+      existingRequest.items.map((item, idx) => ({
+        ...item,
+        _key: `${item.libraryItemId ?? item.name}_${idx}_${Date.now()}`,
+      })),
+    );
+    prefilledRef.current = true;
+  }, [existingRequest, isEditMode]);
 
   // ── Add from library ──
   const addFromLibrary = useCallback((lib: MaterialLibraryItem) => {
@@ -108,13 +124,21 @@ export default function AddMaterialRequestScreen() {
     if (!user || !orgId || !projectId || items.length === 0) return;
     setSubmitting(true);
     try {
-      await createMaterialRequest({
-        orgId,
-        projectId,
-        title,
-        items: items.map(({ _key, ...rest }) => rest),
-        createdBy: user.uid,
-      });
+      if (isEditMode && reqId) {
+        await updateMaterialRequest({
+          requestId: reqId,
+          title,
+          items: items.map(({ _key, ...rest }) => rest),
+        });
+      } else {
+        await createMaterialRequest({
+          orgId,
+          projectId,
+          title,
+          items: items.map(({ _key, ...rest }) => rest),
+          createdBy: user.uid,
+        });
+      }
       router.back();
     } catch (err) {
       Alert.alert('Error', (err as Error).message);
@@ -133,7 +157,7 @@ export default function AddMaterialRequestScreen() {
           <Ionicons name="close" size={22} color={color.text} />
         </Pressable>
         <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-          New Material Request
+          {isEditMode ? 'Edit Material Request' : 'New Material Request'}
         </Text>
         <View style={styles.navBtn} />
       </View>
@@ -147,6 +171,18 @@ export default function AddMaterialRequestScreen() {
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
         >
+          <View style={styles.summaryCard}>
+            <View style={styles.summaryRow}>
+              <Text variant="caption" color="textMuted">ITEMS ADDED</Text>
+              <Text variant="metaStrong" color="text">{items.length}</Text>
+            </View>
+            <View style={styles.summaryDivider} />
+            <View style={styles.summaryRow}>
+              <Text variant="caption" color="textMuted">TOTAL VALUE</Text>
+              <Text variant="bodyStrong" color="primary">₹{totalValue.toLocaleString('en-IN')}</Text>
+            </View>
+          </View>
+
           {/* Title */}
           <TextField
             label="Request Title (optional)"
@@ -251,10 +287,10 @@ export default function AddMaterialRequestScreen() {
         {/* Footer */}
         <View style={styles.footer}>
           <Button
-            label={`Submit Request${items.length > 0 ? ` (${items.length} items)` : ''}`}
+            label={`${isEditMode ? 'Update Request' : 'Submit Request'}${items.length > 0 ? ` (${items.length} items)` : ''}`}
             onPress={onSubmit}
             loading={submitting}
-            disabled={items.length === 0}
+            disabled={items.length === 0 || (isEditMode && requestLoading)}
           />
         </View>
       </KeyboardAvoidingView>
@@ -622,18 +658,63 @@ function ManualItemModal({
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  navBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: screenInset, paddingBottom: space.xs, backgroundColor: color.surface },
+  navBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: screenInset,
+    paddingBottom: space.xs,
+    backgroundColor: color.bgGrouped,
+    borderBottomWidth: 1,
+    borderBottomColor: color.borderStrong,
+  },
   navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   navTitle: { flex: 1, textAlign: 'center' },
   scroll: { paddingHorizontal: screenInset, paddingTop: space.md, paddingBottom: space.xxl },
   sectionLabel: { marginTop: space.md, marginBottom: space.xs },
 
   addRow: { flexDirection: 'row', gap: space.sm, marginBottom: space.md },
-  addBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.xs, paddingVertical: space.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: color.primary, borderStyle: 'dashed', backgroundColor: color.primarySoft },
+  addBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.xs,
+    paddingVertical: space.sm,
+    borderRadius: 0,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bgGrouped,
+  },
+
+  summaryCard: {
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    marginBottom: space.sm,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  summaryDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: color.borderStrong,
+    marginVertical: 8,
+  },
 
   emptyItems: { alignItems: 'center', gap: space.xs, paddingVertical: space.xl },
 
-  itemCard: { backgroundColor: color.bgGrouped, borderRadius: radius.sm, borderWidth: 1, borderColor: color.border, padding: space.sm, marginBottom: space.sm },
+  itemCard: {
+    backgroundColor: color.surface,
+    borderRadius: 0,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    padding: space.sm,
+    marginBottom: space.sm,
+  },
   itemHeader: { flexDirection: 'row', alignItems: 'flex-start', gap: space.xs, marginBottom: space.xs },
   itemTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   catDot: { width: 8, height: 8, borderRadius: 4 },
@@ -642,13 +723,24 @@ const styles = StyleSheet.create({
   numInput: { width: 60, fontSize: 14, fontWeight: '600', color: color.text, borderBottomWidth: 1, borderBottomColor: color.primary, paddingVertical: 2, textAlign: 'center' },
   totalGroup: { marginLeft: 'auto', alignItems: 'flex-end' },
 
-  grandTotal: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: space.md, paddingHorizontal: space.sm, marginTop: space.sm, borderTopWidth: 1, borderTopColor: color.separator, backgroundColor: color.primarySoft, borderRadius: radius.sm },
+  grandTotal: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: space.md,
+    paddingHorizontal: space.sm,
+    marginTop: space.sm,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
+    borderRadius: 0,
+  },
 
-  footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.separator },
+  footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.bgGrouped, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.borderStrong },
 
   // Modals
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
-  modalSheet: { backgroundColor: color.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: space.sm, maxHeight: '80%' },
+  modalSheet: { backgroundColor: color.bgGrouped, borderTopLeftRadius: 0, borderTopRightRadius: 0, paddingTop: space.sm, maxHeight: '80%', borderTopWidth: 1, borderTopColor: color.borderStrong },
   modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: color.border, alignSelf: 'center', marginBottom: space.sm },
   modalTitle: { textAlign: 'center', marginBottom: space.sm },
   modalSearch: { flexDirection: 'row', alignItems: 'center', gap: space.xs, marginHorizontal: screenInset, marginBottom: space.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: radius.sm, backgroundColor: color.bgGrouped, borderWidth: 1, borderColor: color.border },

@@ -23,20 +23,30 @@ export type UseAttendanceResult = {
 export function useAttendance(
   projectId: string | undefined,
   dateString: string,
+  orgId: string | undefined,
 ): UseAttendanceResult {
   const [data, setData] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!projectId || !dateString) {
+    // orgId is required: Firestore rules check `resource.data.orgId` and
+    // list queries must constrain on the same field for the read to be
+    // allowed. Without orgId in the where clause, the rule rejects the
+    // entire snapshot listener with permission-denied.
+    if (!projectId || !dateString || !orgId) {
       setData([]);
       setLoading(false);
       return;
     }
 
+    // Reset day records immediately on date change so we don't flash the
+    // previous date's status pills before the new snapshot resolves. The
+    // roster keeps the row list stable; only the per-day overlay clears.
+    setData([]);
     setLoading(true);
     const unsub = db
       .collection('attendance')
+      .where('orgId', '==', orgId)
       .where('projectId', '==', projectId)
       .where('date', '==', dateString)
       .onSnapshot(
@@ -55,7 +65,7 @@ export function useAttendance(
         },
       );
     return unsub;
-  }, [projectId, dateString]);
+  }, [projectId, dateString, orgId]);
 
   const summary = useMemo(() => {
     let present = 0;

@@ -1,17 +1,23 @@
 /**
- * Create Project screen. Collects the project's basic information and
- * writes it to Firestore. The photo is stored as a local device URI for
- * Phase 1 — R2 upload via a presigned Cloud Function lands in the files
- * PR; until then the image is only visible on the device that picked it.
+ * Create Project — InteriorOS-styled form (grouped-list pattern).
  *
- * Fields: photo, name, start date, end date, site address, value (₹).
+ * Sections (top → bottom):
+ *   • DETAILS  — name, location, full site address
+ *   • TYPE     — typology picker, sub-type picker (with "Other" → text input)
+ *   • STATUS   — status picker, progress slider (draggable)
+ *   • TIMELINE — start, target handover
+ *   • BUDGET   — value (₹)
+ *   • PHOTO    — optional cover photo
+ *
+ * Client + team are intentionally not collected here — they're added
+ * later from the project detail screen.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router, Stack } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Controller, useForm } from 'react-hook-form';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
   Image,
@@ -20,30 +26,46 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Text as RNText,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { z } from 'zod';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { createProject } from '@/src/features/projects/projects';
-import { formatDate } from '@/src/lib/format';
-import { Button } from '@/src/ui/Button';
+import {
+  PROJECT_STATUS_OPTIONS,
+  PROJECT_SUB_TYPES,
+  PROJECT_TYPOLOGIES,
+  type ProjectStatus,
+  type ProjectTypology,
+} from '@/src/features/projects/types';
 import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
-import { color, radius, screenInset, shadow, space } from '@/src/theme';
+import {
+  Group,
+  InputRow,
+  PickerRow,
+  PrimaryButton,
+  SelectModal,
+  Slider,
+} from '@/src/ui/io';
+import { color, fontFamily } from '@/src/theme/tokens';
 
 const schema = z
   .object({
-    name: z.string().trim().min(2, 'Name is too short').max(80, 'Name is too long'),
+    name: z.string().trim().min(2, 'Name is too short').max(80),
+    location: z.string().trim().max(60).optional(),
+    siteAddress: z.string().trim().min(3, 'Enter a site address'),
+    typology: z.enum(['residential', 'commercial', 'hospitality', 'industrial', 'other']).optional(),
+    subTypeKey: z.string().optional(),
+    subTypeCustom: z.string().trim().max(60).optional(),
+    status: z.enum(['active', 'on_hold', 'completed', 'archived']),
+    progress: z.number().min(0).max(100),
     startDate: z.date(),
     endDate: z.date().nullable(),
-    siteAddress: z.string().trim().min(3, 'Enter a site address'),
-    value: z
-      .string()
-      .trim()
-      .regex(/^\d+$/, 'Enter a number'),
+    value: z.string().trim().regex(/^\d+$/, 'Enter a number'),
     photoUri: z.string().nullable(),
   })
   .refine((d) => !d.endDate || d.endDate >= d.startDate, {
@@ -53,13 +75,33 @@ const schema = z
 
 type FormValues = z.input<typeof schema>;
 
+function formatPickerDate(d: Date | null): string {
+  if (!d) return '';
+  return d.toLocaleDateString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function statusLabel(key: ProjectStatus): string {
+  return PROJECT_STATUS_OPTIONS.find((s) => s.key === key)?.label ?? key;
+}
+
+function typologyLabel(key: ProjectTypology): string {
+  return PROJECT_TYPOLOGIES.find((s) => s.key === key)?.label ?? key;
+}
+
 export default function NewProjectScreen() {
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? null;
 
-  const [submitError, setSubmitError] = useState<string | undefined>();
+  const [submitError, setSubmitError] = useState<string>();
   const [datePicker, setDatePicker] = useState<'start' | 'end' | null>(null);
+  const [showStatusPicker, setShowStatusPicker] = useState(false);
+  const [showTypePicker, setShowTypePicker] = useState(false);
+  const [showSubTypePicker, setShowSubTypePicker] = useState(false);
 
   const {
     control,
@@ -72,9 +114,15 @@ export default function NewProjectScreen() {
     mode: 'onChange',
     defaultValues: {
       name: '',
+      location: '',
+      siteAddress: '',
+      typology: undefined,
+      subTypeKey: undefined,
+      subTypeCustom: '',
+      status: 'active',
+      progress: 0,
       startDate: new Date(),
       endDate: null,
-      siteAddress: '',
       value: '',
       photoUri: null,
     },
@@ -83,11 +131,33 @@ export default function NewProjectScreen() {
   const startDate = watch('startDate');
   const endDate = watch('endDate');
   const photoUri = watch('photoUri');
+  const status = watch('status');
+  const typology = watch('typology');
+  const subTypeKey = watch('subTypeKey');
+
+  const subTypeOptions = useMemo(
+    () => (typology ? PROJECT_SUB_TYPES[typology] : []),
+    [typology],
+  );
+
+  const subTypeDisplay = useMemo(() => {
+    if (!subTypeKey) return undefined;
+    if (subTypeKey === 'other') return undefined;
+    return subTypeOptions.find((s) => s.key === subTypeKey)?.label;
+  }, [subTypeKey, subTypeOptions]);
+
+  function pickTypology(t: ProjectTypology) {
+    setValue('typology', t, { shouldValidate: true });
+    if (subTypeKey && !PROJECT_SUB_TYPES[t].some((s) => s.key === subTypeKey)) {
+      setValue('subTypeKey', undefined);
+      setValue('subTypeCustom', '');
+    }
+  }
 
   async function handlePickPhoto() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('Permission needed', 'Please allow photo library access to add a project photo.');
+      Alert.alert('Permission needed', 'Allow photo library access to add a project photo.');
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -102,12 +172,7 @@ export default function NewProjectScreen() {
   }
 
   function handleDateChange(kind: 'start' | 'end', event: DateTimePickerEvent, picked?: Date) {
-    // On Android the picker is a modal dialog — we always dismiss on
-    // any event. On iOS it's inline so we keep it open until the user
-    // explicitly dismisses via the modal's own affordance.
-    if (Platform.OS === 'android') {
-      setDatePicker(null);
-    }
+    if (Platform.OS === 'android') setDatePicker(null);
     if (event.type === 'dismissed' || !picked) return;
     if (kind === 'start') {
       setValue('startDate', picked, { shouldValidate: true });
@@ -122,6 +187,16 @@ export default function NewProjectScreen() {
       setSubmitError('You need to be signed in with an organization.');
       return;
     }
+
+    let subType: string | undefined;
+    if (values.subTypeKey === 'other' || values.typology === 'other') {
+      subType = values.subTypeCustom?.trim() || undefined;
+    } else if (values.subTypeKey && values.typology) {
+      subType = PROJECT_SUB_TYPES[values.typology].find(
+        (s) => s.key === values.subTypeKey,
+      )?.label;
+    }
+
     try {
       const id = await createProject({
         uid: user.uid,
@@ -132,6 +207,11 @@ export default function NewProjectScreen() {
         siteAddress: values.siteAddress.trim(),
         value: parseInt(values.value, 10),
         photoUri: values.photoUri,
+        status: values.status,
+        location: values.location?.trim() || undefined,
+        typology: values.typology,
+        subType,
+        progress: values.progress,
       });
       router.replace(`/(app)/projects/${id}` as never);
     } catch (err) {
@@ -139,25 +219,22 @@ export default function NewProjectScreen() {
     }
   }
 
+  const showSubTypeCustom =
+    typology === 'other' || subTypeKey === 'other';
+
   return (
-    <Screen bg="grouped" padded={false}>
+    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      {/* Nav bar */}
       <View style={styles.navBar}>
-        <Pressable
-          onPress={() => router.back()}
-          hitSlop={12}
-          style={({ pressed }) => [styles.navButton, pressed && styles.navButtonPressed]}
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-        >
-          <Text variant="title" color="text" style={styles.navGlyph}>{'‹'}</Text>
+        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
+          <Ionicons name="chevron-back" size={22} color={color.textMuted} />
         </Pressable>
-        <Text variant="title" color="text" style={styles.navTitle}>
-          New project
-        </Text>
-        <View style={styles.navButton} />
+        <View style={styles.navCenter}>
+          <RNText style={styles.navEyebrow}>CREATE</RNText>
+          <RNText style={styles.navTitle}>New project</RNText>
+        </View>
+        <View style={styles.navBtn} />
       </View>
 
       <KeyboardAvoidingView
@@ -169,125 +246,208 @@ export default function NewProjectScreen() {
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          {/* Photo picker tile */}
-          <Pressable
-            onPress={handlePickPhoto}
-            style={({ pressed }) => [
-              styles.photoTile,
-              pressed && { opacity: 0.85 },
-            ]}
-          >
-            {photoUri ? (
-              <Image source={{ uri: photoUri }} style={styles.photoImg} resizeMode="cover" />
-            ) : (
-              <View style={styles.photoPlaceholder}>
-                <Text variant="title" color="primary">
-                  +
-                </Text>
-                <Text variant="meta" color="textMuted" style={styles.photoHint}>
-                  Add project photo
-                </Text>
-              </View>
-            )}
-          </Pressable>
-
-          {/* Fields */}
-          <View style={styles.field}>
+          {/* DETAILS */}
+          <Group header="Details">
             <Controller
               control={control}
               name="name"
               render={({ field: { onChange, onBlur, value } }) => (
-                <TextField
-                  label="Project name"
-                  placeholder="e.g. Sharma Residence, Kondapur"
+                <InputRow
+                  label="Name *"
+                  placeholder="e.g. Sharma Residence"
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
                   autoCapitalize="words"
                   editable={!isSubmitting}
-                  error={errors.name?.message}
                 />
               )}
             />
-          </View>
+            {errors.name?.message ? (
+              <RNText style={styles.fieldError}>{errors.name.message}</RNText>
+            ) : null}
 
-          <View style={styles.rowFields}>
-            <View style={[styles.field, styles.rowFieldHalf]}>
-              <Text variant="caption" color="textMuted" style={styles.fauxLabel}>
-                START DATE
-              </Text>
-              <Pressable
-                onPress={() => setDatePicker('start')}
-                style={styles.fauxField}
-              >
-                <Text variant="body" color="text">
-                  {formatDate(startDate)}
-                </Text>
-              </Pressable>
-            </View>
-            <View style={[styles.field, styles.rowFieldHalf]}>
-              <Text variant="caption" color="textMuted" style={styles.fauxLabel}>
-                END DATE
-              </Text>
-              <Pressable
-                onPress={() => setDatePicker('end')}
-                style={styles.fauxField}
-              >
-                <Text variant="body" color={endDate ? 'text' : 'textFaint'}>
-                  {endDate ? formatDate(endDate) : 'Optional'}
-                </Text>
-              </Pressable>
-              {errors.endDate ? (
-                <Text variant="caption" color="danger" style={styles.inlineError}>
-                  {errors.endDate.message}
-                </Text>
-              ) : null}
-            </View>
-          </View>
+            <Controller
+              control={control}
+              name="location"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Location"
+                  placeholder="e.g. Jubilee Hills"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  autoCapitalize="words"
+                  editable={!isSubmitting}
+                />
+              )}
+            />
 
-          <View style={styles.field}>
             <Controller
               control={control}
               name="siteAddress"
               render={({ field: { onChange, onBlur, value } }) => (
-                <TextField
-                  label="Site location / address"
-                  placeholder="Plot no., street, area, city"
+                <InputRow
+                  label="Site *"
+                  placeholder="Plot, street, area, city"
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
                   autoCapitalize="sentences"
                   multiline
                   editable={!isSubmitting}
-                  error={errors.siteAddress?.message}
+                  last
                 />
               )}
             />
-          </View>
+            {errors.siteAddress?.message ? (
+              <RNText style={styles.fieldError}>{errors.siteAddress.message}</RNText>
+            ) : null}
+          </Group>
 
-          <View style={styles.field}>
+          {/* TYPE */}
+          <Group header="Type">
+            <PickerRow
+              label="Typology"
+              icon="apps-outline"
+              value={typology ? typologyLabel(typology) : undefined}
+              placeholder="Choose typology"
+              onPress={() => setShowTypePicker(true)}
+            />
+            {typology && typology !== 'other' ? (
+              <PickerRow
+                label="Sub-type"
+                icon="grid-outline"
+                value={subTypeDisplay}
+                placeholder={
+                  subTypeKey === 'other' ? 'Other (type below)' : 'Choose sub-type'
+                }
+                onPress={() => setShowSubTypePicker(true)}
+                last={!showSubTypeCustom}
+              />
+            ) : null}
+            {showSubTypeCustom ? (
+              <Controller
+                control={control}
+                name="subTypeCustom"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Describe"
+                    placeholder="e.g. Boutique studio"
+                    value={value ?? ''}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    autoCapitalize="sentences"
+                    editable={!isSubmitting}
+                    last
+                  />
+                )}
+              />
+            ) : null}
+          </Group>
+
+          {/* STATUS */}
+          <Group header="Status">
+            <PickerRow
+              label="Status"
+              icon="ellipse-outline"
+              value={statusLabel(status)}
+              onPress={() => setShowStatusPicker(true)}
+            />
+            <View style={styles.sliderRow}>
+              <View style={styles.sliderLabelCol}>
+                <RNText style={styles.sliderLabel}>Progress</RNText>
+              </View>
+              <View style={styles.sliderCol}>
+                <Controller
+                  control={control}
+                  name="progress"
+                  render={({ field: { onChange, value } }) => (
+                    <Slider
+                      value={typeof value === 'number' ? value : 0}
+                      onChange={onChange}
+                      step={1}
+                    />
+                  )}
+                />
+              </View>
+            </View>
+          </Group>
+
+          {/* TIMELINE */}
+          <Group header="Timeline">
+            <PickerRow
+              label="Start date"
+              icon="calendar-outline"
+              value={formatPickerDate(startDate)}
+              onPress={() => setDatePicker('start')}
+            />
+            <PickerRow
+              label="Target handover"
+              icon="flag-outline"
+              value={endDate ? formatPickerDate(endDate) : undefined}
+              placeholder="Optional"
+              onPress={() => setDatePicker('end')}
+              last
+            />
+            {errors.endDate?.message ? (
+              <RNText style={styles.fieldError}>{errors.endDate.message}</RNText>
+            ) : null}
+          </Group>
+
+          {/* BUDGET */}
+          <Group header="Budget">
             <Controller
               control={control}
               name="value"
               render={({ field: { onChange, onBlur, value } }) => (
-                <TextField
-                  label="Project value (₹)"
+                <InputRow
+                  label="Value (₹) *"
                   placeholder="0"
-                  leading="₹"
                   value={value}
                   onChangeText={(t) => onChange(t.replace(/\D/g, ''))}
                   onBlur={onBlur}
                   keyboardType="number-pad"
                   editable={!isSubmitting}
-                  error={errors.value?.message ?? submitError}
+                  mono
+                  last
                 />
               )}
             />
-          </View>
+            {errors.value?.message ? (
+              <RNText style={styles.fieldError}>{errors.value.message}</RNText>
+            ) : null}
+          </Group>
+
+          {/* PHOTO */}
+          <Group header="Cover photo (optional)">
+            <Pressable
+              onPress={handlePickPhoto}
+              style={({ pressed }) => [
+                styles.photoTile,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              {photoUri ? (
+                <Image source={{ uri: photoUri }} style={styles.photoImg} resizeMode="cover" />
+              ) : (
+                <View style={styles.photoPlaceholder}>
+                  <Ionicons name="image-outline" size={22} color={color.textFaint} />
+                  <RNText style={styles.photoHint}>Tap to add a project photo</RNText>
+                </View>
+              )}
+            </Pressable>
+          </Group>
+
+          {submitError ? (
+            <RNText style={[styles.fieldError, { paddingHorizontal: 16, marginTop: 4 }]}>
+              {submitError}
+            </RNText>
+          ) : null}
         </ScrollView>
 
         <View style={styles.footer}>
-          <Button
+          <PrimaryButton
             label="Create project"
             onPress={handleSubmit(onSubmit)}
             loading={isSubmitting}
@@ -304,54 +464,121 @@ export default function NewProjectScreen() {
           onChange={(e, d) => handleDateChange(datePicker, e, d)}
         />
       ) : null}
+
+      <SelectModal
+        visible={showTypePicker}
+        title="Choose typology"
+        options={PROJECT_TYPOLOGIES}
+        value={typology}
+        onPick={(k) => pickTypology(k as ProjectTypology)}
+        onClose={() => setShowTypePicker(false)}
+      />
+
+      <SelectModal
+        visible={showSubTypePicker}
+        title="Choose sub-type"
+        options={subTypeOptions}
+        value={subTypeKey}
+        onPick={(k) => setValue('subTypeKey', k, { shouldValidate: true })}
+        onClose={() => setShowSubTypePicker(false)}
+      />
+
+      <SelectModal
+        visible={showStatusPicker}
+        title="Set project status"
+        options={PROJECT_STATUS_OPTIONS}
+        value={status}
+        onPick={(k) => setValue('status', k as ProjectStatus, { shouldValidate: true })}
+        onClose={() => setShowStatusPicker(false)}
+      />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
-  },
+  flex: { flex: 1 },
+
   navBar: {
-    height: 56,
+    minHeight: 56,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: screenInset,
+    paddingHorizontal: 16,
+    backgroundColor: color.bgGrouped,
+    borderBottomWidth: 1,
+    borderBottomColor: color.borderStrong,
   },
-  navButton: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.pill,
-    backgroundColor: color.surface,
+  navBtn: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
-    ...shadow.hairline,
   },
-  navButtonPressed: {
-    opacity: 0.7,
+  navCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1,
   },
-  navGlyph: {
-    fontSize: 26,
-    lineHeight: 26,
-    marginLeft: -2,
+  navEyebrow: {
+    fontFamily: fontFamily.mono,
+    fontSize: 10,
+    color: color.textFaint,
+    letterSpacing: 1.4,
   },
   navTitle: {
-    flex: 1,
-    textAlign: 'center',
+    fontFamily: fontFamily.sans,
+    fontSize: 15,
+    fontWeight: '600',
+    color: color.text,
+    letterSpacing: -0.2,
   },
+
   scroll: {
-    paddingHorizontal: screenInset,
-    paddingBottom: space.xxxl,
+    paddingTop: 18,
+    paddingBottom: 40,
   },
+
+  fieldError: {
+    fontFamily: fontFamily.sans,
+    fontSize: 12,
+    color: color.danger,
+    paddingHorizontal: 16,
+    paddingTop: 6,
+  },
+
+  // Slider row inside the Status group
+  sliderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    minHeight: 60,
+    backgroundColor: color.bg,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: color.separator,
+  },
+  sliderLabelCol: {
+    width: 110,
+    flexShrink: 0,
+  },
+  sliderLabel: {
+    fontFamily: fontFamily.sans,
+    fontSize: 15,
+    fontWeight: '500',
+    color: color.text,
+  },
+  sliderCol: {
+    flex: 1,
+  },
+
+  // Photo tile
   photoTile: {
     height: 180,
-    borderRadius: radius.lg,
-    backgroundColor: color.surface,
+    backgroundColor: color.bg,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: color.borderStrong,
     overflow: 'hidden',
-    marginTop: space.base,
-    marginBottom: space.xl,
-    ...shadow.hairline,
   },
   photoImg: {
     width: '100%',
@@ -359,43 +586,22 @@ const styles = StyleSheet.create({
   },
   photoPlaceholder: {
     flex: 1,
-    backgroundColor: color.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 6,
   },
   photoHint: {
-    marginTop: space.xs,
+    fontFamily: fontFamily.sans,
+    fontSize: 13,
+    color: color.textMuted,
   },
-  field: {
-    marginBottom: space.lg,
-  },
-  rowFields: {
-    flexDirection: 'row',
-    gap: space.base,
-  },
-  rowFieldHalf: {
-    flex: 1,
-  },
-  fauxLabel: {
-    marginBottom: space.sm,
-    letterSpacing: 0.4,
-  },
-  fauxField: {
-    height: 48,
-    borderRadius: radius.md,
-    backgroundColor: color.bgGrouped,
-    borderWidth: 1,
-    borderColor: 'transparent',
-    paddingHorizontal: space.lg,
-    justifyContent: 'center',
-  },
-  inlineError: {
-    marginTop: space.sm,
-  },
+
   footer: {
-    paddingHorizontal: screenInset,
-    paddingBottom: space.lg,
-    paddingTop: space.md,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 18,
     backgroundColor: color.bgGrouped,
+    borderTopWidth: 1,
+    borderTopColor: color.borderStrong,
   },
 });

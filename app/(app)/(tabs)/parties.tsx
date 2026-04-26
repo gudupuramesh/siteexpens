@@ -24,7 +24,10 @@ function PartyRow({ item }: { item: Party }) {
   const roleLabel = getPartyTypeLabel((item.partyType ?? item.role) as any);
 
   return (
-    <View style={styles.partyRow}>
+    <Pressable
+      onPress={() => router.push(`/(app)/party/${item.id}` as never)}
+      style={({ pressed }) => [styles.partyRow, pressed && { opacity: 0.6 }]}
+    >
       <View style={styles.avatar}>
         <Text variant="metaStrong" style={{ color: color.primary }}>{initial}</Text>
       </View>
@@ -37,7 +40,7 @@ function PartyRow({ item }: { item: Party }) {
       <View style={styles.roleBadge}>
         <Text variant="caption" style={{ color: color.primary }}>{roleLabel}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -45,7 +48,7 @@ export default function PartiesTabScreen() {
   const insets = useSafeAreaInsets();
   const { data: org } = useCurrentOrganization();
   const { data: userDoc } = useCurrentUserDoc();
-  const orgId = userDoc?.primaryOrgId;
+  const orgId = userDoc?.primaryOrgId ?? undefined;
   const { data: parties, loading } = useParties(orgId);
   const initial = (org?.name ?? '?').charAt(0).toUpperCase();
 

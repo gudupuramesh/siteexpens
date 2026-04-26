@@ -1,143 +1,166 @@
 /**
- * Projects tab — dense, native-feel dashboard.
+ * Projects tab — InteriorOS visual port, wired to live Firestore data.
  *
- * Layout (top to bottom, compact):
- *   1. Compact header: org eyebrow + "Projects" title + avatar
- *   2. Inline stat pills (no card wrapper)
- *   3. Filter chips (horizontal scroll)
- *   4. Dense FlatList of ProjectRows (dominates screen)
- *   5. FAB (bottom-right)
+ * Visual reference: `interior os/src/screens-projects.jsx::ProjectsScreen`.
+ *
+ * Layout:
+ *   1. Eyebrow "{N} PROJECTS · {M} ACTIVE" + large "Projects" title
+ *      + inline 36×36 square accent "+" button
+ *   2. Hairline-bordered search field
+ *   3. InteriorOS chip filters (All / Active / On Hold / Completed)
+ *   4. Stack of hairline-bordered project cards (ProjectRow)
+ *
+ * Data: useProjects() — live Firestore subscription scoped to org.
+ * Tapping a row routes to /(app)/projects/{id}.
  */
 import { router, Stack } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   FlatList,
   Pressable,
-  RefreshControl,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useCurrentOrganization } from '@/src/features/org/useCurrentOrganization';
 import { useProjects } from '@/src/features/projects/useProjects';
-import type { Project, ProjectStatus } from '@/src/features/projects/types';
-import { ProjectRow } from '@/src/ui/ProjectRow';
+import { useProjectTotals } from '@/src/features/transactions/useProjectTotals';
+import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
+import {
+  PROJECT_TYPOLOGIES,
+  type Project,
+  type ProjectStatus,
+} from '@/src/features/projects/types';
+import { ProjectRow, type ProjectRowStatus } from '@/src/ui/ProjectRow';
+import { PageEnter } from '@/src/ui/PageEnter';
 import { Screen } from '@/src/ui/Screen';
+import { Spinner } from '@/src/ui/Spinner';
 import { Text } from '@/src/ui/Text';
-import { color, radius, screenInset, shadow, space } from '@/src/theme';
-import { formatInr } from '@/src/lib/format';
+import { color, fontFamily, space } from '@/src/theme/tokens';
 
 type FilterKey = 'all' | ProjectStatus;
 
-const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: 'all', label: 'All' },
-  { key: 'active', label: 'Active' },
-  { key: 'on_hold', label: 'On Hold' },
-  { key: 'completed', label: 'Completed' },
-];
-
-function StatPill({ label, tone }: { label: string; tone: 'info' | 'neutral' | 'warning' }) {
-  const bg = tone === 'info' ? color.infoSoft : tone === 'warning' ? color.warningSoft : color.surfaceAlt;
-  const fg = tone === 'info' ? color.info : tone === 'warning' ? color.warning : color.textMuted;
-  return (
-    <View style={[styles.pill, { backgroundColor: bg }]}>
-      <Text variant="caption" style={{ color: fg }}>{label}</Text>
-    </View>
-  );
+function getAreaFromSiteAddress(siteAddress?: string): string | undefined {
+  if (!siteAddress) return undefined;
+  const firstChunk = siteAddress.split(',')[0]?.trim();
+  return firstChunk || undefined;
 }
 
+/** Map our internal status keys to the prototype's display labels. */
+const STATUS_DISPLAY: Record<ProjectStatus, ProjectRowStatus> = {
+  active:    'Active',
+  on_hold:   'On Hold',
+  completed: 'Completed',
+  archived:  'Completed', // closest visual equivalent
+};
+
 export default function ProjectsTabScreen() {
-  const insets = useSafeAreaInsets();
-  const { data: org } = useCurrentOrganization();
   const { data: projects, loading } = useProjects();
+  const { data: userDoc } = useCurrentUserDoc();
+  const orgId = userDoc?.primaryOrgId ?? undefined;
+  const { totalsByProject } = useProjectTotals(orgId);
   const [filter, setFilter] = useState<FilterKey>('all');
-  const [refreshing, setRefreshing] = useState(false);
+  const [query, setQuery] = useState('');
 
-  const companyInitial = (org?.name ?? '?').charAt(0).toUpperCase();
+  const counts = useMemo(() => {
+    const c: Record<FilterKey, number> = {
+      all: projects.length,
+      active: 0,
+      on_hold: 0,
+      completed: 0,
+      archived: 0,
+    };
+    for (const p of projects) c[p.status] = (c[p.status] ?? 0) + 1;
+    return c;
+  }, [projects]);
 
-  // Stats
-  const activeCount = useMemo(() => projects.filter(p => p.status === 'active').length, [projects]);
-  const totalValue = useMemo(() => projects.reduce((s, p) => s + (p.value || 0), 0), [projects]);
-  const pendingCount = useMemo(() => projects.filter(p => p.status === 'on_hold').length, [projects]);
+  const filters: { key: FilterKey; label: string; count: number }[] = [
+    { key: 'all',       label: 'All',       count: counts.all },
+    { key: 'active',    label: 'Active',    count: counts.active },
+    { key: 'on_hold',   label: 'On Hold',   count: counts.on_hold },
+    { key: 'completed', label: 'Completed', count: counts.completed },
+  ];
 
-  // Filtered list
-  const filtered = useMemo(
-    () => filter === 'all' ? projects : projects.filter(p => p.status === filter),
-    [projects, filter],
-  );
+  const filtered = useMemo(() => {
+    let list: Project[] =
+      filter === 'all' ? projects : projects.filter((p) => p.status === filter);
+    if (query) {
+      const q = query.toLowerCase();
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.siteAddress.toLowerCase().includes(q),
+      );
+    }
+    return list;
+  }, [projects, filter, query]);
 
-  const onRefresh = useCallback(async () => {
-    setRefreshing(true);
-    // The real-time listener auto-updates, but we simulate pull feedback
-    setTimeout(() => setRefreshing(false), 800);
-  }, []);
-
-  const handleFabPress = useCallback(() => {
+  const handleAdd = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push('/(app)/projects/new');
-  }, []);
+  };
 
-  const renderItem = useCallback(({ item }: { item: Project }) => (
-    <ProjectRow
-      name={item.name}
-      siteAddress={item.siteAddress}
-      startDate={item.startDate ? item.startDate.toDate() : null}
-      endDate={item.endDate ? item.endDate.toDate() : null}
-      value={item.value}
-      photoUri={item.photoUri}
-      status={item.status}
-      onPress={() => router.push(`/(app)/projects/${item.id}` as never)}
-    />
-  ), []);
-
-  const keyExtractor = useCallback((p: Project) => p.id, []);
-
-  const ItemSeparator = useCallback(() => <View style={styles.separator} />, []);
-
-  // Format total value in crore/lakh shorthand
-  const totalLabel = totalValue >= 10000000
-    ? `₹${(totalValue / 10000000).toFixed(1)} Cr`
-    : formatInr(totalValue);
+  const eyebrow = `${projects.length} PROJECT${projects.length === 1 ? '' : 'S'} · ${counts.active} ACTIVE`;
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
+    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      {/* Header — matches LargeHeader spacing from Parties tab */}
+      {/* Header — eyebrow + title + bell + square + button */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Text variant="caption" color="textMuted">
-            {(org?.name ?? 'Your firm').toUpperCase()}
-          </Text>
-          <Text variant="largeTitle" color="text">Projects</Text>
+          <Text style={styles.eyebrow}>{eyebrow}</Text>
+          <Text style={styles.title}>Projects</Text>
         </View>
         <Pressable
-          onPress={() => router.push('/(app)/profile')}
-          style={({ pressed }) => [styles.avatar, pressed && { opacity: 0.7 }]}
+          onPress={() => router.push('/(app)/notifications' as never)}
+          style={({ pressed }) => [styles.bellBtn, pressed && { opacity: 0.6 }]}
+          accessibilityRole="button"
+          accessibilityLabel="Notifications"
         >
-          <Text variant="metaStrong" color="onPrimary">{companyInitial}</Text>
+          <Ionicons name="notifications-outline" size={20} color={color.text} />
+        </Pressable>
+        <Pressable
+          onPress={handleAdd}
+          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
+          accessibilityRole="button"
+          accessibilityLabel="New project"
+        >
+          <Ionicons name="add" size={20} color="#fff" />
         </Pressable>
       </View>
 
-      {/* Stat Pills */}
-      <View style={styles.statsRow}>
-        <StatPill label={`${activeCount} Active`} tone="info" />
-        <StatPill label={`Total: ${totalLabel}`} tone="neutral" />
-        {pendingCount > 0 && <StatPill label={`${pendingCount} Pending`} tone="warning" />}
+      {/* Search bar */}
+      <View style={styles.searchWrap}>
+        <View style={styles.searchField}>
+          <Ionicons name="search" size={16} color={color.textFaint} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search by name or address"
+            placeholderTextColor={color.textFaint}
+            style={styles.searchInput}
+            returnKeyType="search"
+          />
+          {query ? (
+            <Pressable onPress={() => setQuery('')} hitSlop={8}>
+              <Ionicons name="close" size={14} color={color.textFaint} />
+            </Pressable>
+          ) : null}
+        </View>
       </View>
 
-      {/* Filter Chips */}
+      {/* Filter chips */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.filtersContent}
-        style={styles.filtersScroll}
+        style={styles.chipsScroll}
+        contentContainerStyle={styles.chipsContent}
       >
-        {FILTERS.map(f => {
+        {filters.map((f) => {
           const active = filter === f.key;
           return (
             <Pressable
@@ -145,175 +168,226 @@ export default function ProjectsTabScreen() {
               onPress={() => setFilter(f.key)}
               style={[styles.chip, active && styles.chipActive]}
             >
-              <Text
-                variant="caption"
-                style={{ color: active ? color.onPrimary : color.textMuted }}
-              >
+              <Text style={active ? [styles.chipLabel, styles.chipLabelActive] : styles.chipLabel}>
                 {f.label}
+              </Text>
+              <Text style={active ? [styles.chipCount, styles.chipCountActive] : styles.chipCount}>
+                {f.count}
               </Text>
             </Pressable>
           );
         })}
       </ScrollView>
 
-      {/* Project List */}
-      <View style={styles.listArea}>
-        {loading && projects.length === 0 ? (
-          <View style={styles.emptyWrap}>
-            <Text variant="meta" color="textMuted">Loading projects…</Text>
-          </View>
-        ) : filtered.length === 0 ? (
-          <View style={styles.emptyWrap}>
-            <Ionicons name="folder-open-outline" size={32} color={color.textFaint} />
-            <Text variant="body" color="textMuted" align="center" style={styles.emptyText}>
-              {filter === 'all' ? 'No projects yet' : `No ${FILTERS.find(f => f.key === filter)?.label.toLowerCase()} projects`}
+      {/* List */}
+      {loading && projects.length === 0 ? (
+        <PageEnter viewKey="loading">
+          <View style={styles.empty}>
+            <Spinner size={28} />
+            <Text variant="meta" color="textMuted" style={{ marginTop: space.sm }}>
+              Loading projects…
             </Text>
-            {filter === 'all' && (
-              <Pressable onPress={() => router.push('/(app)/projects/new')}>
-                <Text variant="metaStrong" color="primary">Create your first project</Text>
-              </Pressable>
-            )}
           </View>
-        ) : (
-          <FlatList
-            data={filtered}
-            keyExtractor={keyExtractor}
-            renderItem={renderItem}
-            ItemSeparatorComponent={ItemSeparator}
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={styles.listContent}
-            refreshControl={
-              <RefreshControl
-                refreshing={refreshing}
-                onRefresh={onRefresh}
-                tintColor={color.primary}
-                colors={[color.primary]}
+        </PageEnter>
+      ) : filtered.length === 0 ? (
+        <View style={styles.empty}>
+          <Ionicons name="folder-open-outline" size={28} color={color.textFaint} />
+          <Text variant="body" color="textMuted" align="center" style={styles.emptyText}>
+            {query
+              ? 'No matches.'
+              : filter === 'all'
+              ? 'No projects yet.'
+              : `No ${filters.find((f) => f.key === filter)?.label.toLowerCase()} projects.`}
+          </Text>
+          {!query && filter === 'all' ? (
+            <Pressable onPress={handleAdd}>
+              <Text variant="metaStrong" color="primary">
+                Create your first project
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
+      ) : (
+        <FlatList
+          data={filtered}
+          keyExtractor={(p) => p.id}
+          renderItem={({ item }) => {
+            const typologyLabel = item.typology
+              ? PROJECT_TYPOLOGIES.find((t) => t.key === item.typology)?.label
+              : undefined;
+            const typeLine =
+              typologyLabel && item.subType
+                ? `${typologyLabel} — ${item.subType}`
+                : typologyLabel ?? item.subType ?? undefined;
+            const area = getAreaFromSiteAddress(item.siteAddress);
+            const locationLine = [area, item.location].filter(Boolean).join(' · ') || item.siteAddress;
+            const totals = totalsByProject.get(item.id);
+            return (
+              <ProjectRow
+                name={item.name}
+                client={item.client}
+                location={locationLine}
+                type={typeLine}
+                budget={item.value ?? 0}
+                totalIn={totals?.income}
+                totalOut={totals?.expense}
+                progress={item.progress}
+                status={STATUS_DISPLAY[item.status]}
+                startDate={item.startDate ? item.startDate.toDate() : null}
+                endDate={item.endDate ? item.endDate.toDate() : null}
+                photoUri={item.photoUri ?? undefined}
+                onPress={() => router.push(`/(app)/projects/${item.id}` as never)}
               />
-            }
-          />
-        )}
-      </View>
-
-      {/* FAB */}
-      <Pressable
-        onPress={handleFabPress}
-        style={({ pressed }) => [
-          styles.fab,
-          { bottom: 24 + insets.bottom },
-          pressed && { transform: [{ scale: 0.94 }] },
-        ]}
-        accessibilityRole="button"
-        accessibilityLabel="New project"
-      >
-        <Ionicons name="add" size={26} color={color.onPrimary} />
-      </Pressable>
+            );
+          }}
+          ItemSeparatorComponent={() => <View style={styles.cardGap} />}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.listContent}
+        />
+      )}
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  // Header — matches LargeHeader spacing
+  // Header
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: space.sm,
-    backgroundColor: color.surface,
-    gap: space.sm,
+    paddingHorizontal: 16,
+    paddingTop: 0,
+    paddingBottom: 12,
+    backgroundColor: color.bgGrouped,
+    gap: 8,
   },
   headerLeft: {
     flex: 1,
-    gap: 2,
   },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  eyebrow: {
+    fontFamily: fontFamily.mono,
+    fontSize: 10,
+    color: color.textFaint,
+    letterSpacing: 1.8,
+  },
+  title: {
+    fontFamily: fontFamily.sans,
+    fontSize: 26,
+    fontWeight: '600',
+    color: color.text,
+    letterSpacing: -0.6,
+    marginTop: 2,
+  },
+  bellBtn: {
+    width: 36,
+    height: 36,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 0,
+  },
+  addBtn: {
+    width: 36,
+    height: 36,
     backgroundColor: color.primary,
     alignItems: 'center',
     justifyContent: 'center',
+    borderRadius: 0,
   },
 
-  // Stat pills
-  statsRow: {
-    flexDirection: 'row',
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: space.xs,
-    gap: space.xs,
-    backgroundColor: color.surface,
+  // Search
+  searchWrap: {
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    backgroundColor: color.bgGrouped,
   },
-  pill: {
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xxs,
-    borderRadius: radius.pill,
-  },
-
-  // Filter chips
-  filtersScroll: {
-    flexGrow: 0,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
-  },
-  filtersContent: {
+  searchField: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingBottom: space.sm,
-    gap: space.xs,
+    height: 40,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bg,
+    paddingHorizontal: 12,
+    gap: 8,
+    borderRadius: 0,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: color.text,
+    paddingVertical: 0,
+    fontFamily: fontFamily.sans,
+  },
+
+  // Chips
+  chipsScroll: {
+    flexGrow: 0,
+    backgroundColor: color.bgGrouped,
+  },
+  chipsContent: {
+    paddingHorizontal: 16,
+    paddingBottom: 14,
+    gap: 6,
+    alignItems: 'center',
   },
   chip: {
-    paddingHorizontal: space.sm,
-    paddingVertical: 5,
-    borderRadius: radius.pill,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    height: 28,
+    paddingHorizontal: 12,
+    borderRadius: 4,
     borderWidth: 1,
-    borderColor: color.border,
-    alignSelf: 'flex-start',
+    borderColor: color.separator,
+    backgroundColor: color.bg,
   },
   chipActive: {
-    backgroundColor: color.primary,
     borderColor: color.primary,
+    backgroundColor: color.primary,
+  },
+  chipLabel: {
+    fontFamily: fontFamily.sans,
+    fontSize: 13,
+    fontWeight: '500',
+    color: color.text,
+    letterSpacing: -0.1,
+  },
+  chipLabelActive: {
+    color: '#fff',
+  },
+  chipCount: {
+    fontFamily: fontFamily.sans,
+    fontSize: 11,
+    color: color.text,
+    opacity: 0.55,
+    fontVariant: ['tabular-nums'],
+  },
+  chipCountActive: {
+    color: '#fff',
+    opacity: 0.85,
   },
 
   // List
-  listArea: {
-    flex: 1,
-    backgroundColor: color.bgGrouped,
-  },
   listContent: {
-    paddingBottom: 80,
+    paddingHorizontal: 16,
+    paddingBottom: 30,
   },
-  separator: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.separator,
-    marginLeft: screenInset + 48 + space.sm, // indent past thumbnail
+  cardGap: {
+    height: 10,
   },
 
   // Empty
-  emptyWrap: {
+  empty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: screenInset,
+    paddingHorizontal: 16,
     gap: space.xs,
   },
   emptyText: {
     marginTop: space.xxs,
-  },
-
-  // FAB
-  fab: {
-    position: 'absolute',
-    right: screenInset,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: color.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadow.fab,
   },
 });

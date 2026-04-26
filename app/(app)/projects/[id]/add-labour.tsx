@@ -36,17 +36,26 @@ import {
   type PartyType,
 } from '@/src/features/parties/types';
 import { markAttendance } from '@/src/features/attendance/attendance';
-import { useAttendance } from '@/src/features/attendance/useAttendance';
+import { useProjectLabour } from '@/src/features/attendance/useProjectLabour';
 import { Button } from '@/src/ui/Button';
 import { Screen } from '@/src/ui/Screen';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
 import { color, radius, screenInset, space } from '@/src/theme';
 
+function toLocalDateString(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`; // local YYYY-MM-DD (timezone-safe, matches AttendanceTab)
+}
+
 const schema = z.object({
   name: z.string().trim().min(2, 'Name required'),
   partyId: z.string().optional(),
-  role: z.string().min(1, 'Select role'),
+  role: z.string().trim().min(1, 'Enter worker job detail'),
+  payRate: z.string().trim().min(1, 'Enter pay amount'),
+  payUnit: z.enum(['day', 'hour']),
 });
 
 type FormData = z.infer<typeof schema>;
@@ -57,8 +66,8 @@ export default function AddLabourScreen() {
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
   const { data: orgParties } = useParties(orgId || undefined);
-  const today = new Date().toISOString().split('T')[0];
-  const { data: todayAttendance } = useAttendance(projectId, today);
+  const today = toLocalDateString(new Date());
+  const { data: projectLabour } = useProjectLabour(projectId, orgId || undefined);
 
   const [submitError, setSubmitError] = useState<string>();
   const [showPartyPicker, setShowPartyPicker] = useState(false);
@@ -78,17 +87,18 @@ export default function AddLabourScreen() {
     formState: { errors, isSubmitting, isValid },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', partyId: '', role: '' },
+    defaultValues: { name: '', partyId: '', role: '', payRate: '', payUnit: 'day' },
     mode: 'onChange',
   });
 
   const selectedName = watch('name');
   const selectedRole = watch('role');
+  const selectedPayUnit = watch('payUnit');
 
-  // Parties already marked in today's attendance
-  const attendancePartyIds = useMemo(
-    () => new Set(todayAttendance.map((a) => a.labourId)),
-    [todayAttendance],
+  // Parties already registered as labour in this project.
+  const projectLabourIds = useMemo(
+    () => new Set(projectLabour.map((a) => a.labourId)),
+    [projectLabour],
   );
 
   // Party sections: already in project attendance first, then others
@@ -99,8 +109,8 @@ export default function AddLabourScreen() {
 
     for (const p of orgParties) {
       if (search && !p.name.toLowerCase().includes(search)) continue;
-      // Skip parties already in today's attendance
-      if (attendancePartyIds.has(p.id)) continue;
+      // Skip parties already added as project labour.
+      if (projectLabourIds.has(p.id)) continue;
 
       const type = (p.partyType ?? p.role) as string;
       const isWorker = ['worker', 'staff', 'labour', 'labour_contractor', 'contractor'].includes(type);
@@ -119,7 +129,7 @@ export default function AddLabourScreen() {
       sections.push({ title: 'Other Parties', data: otherParties });
     }
     return sections;
-  }, [orgParties, partySearch, attendancePartyIds]);
+  }, [orgParties, partySearch, projectLabourIds]);
 
   // ── Handlers ──
 
@@ -127,7 +137,7 @@ export default function AddLabourScreen() {
     const type = (party.partyType ?? party.role) as string;
     setValue('name', party.name, { shouldValidate: true });
     setValue('partyId', party.id);
-    setValue('role', type, { shouldValidate: true });
+    setValue('role', getPartyTypeLabel(type as PartyType), { shouldValidate: true });
     setShowPartyPicker(false);
     setPartySearch('');
   }, [setValue]);
@@ -168,7 +178,7 @@ export default function AddLabourScreen() {
       });
       setValue('name', newPartyName, { shouldValidate: true });
       setValue('partyId', partyId);
-      setValue('role', partyType, { shouldValidate: true });
+      setValue('role', getPartyTypeLabel(partyType), { shouldValidate: true });
       setShowNewPartyType(false);
       setNewPartyName('');
       setNewPartyPhone('');
@@ -189,6 +199,8 @@ export default function AddLabourScreen() {
         labourId: data.partyId || `manual_${Date.now()}`,
         labourName: data.name,
         labourRole: data.role,
+        payRate: Number(data.payRate),
+        payUnit: data.payUnit,
         date: today,
         status: 'present',
         createdBy: user.uid,
@@ -198,8 +210,6 @@ export default function AddLabourScreen() {
       setSubmitError((err as Error).message);
     }
   }
-
-  const roleLabel = selectedRole ? getPartyTypeLabel(selectedRole as PartyType) : '';
 
   return (
     <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
@@ -242,9 +252,9 @@ export default function AddLabourScreen() {
           {/* Role display (auto-set from party, or manual) */}
           {selectedRole ? (
             <View style={styles.roleDisplay}>
-              <Text variant="caption" color="textMuted">ROLE</Text>
+              <Text variant="caption" color="textMuted">JOB DETAIL</Text>
               <View style={styles.roleBadge}>
-                <Text variant="metaStrong" color="primary">{roleLabel || selectedRole}</Text>
+                <Text variant="metaStrong" color="primary">{selectedRole}</Text>
               </View>
             </View>
           ) : null}
@@ -271,41 +281,68 @@ export default function AddLabourScreen() {
                 }}
                 onBlur={onBlur}
                 error={errors.name?.message}
+                square
+                strongBorder
               />
             )}
           />
 
-          {/* Role dropdown for manual entry */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>ROLE *</Text>
-          <View style={styles.roleGrid}>
-            {ALL_PARTY_TYPES.map((r) => {
-              const active = selectedRole === r.key;
-              return (
-                <Pressable
-                  key={r.key}
-                  onPress={() => setValue('role', r.key, { shouldValidate: true })}
-                  style={[styles.roleChip, active && styles.roleChipActive]}
-                >
-                  <Ionicons
-                    name={r.icon as any}
-                    size={14}
-                    color={active ? color.onPrimary : color.textMuted}
-                  />
-                  <Text
-                    variant="caption"
-                    style={{ color: active ? color.onPrimary : color.text }}
-                  >
-                    {r.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
+          {/* Job detail only (not category) */}
+          <Controller
+            control={control}
+            name="role"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <TextField
+                label="Worker job detail"
+                placeholder="e.g. POP worker, Paint worker, Ceiling worker"
+                autoCapitalize="words"
+                value={value}
+                onChangeText={onChange}
+                onBlur={onBlur}
+                error={errors.role?.message}
+                square
+                strongBorder
+              />
+            )}
+          />
+
+          <Controller
+            control={control}
+            name="payRate"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <TextField
+                label="Pay amount"
+                placeholder="e.g. 850"
+                keyboardType="number-pad"
+                value={value}
+                onChangeText={(t) => onChange(t.replace(/[^\d]/g, ''))}
+                onBlur={onBlur}
+                error={errors.payRate?.message}
+                square
+                strongBorder
+              />
+            )}
+          />
+
+          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>PAY UNIT</Text>
+          <View style={styles.unitRow}>
+            <Pressable
+              onPress={() => setValue('payUnit', 'day', { shouldValidate: true })}
+              style={[styles.unitBtn, selectedPayUnit === 'day' && styles.unitBtnActive]}
+            >
+              <Text variant="caption" style={{ color: selectedPayUnit === 'day' ? color.onPrimary : color.text }}>
+                Per day
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setValue('payUnit', 'hour', { shouldValidate: true })}
+              style={[styles.unitBtn, selectedPayUnit === 'hour' && styles.unitBtnActive]}
+            >
+              <Text variant="caption" style={{ color: selectedPayUnit === 'hour' ? color.onPrimary : color.text }}>
+                Per hour
+              </Text>
+            </Pressable>
           </View>
-          {errors.role?.message && (
-            <Text variant="caption" color="danger" style={{ marginTop: space.xxs }}>
-              {errors.role.message}
-            </Text>
-          )}
 
           {submitError && (
             <Text variant="caption" color="danger" style={{ marginTop: space.xs }}>
@@ -475,6 +512,7 @@ export default function AddLabourScreen() {
           )}
         </View>
       </Modal>
+
     </Screen>
   );
 }
@@ -485,17 +523,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: screenInset,
-    paddingBottom: space.xs,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    paddingTop: 2,
+    paddingBottom: 8,
+    backgroundColor: color.bgGrouped,
+    borderBottomWidth: 1,
+    borderBottomColor: color.borderStrong,
   },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  navBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bgGrouped,
+  },
   navTitle: { flex: 1, textAlign: 'center' },
   scroll: {
     paddingHorizontal: screenInset,
     paddingTop: space.md,
     paddingBottom: space.xl,
+    backgroundColor: color.bgGrouped,
   },
 
   // Party selector
@@ -504,9 +552,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.sm,
     backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
+    borderRadius: 0,
     borderWidth: 1,
-    borderColor: color.border,
+    borderColor: color.borderStrong,
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
     minHeight: 52,
@@ -523,8 +571,10 @@ const styles = StyleSheet.create({
   roleBadge: {
     paddingHorizontal: space.sm,
     paddingVertical: space.xxs,
-    borderRadius: radius.pill,
+    borderRadius: 0,
     backgroundColor: color.primarySoft,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.primary,
   },
 
   orRow: {
@@ -540,34 +590,32 @@ const styles = StyleSheet.create({
   },
 
   sectionLabel: { marginTop: space.md, marginBottom: space.xs },
-
-  roleGrid: {
+  unitRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: space.xs,
+    marginBottom: space.md,
   },
-  roleChip: {
-    flexDirection: 'row',
+  unitBtn: {
+    flex: 1,
+    minHeight: 40,
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xs,
-    borderRadius: radius.pill,
+    justifyContent: 'center',
     borderWidth: 1,
-    borderColor: color.border,
-    backgroundColor: color.surface,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bgGrouped,
   },
-  roleChipActive: {
+  unitBtnActive: {
     backgroundColor: color.primary,
     borderColor: color.primary,
   },
 
+
   footer: {
     paddingHorizontal: screenInset,
     paddingVertical: space.sm,
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
+    backgroundColor: color.bgGrouped,
+    borderTopWidth: 1,
+    borderTopColor: color.borderStrong,
   },
 
   // Modal
@@ -576,12 +624,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.35)',
   },
   modalSheet: {
-    backgroundColor: color.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
+    backgroundColor: color.bgGrouped,
+    borderTopLeftRadius: 0,
+    borderTopRightRadius: 0,
     paddingTop: space.sm,
     paddingBottom: space.xxl,
     maxHeight: '75%',
+    borderTopWidth: 1,
+    borderTopColor: color.borderStrong,
   },
   modalHandle: {
     width: 36,
@@ -594,6 +644,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     textAlign: 'center',
     marginBottom: space.sm,
+    fontSize: 16,
   },
   modalList: {
     paddingHorizontal: screenInset,
@@ -608,10 +659,10 @@ const styles = StyleSheet.create({
     marginBottom: space.sm,
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,
-    borderRadius: radius.sm,
+    borderRadius: 0,
     backgroundColor: color.bgGrouped,
     borderWidth: 1,
-    borderColor: color.border,
+    borderColor: color.borderStrong,
   },
   searchInput: {
     flex: 1,
@@ -623,10 +674,13 @@ const styles = StyleSheet.create({
   sectionHeader: {
     paddingVertical: space.xs,
     paddingHorizontal: space.xxs,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.xs,
+    backgroundColor: color.surface,
+    borderRadius: 0,
     marginTop: space.xs,
     marginBottom: space.xxs,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: color.border,
   },
 
   partyOption: {
@@ -636,13 +690,15 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     paddingHorizontal: space.xs,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    borderBottomColor: color.border,
   },
   partyAvatar: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 0,
     backgroundColor: color.primarySoft,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -653,8 +709,8 @@ const styles = StyleSheet.create({
 
   partyActions: {
     flexDirection: 'row',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
+    borderTopWidth: 1,
+    borderTopColor: color.borderStrong,
     marginHorizontal: screenInset,
   },
   partyActionBtn: {
@@ -667,7 +723,7 @@ const styles = StyleSheet.create({
   },
   partyActionDivider: {
     width: 1,
-    backgroundColor: color.separator,
+    backgroundColor: color.borderStrong,
     marginVertical: space.xs,
   },
 
@@ -680,13 +736,18 @@ const styles = StyleSheet.create({
     gap: space.sm,
     paddingVertical: space.sm,
     paddingHorizontal: space.xs,
-    borderRadius: radius.sm,
+    borderRadius: 0,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.border,
+    marginBottom: 6,
   },
   typeIconWrap: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: 0,
     backgroundColor: color.bgGrouped,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },

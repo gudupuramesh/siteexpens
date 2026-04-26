@@ -1,215 +1,304 @@
-import { useState, useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import * as Haptics from 'expo-haptics';
 
 import { useTasks } from '@/src/features/tasks/useTasks';
-import type { Task } from '@/src/features/tasks/types';
-import { formatDateRange } from '@/src/lib/format';
+import { DEFAULT_TASK_CATEGORIES, type Task } from '@/src/features/tasks/types';
+import { useProject } from '@/src/features/projects/useProject';
+import { TaskReportModal } from '@/src/features/projects/TaskReportModal';
 import { Text } from '@/src/ui/Text';
-import { Separator } from '@/src/ui/Separator';
-import { color, radius, screenInset, shadow, space } from '@/src/theme';
+import { color, screenInset, space } from '@/src/theme';
 
-const STATUS_FILTERS = [
-  { key: '', label: 'All' },
-  { key: 'not_started', label: 'Not Started' },
-  { key: 'ongoing', label: 'Ongoing' },
-  { key: 'completed', label: 'Completed' },
-] as const;
+function getTaskDate(task: Task): Date | null {
+  if (task.startDate) return task.startDate.toDate();
+  if (task.endDate) return task.endDate.toDate();
+  return null;
+}
 
-const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
-  not_started: { bg: color.dangerSoft, fg: color.danger },
-  ongoing: { bg: color.warningSoft, fg: color.warning },
-  completed: { bg: color.successSoft, fg: color.success },
-};
+function getCategoryLabel(key: string | undefined): string {
+  if (!key) return 'General';
+  const fromDefault = DEFAULT_TASK_CATEGORIES.find((c) => c.key === key)?.label;
+  if (fromDefault) return fromDefault;
+  return key
+    .split('_')
+    .filter(Boolean)
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join(' ');
+}
 
 export function TaskTab() {
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
-  const [statusFilter, setStatusFilter] = useState('');
-  const { data, loading } = useTasks(projectId, statusFilter || undefined);
+  const { data, loading } = useTasks(projectId);
+  const { data: project } = useProject(projectId);
+  const [reportOpen, setReportOpen] = useState(false);
 
-  const counts = useMemo(() => {
-    const all = data;
-    const notStarted = all.filter((t) => t.status === 'not_started').length;
-    const ongoing = all.filter((t) => t.status === 'ongoing').length;
-    const completed = all.filter((t) => t.status === 'completed').length;
-    const progress = all.length > 0 ? Math.round((completed / all.length) * 100) : 0;
-    return { notStarted, ongoing, completed, progress, total: all.length };
-  }, [data]);
+  const sorted = useMemo(
+    () =>
+      [...data].sort((a, b) => {
+        const aDate = getTaskDate(a)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+        const bDate = getTaskDate(b)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+        return aDate - bDate;
+      }),
+    [data],
+  );
 
-  const renderItem = ({ item }: { item: Task }) => {
+  const completedCount = useMemo(
+    () => sorted.filter((t) => t.status === 'completed').length,
+    [sorted],
+  );
+
+  const renderItem = ({ item, index }: { item: Task; index: number }) => {
+    const done = item.status === 'completed';
     const startDate = item.startDate ? item.startDate.toDate() : null;
     const endDate = item.endDate ? item.endDate.toDate() : null;
-    const cfg = STATUS_COLORS[item.status] ?? STATUS_COLORS.not_started;
-    const progress = item.quantity > 0
-      ? Math.round((item.completedQuantity / item.quantity) * 100)
-      : 0;
+    const date = getTaskDate(item);
+    const dateLabel = date
+      ? date
+          .toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+          .toUpperCase()
+      : 'NO DATE';
+    const startLabel = startDate
+      ? startDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+      : 'Not set';
+    const endLabel = endDate
+      ? endDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
+      : 'Not set';
+    const progress = Math.max(0, Math.min(100, item.progress ?? 0));
+    const hasNext = index < sorted.length - 1;
+    const categoryLabel = getCategoryLabel(item.category);
 
     return (
-      <View style={styles.taskRow}>
-        <View style={styles.taskBody}>
-          <Text variant="rowTitle" color="text" numberOfLines={1}>{item.title}</Text>
-          <Text variant="meta" color="textMuted" numberOfLines={1}>
-            {formatDateRange(startDate, endDate)}
-            {item.assignedTo ? ` · ${item.assignedTo}` : ''}
+      <Pressable
+        onPress={() => router.push(`/(app)/projects/${projectId}/task/${item.id}` as never)}
+        style={({ pressed }) => [styles.row, pressed && { opacity: 0.75 }]}
+      >
+        <View style={styles.leftRail}>
+          <View style={[styles.dot, done && styles.dotDone]}>
+            {done ? <Ionicons name="checkmark" size={10} color={color.onPrimary} /> : null}
+          </View>
+          {hasNext ? <View style={styles.railLine} /> : null}
+        </View>
+
+        <View style={[styles.content, done && styles.contentDone]}>
+          <View style={styles.rowTop}>
+            <Text variant="caption" color="textMuted" style={styles.dateText}>
+              {dateLabel}
+            </Text>
+            <Ionicons name="create-outline" size={12} color={color.textFaint} />
+          </View>
+
+          <Text variant="bodyStrong" color="text" style={[styles.title, done && styles.titleDone]}>
+            {item.title}
           </Text>
-          {item.quantity > 0 && (
-            <View style={styles.progressRow}>
-              <View style={styles.progressBg}>
-                <View style={[styles.progressFill, { width: `${progress}%` }]} />
-              </View>
-              <Text variant="caption" color="textMuted">
-                {item.completedQuantity}/{item.quantity} {item.unit}
-              </Text>
-            </View>
+
+          <Text variant="meta" color="textMuted" numberOfLines={1} style={styles.metaLine}>
+            Start: {startLabel} · End: {endLabel} · {progress}% complete
+          </Text>
+          <View style={styles.categoryPill}>
+            <Text variant="caption" color="primary">
+              {categoryLabel.toUpperCase()}
+            </Text>
+          </View>
+
+          {!!item.description && (
+            <Text variant="meta" color="textMuted" numberOfLines={2} style={styles.note}>
+              {item.description}
+            </Text>
           )}
         </View>
-        <View style={[styles.statusBadge, { backgroundColor: cfg.bg }]}>
-          <Text variant="caption" style={{ color: cfg.fg }}>
-            {item.status === 'not_started' ? 'New' : item.status === 'ongoing' ? 'Ongoing' : 'Done'}
-          </Text>
-        </View>
-      </View>
+      </Pressable>
     );
   };
 
   return (
     <View style={styles.container}>
-      {/* Summary row */}
-      <View style={styles.summaryRow}>
-        <View style={styles.summaryCell}>
-          <Text variant="title" color="danger">{counts.notStarted}</Text>
-          <Text variant="caption" color="textMuted">Not Started</Text>
+      <View style={styles.header}>
+        <View style={styles.headerTextWrap}>
+          <Text variant="caption" color="textMuted" style={styles.kicker}>
+            PROJECT TIMELINE · {sorted.length} MILESTONES
+          </Text>
+          <Text variant="bodyStrong" color="text">
+            {completedCount} done · {Math.max(0, sorted.length - completedCount)} upcoming
+          </Text>
         </View>
-        <View style={styles.summaryCell}>
-          <Text variant="title" color="warning">{counts.ongoing}</Text>
-          <Text variant="caption" color="textMuted">Ongoing</Text>
-        </View>
-        <View style={styles.summaryCell}>
-          <Text variant="title" color="success">{counts.progress}%</Text>
-          <Text variant="caption" color="textMuted">Progress</Text>
+        <View style={styles.headerActions}>
+          <Pressable
+            onPress={() => setReportOpen(true)}
+            disabled={sorted.length === 0}
+            style={({ pressed }) => [
+              styles.reportChip,
+              sorted.length === 0 && { opacity: 0.4 },
+              pressed && sorted.length > 0 && { opacity: 0.86 },
+            ]}
+          >
+            <Ionicons name="document-text-outline" size={13} color={color.primary} />
+            <Text variant="metaStrong" style={{ color: color.primary }}>
+              Report
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => router.push(`/(app)/projects/${projectId}/add-task` as never)}
+            style={({ pressed }) => [styles.addChip, pressed && { opacity: 0.86 }]}
+          >
+            <Ionicons name="add" size={13} color={color.onPrimary} />
+            <Text variant="metaStrong" style={{ color: color.onPrimary }}>
+              Add
+            </Text>
+          </Pressable>
         </View>
       </View>
 
-      {/* Filter chips */}
-      <View style={styles.filterRow}>
-        {STATUS_FILTERS.map((f) => {
-          const active = statusFilter === f.key;
-          return (
-            <Pressable
-              key={f.key}
-              onPress={() => setStatusFilter(f.key)}
-              style={[styles.filterChip, active && styles.filterChipActive]}
-            >
-              <Text variant="caption" style={{ color: active ? '#fff' : color.text }}>
-                {f.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      <TaskReportModal
+        visible={reportOpen}
+        onClose={() => setReportOpen(false)}
+        project={project}
+        tasks={sorted}
+      />
 
-      {loading && data.length === 0 ? (
+      {loading && sorted.length === 0 ? (
         <View style={styles.empty}>
           <Text variant="meta" color="textMuted">Loading…</Text>
         </View>
-      ) : data.length === 0 ? (
+      ) : sorted.length === 0 ? (
         <View style={styles.empty}>
-          <Ionicons name="checkbox-outline" size={28} color={color.textFaint} />
-          <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>No tasks yet</Text>
+          <Ionicons name="time-outline" size={28} color={color.textFaint} />
+          <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>No timeline entries</Text>
           <Text variant="meta" color="textMuted" align="center">
-            Create tasks to track work progress on this project.
+            Add a timeline item to track project progress.
           </Text>
         </View>
       ) : (
         <FlatList
-          data={data}
+          data={sorted}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          ItemSeparatorComponent={Separator}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
         />
       )}
-
-      <Pressable
-        onPress={() => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          router.push(`/(app)/projects/${projectId}/add-task` as never);
-        }}
-        style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
-        accessibilityLabel="Add task"
-      >
-        <Ionicons name="add" size={24} color={color.onPrimary} />
-      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  summaryRow: {
-    flexDirection: 'row',
-    backgroundColor: color.surface,
-    paddingVertical: space.sm,
+
+  header: {
     paddingHorizontal: screenInset,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
-  },
-  summaryCell: { flex: 1, alignItems: 'center', gap: 2 },
-  filterRow: {
+    paddingTop: 14,
+    paddingBottom: 12,
     flexDirection: 'row',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.xs,
-    backgroundColor: color.surface,
-    gap: space.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
   },
-  filterChip: {
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xxs,
-    borderRadius: radius.pill,
-    borderWidth: 1,
+  headerTextWrap: { flex: 1, minWidth: 0 },
+  kicker: {
+    letterSpacing: 0.5,
+    marginBottom: 2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  reportChip: {
+    height: 32,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: color.bg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  addChip: {
+    height: 32,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: color.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+
+  row: {
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: screenInset,
+    paddingBottom: 14,
+  },
+  leftRail: {
+    alignItems: 'center',
+    width: 20,
+  },
+  dot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 2,
     borderColor: color.border,
+    backgroundColor: color.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
   },
-  filterChipActive: {
+  dotDone: {
     backgroundColor: color.primary,
     borderColor: color.primary,
   },
-  taskRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.surface,
-    gap: space.sm,
-  },
-  taskBody: { flex: 1, minWidth: 0, gap: 4 },
-  progressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
-    marginTop: 2,
-  },
-  progressBg: {
+  railLine: {
+    width: 2,
     flex: 1,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.bgGrouped,
+    marginTop: 4,
+    backgroundColor: color.border,
   },
-  progressFill: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.primary,
+  content: {
+    flex: 1,
+    minWidth: 0,
+    paddingBottom: 2,
   },
-  statusBadge: {
-    paddingHorizontal: space.xs,
-    paddingVertical: 2,
-    borderRadius: radius.pill,
+  contentDone: {
+    opacity: 0.62,
   },
-  listContent: { paddingBottom: 80 },
+  rowTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 8,
+  },
+  dateText: {
+    letterSpacing: 0.35,
+  },
+  title: {
+    marginTop: 2,
+    lineHeight: 20,
+  },
+  titleDone: {
+    textDecorationLine: 'line-through',
+  },
+  note: {
+    marginTop: 2,
+    lineHeight: 19,
+  },
+  metaLine: {
+    marginTop: 3,
+    lineHeight: 18,
+  },
+  categoryPill: {
+    alignSelf: 'flex-start',
+    marginTop: 3,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bg,
+    borderRadius: 0,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+  },
+
+  listContent: { paddingBottom: 28 },
   empty: {
     flex: 1,
     alignItems: 'center',
@@ -218,16 +307,4 @@ const styles = StyleSheet.create({
     gap: space.xs,
   },
   emptyTitle: { marginTop: space.xxs },
-  fab: {
-    position: 'absolute',
-    right: screenInset,
-    bottom: space.xl,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: color.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadow.fab,
-  },
 });

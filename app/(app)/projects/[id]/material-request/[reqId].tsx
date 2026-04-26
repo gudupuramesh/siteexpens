@@ -15,6 +15,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 
 import { useAuth } from '@/src/features/auth/useAuth';
+import { useOrgMembers } from '@/src/features/org/useOrgMembers';
 import { useProject } from '@/src/features/projects/useProject';
 import { getCategoryConfig, type MaterialCategory } from '@/src/features/materialLibrary/types';
 import { useMaterialRequest } from '@/src/features/materialRequests/useMaterialRequest';
@@ -35,6 +36,12 @@ import { Screen } from '@/src/ui/Screen';
 import { Text } from '@/src/ui/Text';
 import { color, radius, screenInset, space } from '@/src/theme';
 
+function compactDateTime(ts: { toDate: () => Date } | null | undefined): string {
+  if (!ts) return '—';
+  const dt = ts.toDate();
+  return `${dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} ${dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
+}
+
 export default function MaterialRequestDetailScreen() {
   const params = useLocalSearchParams<{ id: string; reqId: string }>();
   const projectId = params.id;
@@ -42,6 +49,7 @@ export default function MaterialRequestDetailScreen() {
 
   const { user } = useAuth();
   const { data: project } = useProject(projectId);
+  const { members } = useOrgMembers(project?.orgId);
   const { data: request, loading } = useMaterialRequest(reqId);
 
   const [showRejectModal, setShowRejectModal] = useState(false);
@@ -53,6 +61,13 @@ export default function MaterialRequestDetailScreen() {
   const isApprover = isOwner || ((project as any)?.approverIds?.includes(user?.uid) ?? false);
   const isPending = request?.status === 'pending';
   const isApproved = request?.status === 'approved';
+  const membersByUid = new Map(members.map((m) => [m.uid, m]));
+  const getMemberLabel = (uid?: string): string => {
+    if (!uid) return 'Unknown';
+    if (uid === project?.ownerId) return `${membersByUid.get(uid)?.displayName ?? 'Owner'} (Owner)`;
+    if (project?.approverIds?.includes(uid)) return `${membersByUid.get(uid)?.displayName ?? 'Approver'} (Approver)`;
+    return membersByUid.get(uid)?.displayName ?? 'Team member';
+  };
 
   const receivedCount = request?.items.filter((i) => i.deliveryStatus === 'received_at_site').length ?? 0;
   const totalItems = request?.items.length ?? 0;
@@ -133,6 +148,14 @@ export default function MaterialRequestDetailScreen() {
     ]);
   }, [reqId]);
 
+  const handleEdit = useCallback(() => {
+    if (!projectId || !reqId || !isPending) return;
+    router.push({
+      pathname: '/(app)/projects/[id]/add-material-request',
+      params: { id: projectId, reqId },
+    });
+  }, [isPending, projectId, reqId]);
+
   if (loading || !request) {
     return (
       <Screen bg="grouped" padded={false}>
@@ -148,6 +171,10 @@ export default function MaterialRequestDetailScreen() {
   const dateStr = request.createdAt
     ? request.createdAt.toDate().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
     : '—';
+  const requestedMeta = `REQ ${getMemberLabel(request.createdBy)} · ${compactDateTime(request.createdAt)}`;
+  const approvedMeta = request.status === 'approved'
+    ? `APR ${getMemberLabel(request.approvedBy)} · ${compactDateTime(request.approvedAt)}`
+    : null;
 
   return (
     <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
@@ -161,12 +188,16 @@ export default function MaterialRequestDetailScreen() {
         <Text variant="bodyStrong" color="text" style={styles.navTitle} numberOfLines={1}>
           {request.title || 'Material Request'}
         </Text>
-        {isPending && (
-          <Pressable onPress={handleDelete} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="trash-outline" size={20} color={color.danger} />
-          </Pressable>
-        )}
-        {!isPending && <View style={styles.navBtn} />}
+        {isPending ? (
+          <View style={styles.navActions}>
+            <Pressable onPress={handleEdit} hitSlop={12} style={styles.navBtn}>
+              <Ionicons name="create-outline" size={20} color={color.primary} />
+            </Pressable>
+            <Pressable onPress={handleDelete} hitSlop={12} style={styles.navBtn}>
+              <Ionicons name="trash-outline" size={20} color={color.danger} />
+            </Pressable>
+          </View>
+        ) : <View style={styles.navBtn} />}
       </View>
 
       {/* Status header */}
@@ -187,6 +218,40 @@ export default function MaterialRequestDetailScreen() {
         </View>
       )}
 
+      <View style={styles.metricsCard}>
+        <View style={styles.metricsRow}>
+          <Text variant="caption" color="textMuted">ITEMS</Text>
+          <Text variant="metaStrong" color="text">{totalItems}</Text>
+        </View>
+        <View style={styles.metricsDivider} />
+        <View style={styles.metricsRow}>
+          <Text variant="caption" color="textMuted">RECEIVED</Text>
+          <Text variant="metaStrong" color={isApproved ? 'success' : 'text'}>
+            {receivedCount}/{totalItems}
+          </Text>
+        </View>
+        <View style={styles.metricsDivider} />
+        <View style={styles.metricsRow}>
+          <Text variant="caption" color="textMuted">TOTAL VALUE</Text>
+          <Text variant="bodyStrong" color="primary">{formatInr(request.totalValue)}</Text>
+        </View>
+        <View style={styles.metricsDivider} />
+        <View style={styles.metaIconRow}>
+          <Ionicons name="person-outline" size={12} color={color.textFaint} />
+          <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.compactMetaLine}>
+            {requestedMeta}
+          </Text>
+        </View>
+        {approvedMeta ? (
+          <View style={styles.metaIconRow}>
+            <Ionicons name="checkmark-circle-outline" size={12} color={color.success} />
+            <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.compactMetaLine}>
+              {approvedMeta}
+            </Text>
+          </View>
+        ) : null}
+      </View>
+
       {/* Items list */}
       <FlatList
         data={request.items}
@@ -202,14 +267,7 @@ export default function MaterialRequestDetailScreen() {
         )}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
-        ListFooterComponent={
-          isApprover ? (
-            <View style={styles.totalRow}>
-              <Text variant="bodyStrong" color="text">Total Value</Text>
-              <Text variant="bodyStrong" color="primary">{formatInr(request.totalValue)}</Text>
-            </View>
-          ) : null
-        }
+        ListFooterComponent={null}
       />
 
       {/* Rejection note */}
@@ -370,32 +428,65 @@ function statusBadge(status: string) {
 }
 
 const styles = StyleSheet.create({
-  navBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: screenInset, paddingBottom: space.xxs, backgroundColor: color.surface },
+  navBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: screenInset,
+    paddingBottom: space.xxs,
+    backgroundColor: color.bgGrouped,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: color.borderStrong,
+  },
   navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  navActions: { flexDirection: 'row', alignItems: 'center' },
   navTitle: { flex: 1, textAlign: 'center' },
 
-  statusBar: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: space.xs, paddingHorizontal: screenInset },
+  statusBar: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: space.xs, paddingHorizontal: screenInset, backgroundColor: color.surface },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
 
-  progressBar: { height: 24, backgroundColor: color.bgGrouped, marginHorizontal: screenInset, marginTop: space.xs, borderRadius: radius.sm, overflow: 'hidden', justifyContent: 'center' },
-  progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: color.successSoft, borderRadius: radius.sm },
+  progressBar: { height: 24, backgroundColor: color.bgGrouped, marginHorizontal: screenInset, marginTop: space.xs, borderRadius: 0, overflow: 'hidden', justifyContent: 'center', borderWidth: 1, borderColor: color.borderStrong },
+  progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: color.successSoft },
   progressText: { textAlign: 'center', zIndex: 1 },
 
-  listContent: { paddingBottom: 20 },
-  itemRow: { flexDirection: 'row', alignItems: 'center', gap: space.xs, paddingHorizontal: screenInset, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.separator },
+  metricsCard: {
+    marginHorizontal: screenInset,
+    marginTop: 8,
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+  },
+  metricsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  metricsDivider: { height: StyleSheet.hairlineWidth, backgroundColor: color.borderStrong, marginVertical: 8 },
+  metaIconRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  compactMetaLine: { letterSpacing: 0.2 },
+
+  listContent: { paddingBottom: 20, paddingTop: 2 },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    paddingHorizontal: screenInset,
+    paddingVertical: space.sm,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
+    marginHorizontal: screenInset,
+    marginBottom: 6,
+  },
   itemNum: { width: 24, alignItems: 'center' },
   itemBody: { flex: 1, gap: 1 },
   itemNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   catDot: { width: 8, height: 8, borderRadius: 4 },
   deliveryChip: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: space.xs, paddingVertical: 3, borderRadius: radius.pill, borderWidth: 1 },
 
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: space.md, paddingVertical: space.md, borderTopWidth: 1, borderTopColor: color.separator, backgroundColor: color.primarySoft, marginHorizontal: screenInset, borderRadius: radius.sm, marginTop: space.sm },
-
   rejectionBar: { flexDirection: 'row', alignItems: 'center', gap: space.xs, paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.dangerSoft },
 
-  footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.separator },
+  footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.bgGrouped, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.borderStrong },
   footerRow: { flexDirection: 'row', gap: space.sm },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.xs, paddingVertical: space.sm, borderRadius: radius.sm },
+  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.xs, paddingVertical: space.sm, borderRadius: 0 },
   approveBtn: { backgroundColor: color.success },
   rejectBtn: { backgroundColor: color.dangerSoft, borderWidth: 1, borderColor: color.danger },
   shareBtn: { backgroundColor: color.primary },

@@ -30,8 +30,8 @@ import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useParties } from '@/src/features/parties/useParties';
 import { createParty } from '@/src/features/parties/parties';
 import {
-  ALL_PARTY_TYPES,
   PARTY_TYPE_GROUPS,
+  getPartyTypeLabel,
   type PartyType,
   type Party,
 } from '@/src/features/parties/types';
@@ -257,28 +257,43 @@ export default function AddTransactionScreen() {
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
           <Ionicons name="arrow-back" size={22} color={color.text} />
         </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-          {navTitle}
-        </Text>
-        <View style={styles.navBtn} />
-      </View>
-
-      {/* Type label + Date row */}
-      <View style={styles.typeBar}>
-        <View style={[styles.typeLabel, isPaymentIn ? styles.typeLabelIn : styles.typeLabelOut]}>
-          <Ionicons
-            name={isPaymentIn ? 'arrow-down-circle' : 'arrow-up-circle'}
-            size={16}
-            color={isPaymentIn ? color.success : color.danger}
-          />
-          <Text
-            variant="metaStrong"
-            style={{ color: isPaymentIn ? color.success : color.danger }}
-          >
+        <View style={styles.navCenter}>
+          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>EXPENSE</Text>
+          <Text variant="bodyStrong" color="text" style={styles.navTitle}>
             {navTitle}
           </Text>
         </View>
+        <View style={styles.navBtn} />
+      </View>
 
+      {/* Amount hero + date */}
+      <View style={styles.hero}>
+        <Text variant="caption" color="textMuted" style={styles.heroLabel}>
+          AMOUNT - INR
+        </Text>
+        <View style={styles.heroAmountRow}>
+          <Text
+            variant="title"
+            style={{ color: isPaymentIn ? color.success : color.primary }}
+          >
+            {isPaymentIn ? '+ Rs' : '- Rs'}
+          </Text>
+          <Controller
+            control={control}
+            name="amount"
+            render={({ field: { onChange, onBlur, value } }) => (
+              <TextInput
+                value={value}
+                onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))}
+                onBlur={onBlur}
+                placeholder="0"
+                keyboardType="numeric"
+                style={styles.heroAmountInput}
+                placeholderTextColor={color.textFaint}
+              />
+            )}
+          />
+        </View>
         <Pressable
           onPress={() => setShowDatePicker(true)}
           style={styles.dateChip}
@@ -314,23 +329,6 @@ export default function AddTransactionScreen() {
             <Ionicons name="chevron-forward" size={16} color={color.textMuted} />
           </Pressable>
 
-          {/* Amount */}
-          <Controller
-            control={control}
-            name="amount"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label={isPaymentIn ? 'Amount Received' : 'Amount Given'}
-                placeholder="0"
-                keyboardType="numeric"
-                value={value}
-                onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))}
-                onBlur={onBlur}
-                error={errors.amount?.message}
-              />
-            )}
-          />
-
           {/* Description */}
           <Controller
             control={control}
@@ -343,9 +341,16 @@ export default function AddTransactionScreen() {
                 value={value ?? ''}
                 onChangeText={onChange}
                 onBlur={onBlur}
+                square
+                strongBorder
               />
             )}
           />
+          {errors.amount?.message ? (
+            <Text variant="caption" color="danger" style={{ marginTop: 2 }}>
+              {errors.amount.message}
+            </Text>
+          ) : null}
 
           {/* Reference Number */}
           <Controller
@@ -358,6 +363,8 @@ export default function AddTransactionScreen() {
                 value={value ?? ''}
                 onChangeText={onChange}
                 onBlur={onBlur}
+                square
+                strongBorder
               />
             )}
           />
@@ -524,27 +531,39 @@ export default function AddTransactionScreen() {
                 <Text variant="caption" color="textMuted">{title.toUpperCase()}</Text>
               </View>
             )}
-            renderItem={({ item }) => (
-              <Pressable
-                onPress={() => selectParty(item)}
-                style={({ pressed }) => [styles.partyOption, pressed && { opacity: 0.7 }]}
-              >
-                <View style={styles.partyAvatar}>
-                  <Text variant="metaStrong" style={{ color: color.primary }}>
-                    {item.name.charAt(0).toUpperCase()}
-                  </Text>
-                </View>
-                <View style={styles.flex}>
-                  <Text variant="body" color="text" numberOfLines={1}>{item.name}</Text>
-                  {item.phone ? (
-                    <Text variant="meta" color="textMuted">{item.phone}</Text>
-                  ) : null}
-                </View>
-                {selectedPartyName === item.name && (
-                  <Ionicons name="checkmark-circle" size={20} color={color.primary} />
-                )}
-              </Pressable>
-            )}
+            renderItem={({ item }) => {
+              const typeLabel = item.partyType ? getPartyTypeLabel(item.partyType) : null;
+              return (
+                <Pressable
+                  onPress={() => selectParty(item)}
+                  style={({ pressed }) => [styles.partyOption, pressed && { opacity: 0.7 }]}
+                >
+                  <View style={styles.partyAvatar}>
+                    <Text variant="metaStrong" style={{ color: color.primary }}>
+                      {item.name.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={styles.flex}>
+                    <View style={styles.partyRowTop}>
+                      <Text variant="body" color="text" numberOfLines={1} style={styles.flex}>
+                        {item.name}
+                      </Text>
+                      {typeLabel && (
+                        <View style={styles.partyTypeTag}>
+                          <Text variant="caption" color="primary">{typeLabel}</Text>
+                        </View>
+                      )}
+                    </View>
+                    {item.phone ? (
+                      <Text variant="meta" color="textMuted">{item.phone}</Text>
+                    ) : null}
+                  </View>
+                  {selectedPartyName === item.name && (
+                    <Ionicons name="checkmark-circle" size={20} color={color.primary} />
+                  )}
+                </Pressable>
+              );
+            }}
             ListEmptyComponent={
               <View style={styles.emptyList}>
                 <Text variant="meta" color="textMuted">
@@ -567,12 +586,16 @@ export default function AddTransactionScreen() {
 
             <Pressable
               onPress={() => {
-                if (partySearch.trim()) {
-                  setValue('partyName', partySearch.trim(), { shouldValidate: true });
-                  setValue('partyId', '');
+                const name = partySearch.trim();
+                if (!name) {
+                  Alert.alert('Party name required', 'Type the party name in the search box first.');
+                  return;
                 }
+                setNewPartyName(name);
+                setNewPartyPhone('');
                 setShowPartyPicker(false);
                 setPartySearch('');
+                setShowNewPartyType(true);
               }}
               style={styles.partyActionBtn}
             >
@@ -707,8 +730,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: screenInset,
-    paddingBottom: space.xxs,
-    backgroundColor: color.surface,
+    paddingTop: 2,
+    paddingBottom: 8,
+    backgroundColor: color.bgGrouped,
   },
   navBtn: {
     width: 36,
@@ -716,32 +740,39 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navTitle: { flex: 1, textAlign: 'center' },
-
-  // Type bar
-  typeBar: {
-    flexDirection: 'row',
+  navCenter: {
+    flex: 1,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.xs,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    justifyContent: 'center',
   },
-  typeLabel: {
+  navEyebrow: { letterSpacing: 1.2 },
+  navTitle: { textAlign: 'center' },
+
+  // Hero
+  hero: {
+    paddingHorizontal: screenInset,
+    paddingTop: 10,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: color.borderStrong,
+    backgroundColor: color.bgGrouped,
+  },
+  heroLabel: {
+    letterSpacing: 1.2,
+    marginBottom: 4,
+  },
+  heroAmountRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingVertical: space.xs,
-    paddingHorizontal: space.sm,
-    borderRadius: radius.sm,
+    marginBottom: 10,
   },
-  typeLabelOut: {
-    backgroundColor: color.dangerSoft,
-  },
-  typeLabelIn: {
-    backgroundColor: color.successSoft,
+  heroAmountInput: {
+    flex: 1,
+    fontSize: 34,
+    fontWeight: '700',
+    color: color.text,
+    paddingVertical: 0,
   },
   dateChip: {
     flexDirection: 'row',
@@ -749,14 +780,17 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingVertical: space.xs,
     paddingHorizontal: space.sm,
-    borderRadius: radius.sm,
-    backgroundColor: color.bgGrouped,
+    borderRadius: radius.none,
+    backgroundColor: color.bg,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
   },
 
   scroll: {
     paddingHorizontal: screenInset,
-    paddingTop: space.md,
+    paddingTop: 12,
     paddingBottom: space.xl,
+    backgroundColor: color.bgGrouped,
   },
 
   // Party selector
@@ -764,13 +798,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
+    backgroundColor: color.bg,
+    borderRadius: radius.none,
     borderWidth: 1,
-    borderColor: color.border,
+    borderColor: color.borderStrong,
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
-    minHeight: 52,
+    minHeight: 50,
     marginBottom: space.sm,
   },
 
@@ -791,10 +825,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     paddingVertical: space.sm,
-    borderRadius: radius.sm,
+    borderRadius: radius.none,
     borderWidth: 1,
-    borderColor: color.border,
-    backgroundColor: color.surface,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bg,
   },
   methodChipActive: {
     backgroundColor: color.primary,
@@ -805,7 +839,7 @@ const styles = StyleSheet.create({
   statusChip: {
     flex: 1,
     paddingVertical: space.xs,
-    borderRadius: radius.pill,
+    borderRadius: radius.none,
     borderWidth: 1,
     borderColor: color.border,
     alignItems: 'center',
@@ -820,10 +854,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
+    backgroundColor: color.bg,
+    borderRadius: radius.none,
     borderWidth: 1,
-    borderColor: color.border,
+    borderColor: color.borderStrong,
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
     minHeight: 48,
@@ -848,9 +882,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: screenInset,
     paddingVertical: space.sm,
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
+    backgroundColor: color.bgGrouped,
+    borderTopWidth: 1,
+    borderTopColor: color.borderStrong,
     gap: space.sm,
   },
   footerLeft: {
@@ -861,8 +895,10 @@ const styles = StyleSheet.create({
   footerIcon: {
     width: 40,
     height: 40,
-    borderRadius: 20,
-    backgroundColor: color.primarySoft,
+    borderRadius: radius.none,
+    backgroundColor: color.surface,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -953,6 +989,17 @@ const styles = StyleSheet.create({
     backgroundColor: color.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  partyRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+  },
+  partyTypeTag: {
+    paddingHorizontal: space.xs,
+    paddingVertical: 1,
+    borderRadius: radius.xs,
+    backgroundColor: color.primarySoft,
   },
   emptyList: {
     paddingVertical: space.xxl,

@@ -6,7 +6,7 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import { router, Stack } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -37,7 +37,7 @@ import { Button } from '@/src/ui/Button';
 import { Screen } from '@/src/ui/Screen';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
-import { color, radius, screenInset, shadow, space } from '@/src/theme';
+import { color, radius, screenInset, space } from '@/src/theme';
 
 const UNITS = ['pcs', 'kg', 'bags', 'sqft', 'rft', 'cft', 'litres', 'meters', 'tons', 'sets'];
 
@@ -121,17 +121,20 @@ export default function MaterialLibraryScreen() {
   }, []);
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
+    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
       <Stack.Screen options={{ headerShown: false }} />
 
       {/* Nav */}
       <View style={styles.navBar}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="arrow-back" size={22} color={color.text} />
+          <Ionicons name="arrow-back" size={20} color={color.text} />
         </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-          Material Library
-        </Text>
+        <View style={styles.navCenter}>
+          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>MASTER LIBRARY</Text>
+          <Text variant="bodyStrong" color="text" style={styles.navTitle}>
+            Material Library
+          </Text>
+        </View>
         <View style={styles.navBtn} />
       </View>
 
@@ -156,6 +159,7 @@ export default function MaterialLibraryScreen() {
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.catFilterScroll}
         contentContainerStyle={styles.catFilterRow}
       >
         {CATEGORY_FILTER_OPTIONS.map((opt) => {
@@ -209,13 +213,15 @@ export default function MaterialLibraryScreen() {
         }
       />
 
-      {/* FAB */}
-      <Pressable
-        onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openAdd(); }}
-        style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
-      >
-        <Ionicons name="add" size={24} color={color.onPrimary} />
-      </Pressable>
+      <View style={styles.bottomBar}>
+        <Pressable
+          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openAdd(); }}
+          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
+        >
+          <Ionicons name="add" size={16} color={color.onPrimary} />
+          <Text variant="metaStrong" style={{ color: color.onPrimary }}>ADD MATERIAL</Text>
+        </Pressable>
+      </View>
 
       {/* Add/Edit Modal */}
       <ItemFormModal
@@ -302,21 +308,23 @@ function ItemFormModal({
     mode: 'onChange',
   });
 
-  // Reset form when editItem changes
-  useState(() => {
-    if (visible) {
-      reset({
-        category: editItem?.category ?? defaultCategory ?? '',
-        name: editItem?.name ?? '',
-        brand: editItem?.brand ?? '',
-        variety: editItem?.variety ?? '',
-        make: editItem?.make ?? '',
-        size: editItem?.size ?? '',
-        unit: editItem?.unit ?? editItem?.category ? getCategoryConfig(editItem?.category as MaterialCategory).defaultUnit : '',
-        defaultRate: editItem?.defaultRate ? String(editItem.defaultRate) : '',
-      });
-    }
-  });
+  // Reset form when opening modal / switching item to edit.
+  useEffect(() => {
+    if (!visible) return;
+    const fallbackUnit = editItem?.category
+      ? getCategoryConfig(editItem.category).defaultUnit
+      : '';
+    reset({
+      category: editItem?.category ?? defaultCategory ?? '',
+      name: editItem?.name ?? '',
+      brand: editItem?.brand ?? '',
+      variety: editItem?.variety ?? '',
+      make: editItem?.make ?? '',
+      size: editItem?.size ?? '',
+      unit: editItem?.unit ?? fallbackUnit,
+      defaultRate: editItem?.defaultRate ? String(editItem.defaultRate) : '',
+    });
+  }, [defaultCategory, editItem, reset, visible]);
 
   const selectedUnit = watch('unit');
   const selectedCategory = watch('category') as MaterialCategory | '';
@@ -448,7 +456,7 @@ function ItemFormModal({
 
           {/* Name */}
           <Controller control={control} name="name" render={({ field: { onChange, onBlur, value } }) => (
-            <TextField label="Material Name *" placeholder="e.g. Cement, Plywood, Sand" autoCapitalize="words" value={value} onChangeText={onChange} onBlur={onBlur} error={errors.name?.message} containerStyle={{ marginTop: space.sm }} />
+            <TextField label="Material Name *" placeholder="e.g. Cement, Plywood, Sand" autoCapitalize="words" value={value} onChangeText={onChange} onBlur={onBlur} error={errors.name?.message} containerStyle={{ marginTop: space.sm }} square strongBorder />
           )} />
 
           {/* Category-specific fields */}
@@ -474,6 +482,8 @@ function ItemFormModal({
                       autoCapitalize="words"
                       value={(value as string) ?? ''}
                       onChangeText={onChange}
+                      square
+                      strongBorder
                     />
                   )}
                 </View>
@@ -485,7 +495,7 @@ function ItemFormModal({
           <View style={[styles.rowFields, { marginTop: space.xs }]}>
             <View style={styles.halfField}>
               <Controller control={control} name="defaultRate" render={({ field: { onChange, onBlur, value } }) => (
-                <TextField label="Rate (₹)" placeholder="0" keyboardType="numeric" value={value ?? ''} onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))} onBlur={onBlur} />
+                <TextField label="Rate (₹)" placeholder="0" keyboardType="numeric" value={value ?? ''} onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))} onBlur={onBlur} square strongBorder />
               )} />
             </View>
             <View style={styles.halfField} />
@@ -526,52 +536,148 @@ function ItemFormModal({
 }
 
 const styles = StyleSheet.create({
-  navBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: screenInset, paddingBottom: space.xs, backgroundColor: color.surface },
+  navBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: screenInset,
+    paddingTop: 2,
+    paddingBottom: 8,
+    backgroundColor: color.bgGrouped,
+    borderBottomWidth: 1,
+    borderBottomColor: color.borderStrong,
+  },
   navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navTitle: { flex: 1, textAlign: 'center' },
+  navCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  navEyebrow: { letterSpacing: 1.2 },
+  navTitle: { textAlign: 'center' },
 
-  searchBar: { flexDirection: 'row', alignItems: 'center', gap: space.xs, marginHorizontal: screenInset, marginBottom: space.xs, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: radius.sm, backgroundColor: color.bgGrouped, borderWidth: 1, borderColor: color.border },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.xs,
+    marginHorizontal: screenInset,
+    marginTop: 10,
+    marginBottom: space.xs,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.xs,
+    borderRadius: radius.none,
+    backgroundColor: color.bg,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+  },
   searchInput: { flex: 1, fontSize: 15, color: color.text, paddingVertical: Platform.OS === 'ios' ? space.xs : 0 },
 
-  catFilterRow: { gap: space.xs, paddingHorizontal: screenInset, paddingBottom: space.sm },
-  catChip: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.pill, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.surface },
+  catFilterRow: {
+    gap: space.xs,
+    paddingHorizontal: screenInset,
+    paddingBottom: space.sm,
+    alignItems: 'center',
+  },
+  catFilterScroll: {
+    maxHeight: 54,
+  },
+  catChip: {
+    paddingHorizontal: space.md,
+    minHeight: 40,
+    justifyContent: 'center',
+    borderRadius: radius.none,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bg,
+  },
   catChipActive: { backgroundColor: color.primary, borderColor: color.primary },
 
   countBar: { paddingHorizontal: screenInset, paddingBottom: space.xs },
 
-  listContent: { paddingBottom: 80 },
+  listContent: { paddingBottom: 96 },
   emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   empty: { alignItems: 'center', gap: space.xs, paddingHorizontal: screenInset * 2 },
 
-  row: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingHorizontal: screenInset, paddingVertical: space.sm, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.separator, backgroundColor: color.surface },
-  rowIcon: { width: 36, height: 36, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.bg,
+    borderRadius: radius.none,
+    marginHorizontal: screenInset,
+    marginBottom: 8,
+  },
+  rowIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: radius.none,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   rowBody: { flex: 1 },
   rowMeta: { flexDirection: 'row', flexWrap: 'wrap' },
   rowRight: { alignItems: 'flex-end', gap: 2 },
 
-  fab: { position: 'absolute', right: screenInset, bottom: space.xl, width: 48, height: 48, borderRadius: 24, backgroundColor: color.primary, alignItems: 'center', justifyContent: 'center', ...shadow.fab },
+  bottomBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: screenInset,
+    paddingVertical: space.sm,
+    backgroundColor: color.bgGrouped,
+    borderTopWidth: 1,
+    borderTopColor: color.borderStrong,
+  },
+  addBtn: {
+    height: 44,
+    borderRadius: radius.none,
+    backgroundColor: color.primary,
+    borderWidth: 1,
+    borderColor: color.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
-  modalSheet: { backgroundColor: color.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: space.sm, maxHeight: '85%' },
-  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: color.border, alignSelf: 'center', marginBottom: space.sm },
+  modalSheet: {
+    backgroundColor: color.bg,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    borderTopWidth: 1,
+    borderColor: color.borderStrong,
+    paddingTop: space.sm,
+    maxHeight: '85%',
+  },
+  modalHandle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: color.borderStrong,
+    alignSelf: 'center',
+    marginBottom: space.sm,
+  },
   modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: screenInset, marginBottom: space.sm },
 
   formScroll: { paddingHorizontal: screenInset, paddingBottom: space.md },
-  formFooter: { paddingHorizontal: screenInset, paddingVertical: space.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.separator },
+  formFooter: { paddingHorizontal: screenInset, paddingVertical: space.sm, borderTopWidth: 1, borderTopColor: color.borderStrong },
 
   sectionLabel: { marginTop: space.sm, marginBottom: space.xs },
 
   catGrid: { gap: space.xs },
-  catOption: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.pill, borderWidth: 1, borderColor: color.border, backgroundColor: color.surface },
+  catOption: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
 
   fieldChipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-  fieldChip: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.pill, borderWidth: 1, borderColor: color.border, backgroundColor: color.surface },
+  fieldChip: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
   fieldChipActive: { backgroundColor: color.primary, borderColor: color.primary },
 
   rowFields: { flexDirection: 'row', gap: space.sm },
   halfField: { flex: 1 },
 
   unitGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-  unitChip: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.pill, borderWidth: 1, borderColor: color.border, backgroundColor: color.surface },
+  unitChip: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
   unitChipActive: { backgroundColor: color.primary, borderColor: color.primary },
 });

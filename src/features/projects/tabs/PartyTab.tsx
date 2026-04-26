@@ -1,87 +1,160 @@
-import { FlatList, StyleSheet, View } from 'react-native';
+/**
+ * Project Party tab — lists every party involved in this project (derived from
+ * transactions + attendance + tasks) plus the app-user team members. Parties
+ * with transactions show their running balance; parties brought in only via
+ * attendance or task-assignment display their role instead.
+ */
+import { Pressable, SectionList, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 
-import { useTransactions } from '@/src/features/transactions/useTransactions';
+import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
+import { useProjectMembers, type ProjectMember } from '@/src/features/projects/useProjectMembers';
+import { useProjectParties } from '@/src/features/parties/useProjectParties';
+import { getPartyTypeLabel } from '@/src/features/parties/types';
+import type { Party } from '@/src/features/parties/types';
 import { normalizeTransactionType } from '@/src/features/transactions/types';
+import { useTransactions } from '@/src/features/transactions/useTransactions';
 import { formatInr } from '@/src/lib/format';
 import { Text } from '@/src/ui/Text';
-import { Separator } from '@/src/ui/Separator';
 import { color, screenInset, space } from '@/src/theme';
 
-type PartyAggregate = {
-  name: string;
+type PartyBalance = {
   totalIn: number;
   totalOut: number;
   balance: number;
   txnCount: number;
 };
 
+type Row =
+  | { kind: 'member'; member: ProjectMember }
+  | { kind: 'party'; party: Party; balance: PartyBalance | null };
+
 export function PartyTab() {
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
-  const { data: transactions, loading } = useTransactions(projectId);
+  const { data: userDoc } = useCurrentUserDoc();
+  const orgId = userDoc?.primaryOrgId ?? '';
 
-  // Derive unique parties from transactions
-  const parties: PartyAggregate[] = [];
-  if (transactions.length > 0) {
-    const map = new Map<string, PartyAggregate>();
-    for (const t of transactions) {
-      const key = t.partyName || 'Others';
-      const existing = map.get(key);
-      const isIn = normalizeTransactionType(t.type) === 'payment_in';
-      if (existing) {
-        if (isIn) existing.totalIn += t.amount;
-        else existing.totalOut += t.amount;
-        existing.balance = existing.totalIn - existing.totalOut;
-        existing.txnCount += 1;
-      } else {
-        map.set(key, {
-          name: key,
-          totalIn: isIn ? t.amount : 0,
-          totalOut: isIn ? 0 : t.amount,
-          balance: isIn ? t.amount : -t.amount,
-          txnCount: 1,
-        });
-      }
-    }
-    parties.push(...Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name)));
+  const { members } = useProjectMembers(projectId);
+  const { parties, loading: partiesLoading } = useProjectParties(orgId, projectId);
+  const { data: transactions, loading: txnsLoading } = useTransactions(projectId);
+
+  // Aggregate balance per partyId
+  const balanceByPartyId = new Map<string, PartyBalance>();
+  for (const t of transactions) {
+    const key = t.partyId;
+    if (!key) continue;
+    const entry = balanceByPartyId.get(key) ?? {
+      totalIn: 0,
+      totalOut: 0,
+      balance: 0,
+      txnCount: 0,
+    };
+    const isIn = normalizeTransactionType(t.type) === 'payment_in';
+    if (isIn) entry.totalIn += t.amount;
+    else entry.totalOut += t.amount;
+    entry.balance = entry.totalIn - entry.totalOut;
+    entry.txnCount += 1;
+    balanceByPartyId.set(key, entry);
   }
 
-  // Compute totals
-  const totalAdvancePaid = parties.reduce((s, p) => s + p.totalOut, 0);
-  const totalPending = parties.reduce((s, p) => s + Math.max(0, p.balance), 0);
+  // Summary totals (across parties only — members don't have balances)
+  let totalAdvancePaid = 0;
+  let totalToReceive = 0;
+  for (const b of balanceByPartyId.values()) {
+    totalAdvancePaid += b.totalOut;
+    if (b.balance > 0) totalToReceive += b.balance;
+  }
 
-  const renderItem = ({ item }: { item: PartyAggregate }) => {
-    const initial = item.name.charAt(0).toUpperCase();
+  const sortedParties = [...parties].sort((a, b) => a.name.localeCompare(b.name));
+
+  const sections: Array<{ title: string; data: Row[] }> = [];
+  if (members.length > 0) {
+    sections.push({
+      title: 'Team',
+      data: members.map((m) => ({ kind: 'member', member: m }) as Row),
+    });
+  }
+  if (sortedParties.length > 0) {
+    sections.push({
+      title: 'Parties',
+      data: sortedParties.map(
+        (p) => ({ kind: 'party', party: p, balance: balanceByPartyId.get(p.id) ?? null }) as Row,
+      ),
+    });
+  }
+
+  const anyContent = members.length > 0 || sortedParties.length > 0;
+  const isLoading = partiesLoading || txnsLoading;
+
+  const renderItem = ({ item }: { item: Row }) => {
+    if (item.kind === 'member') {
+      const initial = item.member.displayName.charAt(0).toUpperCase() || '?';
+      return (
+        <View style={[styles.row, styles.rowStatic]}>
+          <View style={[styles.avatar, styles.avatarMember]}>
+            <Text variant="metaStrong" style={{ color: color.onPrimary }}>
+              {initial}
+            </Text>
+          </View>
+          <View style={styles.body}>
+            <Text variant="rowTitle" color="text" numberOfLines={1}>
+              {item.member.displayName}
+            </Text>
+            <Text variant="meta" color="textMuted">
+              Team member
+            </Text>
+          </View>
+          <View style={styles.memberBadge}>
+            <Ionicons name="shield-checkmark-outline" size={14} color={color.primary} />
+          </View>
+        </View>
+      );
+    }
+
+    const { party, balance } = item;
+    const initial = party.name.charAt(0).toUpperCase() || '?';
     return (
-      <View style={styles.partyRow}>
+      <Pressable
+        onPress={() => router.push(`/(app)/party/${party.id}` as never)}
+        style={({ pressed }) => [styles.row, pressed && { opacity: 0.78 }]}
+      >
         <View style={styles.avatar}>
-          <Text variant="metaStrong" style={{ color: color.primary }}>{initial}</Text>
-        </View>
-        <View style={styles.partyBody}>
-          <Text variant="rowTitle" color="text" numberOfLines={1}>{item.name}</Text>
-          <Text variant="meta" color="textMuted">
-            {item.txnCount} transaction{item.txnCount !== 1 ? 's' : ''}
+          <Text variant="metaStrong" style={{ color: color.primary }}>
+            {initial}
           </Text>
         </View>
-        <View style={styles.partyTrailing}>
-          <Text
-            variant="metaStrong"
-            style={{ color: item.balance >= 0 ? color.success : color.danger }}
-          >
-            {formatInr(Math.abs(item.balance))}
+        <View style={styles.body}>
+          <Text variant="rowTitle" color="text" numberOfLines={1}>
+            {party.name}
           </Text>
-          <Text variant="caption" color="textMuted">
-            {item.balance >= 0 ? 'To Receive' : 'To Pay'}
+          <Text variant="meta" color="textMuted" numberOfLines={1}>
+            {getPartyTypeLabel(party.partyType)}
+            {balance ? ` · ${balance.txnCount} txn${balance.txnCount !== 1 ? 's' : ''}` : ''}
           </Text>
         </View>
-      </View>
+        {balance ? (
+          <View style={styles.trailing}>
+            <Text
+              variant="metaStrong"
+              style={{ color: balance.balance >= 0 ? color.success : color.danger }}
+            >
+              {formatInr(Math.abs(balance.balance))}
+            </Text>
+            <Text variant="caption" color="textMuted">
+              {balance.balance >= 0 ? 'To Receive' : 'To Pay'}
+            </Text>
+          </View>
+        ) : (
+          <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
+        )}
+      </Pressable>
     );
   };
 
   return (
     <View style={styles.container}>
-      {parties.length > 0 && (
+      {balanceByPartyId.size > 0 && (
         <View style={styles.summaryBar}>
           <View style={styles.summaryCell}>
             <Text variant="caption" color="textMuted">ADVANCE PAID</Text>
@@ -93,34 +166,44 @@ export function PartyTab() {
           <View style={styles.summaryCell}>
             <Text variant="caption" color="textMuted">TO RECEIVE</Text>
             <Text variant="metaStrong" style={{ color: color.success }}>
-              {formatInr(totalPending)}
+              {formatInr(totalToReceive)}
             </Text>
           </View>
         </View>
       )}
 
-      {loading && transactions.length === 0 ? (
+      {isLoading && !anyContent ? (
         <View style={styles.empty}>
           <Text variant="meta" color="textMuted">Loading…</Text>
         </View>
-      ) : parties.length === 0 ? (
+      ) : !anyContent ? (
         <View style={styles.empty}>
           <Ionicons name="people-outline" size={28} color={color.textFaint} />
           <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
             No parties yet
           </Text>
           <Text variant="meta" color="textMuted" align="center">
-            Parties will appear here once you add transactions with party names.
+            Parties and team members show up here once they&apos;re linked to this
+            project via tasks, attendance, or transactions.
           </Text>
         </View>
       ) : (
-        <FlatList
-          data={parties}
-          keyExtractor={(item) => item.name}
+        <SectionList
+          sections={sections}
+          keyExtractor={(item, index) =>
+            item.kind === 'member' ? `m-${item.member.uid}` : `p-${item.party.id}-${index}`
+          }
           renderItem={renderItem}
-          ItemSeparatorComponent={Separator}
+          renderSectionHeader={({ section }) => (
+            <View style={styles.sectionHeader}>
+              <Text variant="caption" color="textMuted">
+                {section.title.toUpperCase()} · {section.data.length}
+              </Text>
+            </View>
+          )}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
+          stickySectionHeadersEnabled={false}
         />
       )}
     </View>
@@ -131,15 +214,20 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   summaryBar: {
     flexDirection: 'row',
-    backgroundColor: color.surface,
-    paddingVertical: space.sm,
+    backgroundColor: color.bg,
+    marginHorizontal: screenInset,
+    marginTop: space.sm,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: color.separator,
+    overflow: 'hidden',
+    paddingVertical: 0,
     paddingHorizontal: screenInset,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
   },
   summaryCell: {
     flex: 1,
     alignItems: 'center',
+    paddingVertical: space.sm,
     gap: 2,
   },
   divider: {
@@ -147,15 +235,29 @@ const styles = StyleSheet.create({
     backgroundColor: color.separator,
   },
   listContent: {
+    paddingHorizontal: screenInset,
     paddingBottom: 40,
   },
-  partyRow: {
+  sectionHeader: {
+    paddingHorizontal: 0,
+    paddingTop: space.md,
+    paddingBottom: space.xs,
+    backgroundColor: color.bg,
+  },
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
+    paddingHorizontal: space.sm,
     paddingVertical: space.sm,
     backgroundColor: color.surface,
+    borderWidth: 1,
+    borderColor: color.separator,
+    borderRadius: 10,
+    marginBottom: space.xs,
     gap: space.sm,
+  },
+  rowStatic: {
+    opacity: 1,
   },
   avatar: {
     width: 36,
@@ -165,14 +267,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  partyBody: {
+  avatarMember: {
+    backgroundColor: color.primary,
+  },
+  body: {
     flex: 1,
     minWidth: 0,
     gap: 2,
   },
-  partyTrailing: {
+  trailing: {
     alignItems: 'flex-end',
     gap: 2,
+  },
+  memberBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: color.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   empty: {
     flex: 1,

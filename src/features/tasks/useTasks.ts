@@ -57,3 +57,43 @@ export function useTasks(
 
   return { data, loading };
 }
+
+export type UseTaskResult = {
+  data: Task | null;
+  loading: boolean;
+};
+
+export function useTask(taskId: string | undefined): UseTaskResult {
+  const [data, setData] = useState<Task | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!taskId) {
+      setData(null);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    const unsub = db
+      .collection('tasks')
+      .doc(taskId)
+      .onSnapshot(
+        (snap) => {
+          if (!snap.exists) {
+            setData(null);
+            setLoading(false);
+            return;
+          }
+          setData({ id: snap.id, ...(snap.data() as Omit<Task, 'id'>) });
+          setLoading(false);
+        },
+        (err) => {
+          console.warn('[useTask] snapshot error:', err);
+          setLoading(false);
+        },
+      );
+    return unsub;
+  }, [taskId]);
+
+  return { data, loading };
+}

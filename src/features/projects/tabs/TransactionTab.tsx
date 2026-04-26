@@ -11,6 +11,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 
+import { useAuth } from '@/src/features/auth/useAuth';
+import { useProject } from '@/src/features/projects/useProject';
 import { useTransactions } from '@/src/features/transactions/useTransactions';
 import {
   TRANSACTION_CATEGORIES,
@@ -25,8 +27,7 @@ import {
 } from '@/src/features/transactions/types';
 import { formatInr, formatDate } from '@/src/lib/format';
 import { Text } from '@/src/ui/Text';
-import { Separator } from '@/src/ui/Separator';
-import { color, radius, screenInset, shadow, space } from '@/src/theme';
+import { color, radius, screenInset, space } from '@/src/theme';
 
 // ── Filter types ──
 
@@ -64,6 +65,8 @@ const CAT_OPTIONS: { key: TransactionCategory | 'all'; label: string }[] = [
 
 export function TransactionTab() {
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
+  const { user } = useAuth();
+  const { data: project } = useProject(projectId);
   const { data, loading, totals } = useTransactions(projectId);
 
   const [showFilter, setShowFilter] = useState(false);
@@ -131,40 +134,41 @@ export function TransactionTab() {
     const dateStr = item.date ? formatDate(item.date.toDate()) : '—';
     const catLabel = item.category ? getCategoryLabel(item.category) : null;
     const pmLabel = item.paymentMethod ? getPaymentMethodLabel(item.paymentMethod) : null;
+    const statusLabel = item.status?.toUpperCase?.() ?? '';
+    const addedByOwner = !!project?.ownerId && item.createdBy === project.ownerId;
+    const addedBySelf = !!user?.uid && item.createdBy === user.uid;
+    const addedByLabel = addedByOwner ? 'Owner' : addedBySelf ? 'You' : 'Team';
+    const approvalLabel = addedByOwner ? 'Auto Approved' : 'Approved';
 
     return (
       <Pressable
-        onPress={() => router.push(`/(app)/projects/${projectId}/edit-transaction?txnId=${item.id}` as never)}
+        onPress={() => router.push(`/(app)/projects/${projectId}/transaction/${item.id}` as never)}
         style={({ pressed }) => [styles.txnRow, pressed && { opacity: 0.7 }]}
       >
-        <View style={[styles.txnIcon, { backgroundColor: isIn ? color.successSoft : color.dangerSoft }]}>
+        <View style={[styles.txnIcon, { backgroundColor: color.surface }]}>
           <Ionicons
-            name={isIn ? 'arrow-down' : 'arrow-up'}
-            size={16}
-            color={isIn ? color.success : color.danger}
+            name={isIn ? 'wallet-outline' : 'receipt-outline'}
+            size={14}
+            color={isIn ? color.success : color.textMuted}
           />
         </View>
         <View style={styles.txnBody}>
           <Text variant="rowTitle" color="text" numberOfLines={1}>
             {item.description || item.partyName || (isIn ? 'Payment In' : 'Payment Out')}
           </Text>
-          <Text variant="meta" color="textMuted" numberOfLines={1}>
+          <Text variant="meta" color="textMuted" numberOfLines={1} style={styles.subCompact}>
             {item.partyName ? `${item.partyName} · ${dateStr}` : dateStr}
           </Text>
-          {(catLabel || pmLabel) && (
-            <View style={styles.tagRow}>
-              {catLabel && (
-                <View style={styles.tag}>
-                  <Text variant="caption" color="textMuted">{catLabel}</Text>
-                </View>
-              )}
-              {pmLabel && (
-                <View style={styles.tag}>
-                  <Text variant="caption" color="textMuted">{pmLabel}</Text>
-                </View>
-              )}
+          <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.metaCompact}>
+            {[catLabel, pmLabel, statusLabel].filter(Boolean).join(' · ')}
+          </Text>
+          <View style={styles.auditRow}>
+            <View style={styles.auditPill}>
+              <Ionicons name="shield-checkmark-outline" size={12} color={color.success} />
+              <Text variant="caption" style={styles.auditPillText}>{approvalLabel}</Text>
             </View>
-          )}
+            <Text variant="caption" color="textMuted">Added by {addedByLabel}</Text>
+          </View>
         </View>
         <View style={styles.txnTrailing}>
           <Text
@@ -183,35 +187,47 @@ export function TransactionTab() {
 
   return (
     <View style={styles.container}>
-      {/* Summary bar */}
+      {/* Summary bar (InteriorOS expense ribbon style) */}
       <View style={styles.summaryBar}>
         <View style={styles.summaryCell}>
-          <Text variant="caption" color="textMuted">BALANCE</Text>
+          <Text variant="caption" color="textMuted">RECEIVED</Text>
           <Text
             variant="metaStrong"
-            style={{ color: totals.balance >= 0 ? color.success : color.danger }}
+            style={{ color: color.success }}
           >
-            {totals.balance >= 0 ? '+' : ''}{formatInr(totals.balance)}
+            +{formatInr(totals.income)}
           </Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.summaryCell}>
-          <Text variant="caption" color="textMuted">TOTAL IN</Text>
-          <Text variant="metaStrong" style={{ color: color.success }}>
-            {formatInr(totals.income)}
+          <Text variant="caption" color="textMuted">SPENT</Text>
+          <Text variant="metaStrong" style={{ color: color.text }}>
+            -{formatInr(totals.expense)}
           </Text>
         </View>
         <View style={styles.divider} />
         <View style={styles.summaryCell}>
-          <Text variant="caption" color="textMuted">TOTAL OUT</Text>
-          <Text variant="metaStrong" style={{ color: color.danger }}>
-            {formatInr(totals.expense)}
+          <Text variant="caption" color="textMuted">NET</Text>
+          <Text
+            variant="metaStrong"
+            style={{ color: totals.balance >= 0 ? color.primary : color.danger }}
+          >
+            {totals.balance >= 0 ? '+' : '-'}{formatInr(Math.abs(totals.balance))}
           </Text>
         </View>
       </View>
 
       {/* Filter chip row */}
       <View style={styles.filterRow}>
+        <Text variant="caption" color="textMuted" style={styles.resultText}>
+          {filtered.length} RESULT{filtered.length === 1 ? '' : 'S'}
+        </Text>
+        <View style={styles.flex} />
+        {hasActiveFilter && (
+          <Pressable onPress={clearFilters} style={styles.clearBtn}>
+            <Text variant="meta" color="danger">Clear</Text>
+          </Pressable>
+        )}
         <Pressable
           onPress={() => setShowFilter(true)}
           style={[styles.filterBtn, hasActiveFilter && styles.filterBtnActive]}
@@ -228,15 +244,6 @@ export function TransactionTab() {
             Filter
           </Text>
         </Pressable>
-        {hasActiveFilter && (
-          <Pressable onPress={clearFilters} style={styles.clearBtn}>
-            <Text variant="meta" color="danger">Clear</Text>
-          </Pressable>
-        )}
-        <View style={styles.flex} />
-        <Text variant="meta" color="textMuted">
-          {filtered.length} {filtered.length === 1 ? 'entry' : 'entries'}
-        </Text>
       </View>
 
       {loading && data.length === 0 ? (
@@ -260,7 +267,6 @@ export function TransactionTab() {
           data={filtered}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
-          ItemSeparatorComponent={Separator}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
         />
@@ -304,9 +310,15 @@ export function TransactionTab() {
           {/* Clear Filter */}
           <View style={styles.filterHeader}>
             <View style={styles.modalHandle} />
-            <Pressable onPress={clearFilters}>
-              <Text variant="metaStrong" color="primary">Clear Filter</Text>
-            </Pressable>
+            <View style={styles.filterHeaderRow}>
+              <Text variant="bodyStrong" color="text">Filter Transactions</Text>
+              <Pressable onPress={clearFilters}>
+                <Text variant="metaStrong" color="primary">Clear Filter</Text>
+              </Pressable>
+            </View>
+            <Text variant="caption" color="textMuted">
+              {hasActiveFilter ? 'FILTERS ACTIVE' : 'NO FILTER APPLIED'}
+            </Text>
           </View>
 
           <View style={styles.filterBody}>
@@ -322,7 +334,7 @@ export function TransactionTab() {
                   >
                     <Text
                       variant="metaStrong"
-                      color={active ? 'onPrimary' : 'textMuted'}
+                      style={{ color: active ? color.primary : color.textMuted }}
                       align="center"
                     >
                       {ft.label}
@@ -342,10 +354,10 @@ export function TransactionTab() {
                     onPress={() => setFilterValue(opt.key)}
                     style={styles.filterOption}
                   >
-                    <View style={[styles.radio, active && styles.radioActive]}>
-                      {active && <View style={styles.radioDot} />}
-                    </View>
                     <Text variant="body" color="text">{opt.label}</Text>
+                    <View style={[styles.radio, active && styles.radioActive]}>
+                      {active && <Ionicons name="checkmark" size={12} color={color.primary} />}
+                    </View>
                   </Pressable>
                 );
               })}
@@ -357,7 +369,7 @@ export function TransactionTab() {
             onPress={() => setShowFilter(false)}
             style={styles.viewResultBtn}
           >
-            <Text variant="bodyStrong" color="onPrimary">VIEW RESULT</Text>
+            <Text variant="bodyStrong" color="onPrimary">SHOW RESULTS</Text>
           </Pressable>
         </View>
       </Modal>
@@ -373,15 +385,21 @@ const styles = StyleSheet.create({
 
   summaryBar: {
     flexDirection: 'row',
-    backgroundColor: color.surface,
-    paddingVertical: space.sm,
-    paddingHorizontal: screenInset,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    backgroundColor: color.bg,
+    marginHorizontal: screenInset,
+    marginTop: space.sm,
+    borderRadius: radius.none,
+    borderWidth: 1,
+    borderColor: color.separator,
+    overflow: 'hidden',
+    paddingVertical: 0,
+    paddingHorizontal: 0,
   },
   summaryCell: {
     flex: 1,
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
     gap: 2,
   },
   divider: {
@@ -394,21 +412,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: screenInset,
-    paddingVertical: space.xs,
+    paddingTop: space.sm,
+    paddingBottom: 10,
     gap: space.xs,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    backgroundColor: color.bg,
   },
   filterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: space.sm,
-    paddingVertical: space.xxs,
-    borderRadius: radius.pill,
+    paddingVertical: 6,
+    borderRadius: radius.none,
     borderWidth: 1,
-    borderColor: color.primary,
+    borderColor: hasAlpha(color.primary, 0.4),
+    backgroundColor: color.surface,
   },
   filterBtnActive: {
     backgroundColor: color.primary,
@@ -420,28 +438,34 @@ const styles = StyleSheet.create({
 
   // List
   listContent: {
+    paddingHorizontal: screenInset,
+    paddingTop: 2,
     paddingBottom: space.sm,
   },
   txnRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.surface,
-    gap: space.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    backgroundColor: color.bg,
+    borderBottomWidth: 1,
+    borderBottomColor: color.borderStrong,
+    gap: 8,
   },
   txnIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 30,
+    height: 30,
+    borderRadius: 0,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 2,
+    marginTop: 1,
   },
   txnBody: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
+    gap: 1,
   },
   txnTrailing: {
     alignItems: 'flex-end',
@@ -463,6 +487,37 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.border,
   },
+  resultText: {
+    letterSpacing: 0.8,
+  },
+  subCompact: {
+    lineHeight: 16,
+  },
+  metaCompact: {
+    letterSpacing: 0.6,
+    marginTop: 1,
+  },
+  auditRow: {
+    marginTop: 3,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  auditPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderWidth: 1,
+    borderColor: color.success,
+    borderRadius: radius.none,
+    backgroundColor: color.successSoft,
+  },
+  auditPillText: {
+    color: color.success,
+    letterSpacing: 0.4,
+  },
 
   // Empty
   empty: {
@@ -480,9 +535,9 @@ const styles = StyleSheet.create({
     gap: space.sm,
     paddingHorizontal: screenInset,
     paddingVertical: space.sm,
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
+    backgroundColor: color.bg,
+    borderTopWidth: 1,
+    borderTopColor: color.borderStrong,
   },
   bottomBtn: {
     flex: 1,
@@ -491,7 +546,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: space.xs,
     paddingVertical: space.sm,
-    borderRadius: radius.sm,
+    borderRadius: radius.none,
     borderWidth: 1,
   },
   bottomBtnIn: {
@@ -506,28 +561,34 @@ const styles = StyleSheet.create({
   // Modal
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    backgroundColor: 'rgba(15,23,42,0.45)',
   },
   modalSheet: {
-    backgroundColor: color.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
+    backgroundColor: color.bg,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    borderTopWidth: 1,
+    borderColor: color.borderStrong,
     paddingBottom: space.xxl,
-    maxHeight: '65%',
+    maxHeight: '70%',
   },
   modalHandle: {
     width: 36,
     height: 4,
     borderRadius: 2,
-    backgroundColor: color.border,
+    backgroundColor: color.borderStrong,
     alignSelf: 'center',
   },
   filterHeader: {
-    alignItems: 'flex-end',
     paddingHorizontal: screenInset,
     paddingTop: space.sm,
     paddingBottom: space.xs,
-    gap: space.xs,
+    gap: 6,
+  },
+  filterHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
 
   // Filter body
@@ -536,54 +597,69 @@ const styles = StyleSheet.create({
     minHeight: 300,
   },
   filterTabs: {
-    width: 120,
-    backgroundColor: color.bgGrouped,
+    width: 132,
+    backgroundColor: color.surface,
+    borderRightWidth: 1,
+    borderRightColor: color.borderStrong,
   },
   filterTabItem: {
     paddingVertical: space.md,
     paddingHorizontal: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: 1,
     borderBottomColor: color.separator,
+    backgroundColor: color.surface,
   },
   filterTabItemActive: {
-    backgroundColor: color.primary,
+    backgroundColor: color.primarySoft,
   },
   filterOptions: {
     flex: 1,
-    paddingHorizontal: space.md,
+    paddingHorizontal: 0,
   },
   filterOption: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     gap: space.sm,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    paddingVertical: 12,
+    paddingHorizontal: space.md,
+    borderBottomWidth: 1,
     borderBottomColor: color.separator,
   },
   radio: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: color.border,
+    width: 18,
+    height: 18,
+    borderRadius: 0,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
+    backgroundColor: color.bg,
   },
   radioActive: {
     borderColor: color.primary,
-  },
-  radioDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: color.primary,
+    backgroundColor: color.primarySoft,
   },
   viewResultBtn: {
     marginHorizontal: screenInset,
     marginTop: space.sm,
     paddingVertical: space.sm,
-    borderRadius: radius.sm,
+    borderRadius: radius.none,
     backgroundColor: color.primary,
     alignItems: 'center',
   },
 });
+
+function hasAlpha(hex: string, alpha: number): string {
+  if (!hex.startsWith('#') || (hex.length !== 7 && hex.length !== 4)) return hex;
+  if (hex.length === 4) {
+    const r = hex[1] + hex[1];
+    const g = hex[2] + hex[2];
+    const b = hex[3] + hex[3];
+    return `rgba(${parseInt(r, 16)}, ${parseInt(g, 16)}, ${parseInt(b, 16)}, ${alpha})`;
+  }
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}

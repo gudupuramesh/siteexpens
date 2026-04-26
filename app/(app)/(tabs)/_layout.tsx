@@ -1,9 +1,9 @@
 /**
  * Bottom tab bar layout for the primary app navigation.
  *
- * 4 tabs: Projects (dashboard), Parties, CRM, Chats. Side drawer
- * (hamburger from Projects tab) holds org-level settings — not in
- * this layout.
+ * 5 tabs: Projects (dashboard), Parties, CRM, Toolkit, Chats. Side
+ * drawer (hamburger from Projects tab) holds org-level settings — not
+ * in this layout.
  */
 import { Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
@@ -11,7 +11,7 @@ import { StyleSheet, View } from 'react-native';
 import { Text } from '@/src/ui/Text';
 import { color, shadow } from '@/src/theme';
 
-type IconKey = 'projects' | 'parties' | 'crm' | 'chats';
+type IconKey = 'projects' | 'parties' | 'crm' | 'toolkit' | 'chats';
 
 function TabGlyph({ k, active }: { k: IconKey; active: boolean }) {
   // Minimal glyphs drawn with text characters until we wire icons. Stays
@@ -21,7 +21,8 @@ function TabGlyph({ k, active }: { k: IconKey; active: boolean }) {
     projects: '⌂',
     parties: '◉',
     crm: '✦',
-    chats: '◯',
+    toolkit: '⚙',
+    chats: '⋯',
   };
   return (
     <View style={styles.iconWrap}>
@@ -66,9 +67,16 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="toolkit"
+        options={{
+          title: 'Toolkit',
+          tabBarIcon: ({ focused }) => <TabGlyph k="toolkit" active={focused} />,
+        }}
+      />
+      <Tabs.Screen
         name="chats"
         options={{
-          title: 'Chats',
+          title: 'More',
           tabBarIcon: ({ focused }) => <TabGlyph k="chats" active={focused} />,
         }}
       />

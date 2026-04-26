@@ -14,6 +14,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -170,31 +171,44 @@ export default function EditTransactionScreen() {
   }
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
+    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
       <Stack.Screen options={{ headerShown: false }} />
 
       <View style={styles.navBar}>
         <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
           <Ionicons name="arrow-back" size={22} color={color.text} />
         </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-          Edit {isPaymentIn ? 'Payment In' : 'Payment Out'}
-        </Text>
+        <View style={styles.navCenter}>
+          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>EXPENSE</Text>
+          <Text variant="bodyStrong" color="text" style={styles.navTitle}>
+            Edit {isPaymentIn ? 'Payment In' : 'Payment Out'}
+          </Text>
+        </View>
         <Pressable onPress={onDelete} hitSlop={12} style={styles.navBtn}>
           <Ionicons name="trash-outline" size={20} color={color.danger} />
         </Pressable>
       </View>
 
-      <View style={[styles.typeLabel, isPaymentIn ? styles.typeLabelIn : styles.typeLabelOut]}>
-        <Ionicons
-          name={isPaymentIn ? 'arrow-down-circle' : 'arrow-up-circle'}
-          size={16}
-          color={isPaymentIn ? color.success : color.danger}
-        />
-        <Text variant="metaStrong" style={{ color: isPaymentIn ? color.success : color.danger }}>
-          {isPaymentIn ? 'Payment In' : 'Payment Out'}
+      <View style={styles.hero}>
+        <Text variant="caption" color="textMuted" style={styles.heroLabel}>
+          AMOUNT - INR
         </Text>
-        <View style={{ flex: 1 }} />
+        <View style={styles.heroAmountRow}>
+          <Text variant="title" style={{ color: isPaymentIn ? color.success : color.primary }}>
+            {isPaymentIn ? '+ Rs' : '- Rs'}
+          </Text>
+          <Controller control={control} name="amount" render={({ field: { onChange, onBlur, value } }) => (
+            <TextInput
+              value={value}
+              onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))}
+              onBlur={onBlur}
+              placeholder="0"
+              keyboardType="numeric"
+              style={styles.heroAmountInput}
+              placeholderTextColor={color.textFaint}
+            />
+          )} />
+        </View>
         <Pressable onPress={() => setShowDatePicker(true)} style={styles.dateChip}>
           <Text variant="metaStrong" color="text">{formatDate(selectedDate)}</Text>
           <Ionicons name="chevron-down" size={14} color={color.textMuted} />
@@ -207,19 +221,20 @@ export default function EditTransactionScreen() {
       >
         <ScrollView contentContainerStyle={styles.scroll} keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false}>
           <Controller control={control} name="partyName" render={({ field: { onChange, onBlur, value } }) => (
-            <TextField label="Party Name *" placeholder="Party name" value={value} onChangeText={onChange} onBlur={onBlur} error={errors.partyName?.message} />
+            <TextField label="Party Name *" placeholder="Party name" value={value} onChangeText={onChange} onBlur={onBlur} error={errors.partyName?.message} square strongBorder />
           )} />
-
-          <Controller control={control} name="amount" render={({ field: { onChange, onBlur, value } }) => (
-            <TextField label="Amount (₹) *" placeholder="0" keyboardType="numeric" value={value} onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))} onBlur={onBlur} error={errors.amount?.message} />
-          )} />
+          {errors.amount?.message ? (
+            <Text variant="caption" color="danger" style={{ marginTop: 2 }}>
+              {errors.amount.message}
+            </Text>
+          ) : null}
 
           <Controller control={control} name="description" render={({ field: { onChange, onBlur, value } }) => (
-            <TextField label="Description" placeholder="Description" value={value ?? ''} onChangeText={onChange} onBlur={onBlur} />
+            <TextField label="Description" placeholder="Description" value={value ?? ''} onChangeText={onChange} onBlur={onBlur} square strongBorder />
           )} />
 
           <Controller control={control} name="referenceNumber" render={({ field: { onChange, onBlur, value } }) => (
-            <TextField label="Reference Number" placeholder="Bill / Invoice number" value={value ?? ''} onChangeText={onChange} onBlur={onBlur} />
+            <TextField label="Reference Number" placeholder="Bill / Invoice number" value={value ?? ''} onChangeText={onChange} onBlur={onBlur} square strongBorder />
           )} />
 
           {/* Payment Method */}
@@ -293,22 +308,32 @@ export default function EditTransactionScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  navBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: screenInset, paddingBottom: space.xxs, backgroundColor: color.surface },
+  navBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: screenInset, paddingTop: 2, paddingBottom: 8, backgroundColor: color.bgGrouped, borderBottomWidth: 1, borderBottomColor: color.borderStrong },
   navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navTitle: { flex: 1, textAlign: 'center' },
-  typeLabel: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: space.xs, paddingHorizontal: screenInset, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.separator },
-  typeLabelOut: { backgroundColor: color.dangerSoft },
-  typeLabelIn: { backgroundColor: color.successSoft },
-  dateChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: space.xs, paddingHorizontal: space.sm, borderRadius: radius.sm, backgroundColor: color.surface },
-  scroll: { paddingHorizontal: screenInset, paddingTop: space.md, paddingBottom: space.xl },
+  navCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  navEyebrow: { letterSpacing: 1.2 },
+  navTitle: { textAlign: 'center' },
+  hero: {
+    paddingHorizontal: screenInset,
+    paddingTop: 10,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: color.borderStrong,
+    backgroundColor: color.bgGrouped,
+  },
+  heroLabel: { letterSpacing: 1.2, marginBottom: 4 },
+  heroAmountRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  heroAmountInput: { flex: 1, fontSize: 34, fontWeight: '700', color: color.text, paddingVertical: 0 },
+  dateChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: space.xs, paddingHorizontal: space.sm, borderRadius: radius.none, backgroundColor: color.bg, borderWidth: 1, borderColor: color.borderStrong },
+  scroll: { paddingHorizontal: screenInset, paddingTop: 12, paddingBottom: space.xl, backgroundColor: color.bgGrouped },
   sectionLabel: { marginTop: space.md, marginBottom: space.xs },
-  methodRow: { flexDirection: 'row', gap: space.xs, marginBottom: space.sm },
-  methodChip: { flex: 1, alignItems: 'center', gap: 4, paddingVertical: space.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: color.border, backgroundColor: color.surface },
+  methodRow: { flexDirection: 'row', gap: space.xs, marginBottom: space.sm, flexWrap: 'wrap' },
+  methodChip: { flex: 1, minWidth: '23%', alignItems: 'center', gap: 4, paddingVertical: space.sm, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
   methodChipActive: { backgroundColor: color.primary, borderColor: color.primary },
-  statusChip: { flex: 1, paddingVertical: space.xs, borderRadius: radius.pill, borderWidth: 1, borderColor: color.border, alignItems: 'center' },
+  statusChip: { flex: 1, paddingVertical: space.xs, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, alignItems: 'center' },
   statusChipActive: { backgroundColor: color.primary, borderColor: color.primary },
-  dropdownField: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: color.bgGrouped, borderRadius: radius.sm, borderWidth: 1, borderColor: color.border, paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: 48, marginBottom: space.sm },
-  footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.surface, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.separator },
+  dropdownField: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: color.bg, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: 48, marginBottom: space.sm },
+  footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.bgGrouped, borderTopWidth: 1, borderTopColor: color.borderStrong },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   modalSheet: { backgroundColor: color.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: space.sm, paddingBottom: space.xxl, maxHeight: '65%' },
   modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: color.border, alignSelf: 'center', marginBottom: space.sm },

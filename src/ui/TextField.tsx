@@ -24,10 +24,30 @@ export type TextFieldProps = Omit<TextInputProps, 'style' | 'placeholderTextColo
   /** Error message rendered below the input. */
   error?: string;
   containerStyle?: ViewStyle;
+  /**
+   * Use white surface so fields stay visible on `Screen bg="grouped"` (same
+   * gray as the canvas would otherwise hide the input well).
+   */
+  surface?: boolean;
+  /** Optional square visual style for InteriorOS parity. */
+  square?: boolean;
+  /** Use stronger border (`hairline2`) for clearer field separation. */
+  strongBorder?: boolean;
 };
 
 export const TextField = forwardRef<TextInput, TextFieldProps>(function TextField(
-  { label, leading, error, containerStyle, onFocus, onBlur, ...rest },
+  {
+    label,
+    leading,
+    error,
+    containerStyle,
+    surface = true,
+    square = false,
+    strongBorder = false,
+    onFocus,
+    onBlur,
+    ...rest
+  },
   ref,
 ) {
   const [focused, setFocused] = useState(false);
@@ -42,6 +62,10 @@ export const TextField = forwardRef<TextInput, TextFieldProps>(function TextFiel
       <View
         style={[
           styles.field,
+          surface && styles.fieldSurface,
+          square && styles.fieldSquare,
+          strongBorder && styles.fieldStrongBorder,
+          rest.multiline && styles.fieldMultiline,
           focused && styles.fieldFocused,
           error ? styles.fieldError : null,
         ]}
@@ -55,7 +79,7 @@ export const TextField = forwardRef<TextInput, TextFieldProps>(function TextFiel
           ref={ref}
           {...rest}
           placeholderTextColor={color.textFaint}
-          style={styles.input}
+          style={[styles.input, rest.multiline && styles.inputMultiline]}
           onFocus={(e) => {
             setFocused(true);
             onFocus?.(e);
@@ -81,18 +105,33 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   field: {
-    height: minTouchTarget + 4, // 48pt
+    minHeight: minTouchTarget + 4, // 48pt
     borderRadius: radius.md,
     backgroundColor: color.bgGrouped,
     borderWidth: 1,
-    borderColor: 'transparent',
+    borderColor: color.border,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: space.lg,
   },
+  fieldSurface: {
+    backgroundColor: color.surface,
+  },
+  fieldSquare: {
+    borderRadius: radius.none,
+  },
+  fieldStrongBorder: {
+    borderColor: color.borderStrong,
+  },
+  fieldMultiline: {
+    alignItems: 'flex-start',
+    paddingTop: space.sm,
+    paddingBottom: space.sm,
+    minHeight: 100,
+  },
   fieldFocused: {
     borderColor: color.primary,
-    backgroundColor: color.bg,
+    backgroundColor: color.surface,
   },
   fieldError: {
     borderColor: color.danger,
@@ -106,6 +145,10 @@ const styles = StyleSheet.create({
     lineHeight: type.body.fontSize, // tighter than the variant lineHeight to vertically center
     color: color.text,
     padding: 0,
+  },
+  inputMultiline: {
+    minHeight: 88,
+    textAlignVertical: 'top',
   },
   error: {
     marginTop: space.sm,

@@ -11,6 +11,7 @@ export {
   radius,
   type,
   shadow,
+  fontFamily,
   minTouchTarget,
   screenInset,
   hairline,

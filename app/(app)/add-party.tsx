@@ -4,9 +4,9 @@
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as Contacts from 'expo-contacts';
-import { router, Stack } from 'expo-router';
+import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -22,7 +22,8 @@ import { z } from 'zod';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
-import { createParty } from '@/src/features/parties/parties';
+import { createParty, updateParty } from '@/src/features/parties/parties';
+import { useParties } from '@/src/features/parties/useParties';
 import {
   ALL_PARTY_TYPES,
   PARTY_TYPE_GROUPS,
@@ -69,6 +70,14 @@ export default function AddPartyScreen() {
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
+  const { partyId } = useLocalSearchParams<{ partyId?: string }>();
+  const isEdit = !!partyId;
+
+  const { data: parties } = useParties(isEdit ? orgId : undefined);
+  const existingParty = useMemo(
+    () => (isEdit ? parties.find((p) => p.id === partyId) : undefined),
+    [isEdit, parties, partyId],
+  );
 
   const [submitError, setSubmitError] = useState<string>();
   const [showTypePicker, setShowTypePicker] = useState(false);
@@ -81,6 +90,7 @@ export default function AddPartyScreen() {
     handleSubmit,
     watch,
     setValue,
+    reset,
     formState: { errors, isSubmitting, isValid },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -115,6 +125,49 @@ export default function AddPartyScreen() {
 
   const selectedTypeLabel =
     ALL_PARTY_TYPES.find((t) => t.key === selectedType)?.label ?? '';
+
+  // Prefill form when editing an existing party (runs once when the party is
+  // first resolved from the realtime list).
+  const didPrefillRef = useRef(false);
+  useEffect(() => {
+    if (!isEdit || !existingParty || didPrefillRef.current) return;
+    didPrefillRef.current = true;
+
+    const doj = existingParty.dateOfJoining;
+    const dojStr = doj ? doj.toDate().toISOString().slice(0, 10) : '';
+    const bank = existingParty.bankDetails ?? {};
+    const hasBalance = !!(existingParty.openingBalance && existingParty.openingBalance > 0);
+    const hasKyc = !!(existingParty.aadharNumber || existingParty.panNumber);
+    const hasBank = Object.values(bank).some(Boolean);
+
+    reset({
+      name: existingParty.name,
+      phone: existingParty.phone,
+      partyType: (existingParty.partyType ?? existingParty.role ?? '') as string,
+      email: existingParty.email ?? '',
+      fatherName: existingParty.fatherName ?? '',
+      dateOfJoining: dojStr,
+      address: existingParty.address ?? '',
+      city: '',
+      state: '',
+      pincode: '',
+      aadharNumber: existingParty.aadharNumber ?? '',
+      panNumber: existingParty.panNumber ?? '',
+      openingBalance: hasBalance ? String(existingParty.openingBalance) : '',
+      openingBalanceType: existingParty.openingBalanceType ?? 'to_pay',
+      accountHolderName: bank.accountHolderName ?? '',
+      accountNumber: bank.accountNumber ?? '',
+      ifsc: bank.ifsc ?? '',
+      bankName: bank.bankName ?? '',
+      bankAddress: bank.bankAddress ?? '',
+      iban: bank.iban ?? '',
+      upiId: bank.upiId ?? '',
+    });
+
+    if (hasKyc) setShowAdditional(true);
+    if (hasBalance) setShowBalance(true);
+    if (hasBank) setShowBank(true);
+  }, [isEdit, existingParty, reset]);
 
   // ── Contact picker ──
 
@@ -152,30 +205,51 @@ export default function AddPartyScreen() {
     setSubmitError(undefined);
     try {
       const balance = data.openingBalance ? parseFloat(data.openingBalance) : undefined;
-      await createParty({
-        orgId,
-        name: data.name,
-        phone: data.phone,
-        partyType: data.partyType as PartyType,
-        createdBy: user.uid,
-        email: data.email || undefined,
-        fatherName: data.fatherName || undefined,
-        dateOfJoining: data.dateOfJoining ? new Date(data.dateOfJoining) : undefined,
-        address: [data.address, data.city, data.state, data.pincode].filter(Boolean).join(', ') || undefined,
-        aadharNumber: data.aadharNumber || undefined,
-        panNumber: data.panNumber || undefined,
-        openingBalance: balance,
-        openingBalanceType: balance ? (data.openingBalanceType ?? 'to_pay') : undefined,
-        bankDetails: {
-          accountHolderName: data.accountHolderName || undefined,
-          accountNumber: data.accountNumber || undefined,
-          ifsc: data.ifsc || undefined,
-          bankName: data.bankName || undefined,
-          bankAddress: data.bankAddress || undefined,
-          iban: data.iban || undefined,
-          upiId: data.upiId || undefined,
-        },
-      });
+      const address =
+        [data.address, data.city, data.state, data.pincode].filter(Boolean).join(', ') || undefined;
+      const bankDetails = {
+        accountHolderName: data.accountHolderName || undefined,
+        accountNumber: data.accountNumber || undefined,
+        ifsc: data.ifsc || undefined,
+        bankName: data.bankName || undefined,
+        bankAddress: data.bankAddress || undefined,
+        iban: data.iban || undefined,
+        upiId: data.upiId || undefined,
+      };
+
+      if (isEdit && partyId) {
+        await updateParty(partyId, {
+          name: data.name,
+          phone: data.phone,
+          partyType: data.partyType as PartyType,
+          email: data.email || undefined,
+          fatherName: data.fatherName || undefined,
+          dateOfJoining: data.dateOfJoining ? new Date(data.dateOfJoining) : undefined,
+          address,
+          aadharNumber: data.aadharNumber || undefined,
+          panNumber: data.panNumber || undefined,
+          openingBalance: balance,
+          openingBalanceType: balance ? (data.openingBalanceType ?? 'to_pay') : undefined,
+          bankDetails,
+        });
+      } else {
+        await createParty({
+          orgId,
+          name: data.name,
+          phone: data.phone,
+          partyType: data.partyType as PartyType,
+          createdBy: user.uid,
+          email: data.email || undefined,
+          fatherName: data.fatherName || undefined,
+          dateOfJoining: data.dateOfJoining ? new Date(data.dateOfJoining) : undefined,
+          address,
+          aadharNumber: data.aadharNumber || undefined,
+          panNumber: data.panNumber || undefined,
+          openingBalance: balance,
+          openingBalanceType: balance ? (data.openingBalanceType ?? 'to_pay') : undefined,
+          bankDetails,
+        });
+      }
       router.back();
     } catch (err) {
       setSubmitError((err as Error).message);
@@ -194,7 +268,7 @@ export default function AddPartyScreen() {
           <Ionicons name="close" size={22} color={color.text} />
         </Pressable>
         <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-          Create New Party
+          {isEdit ? 'Edit Party' : 'Create New Party'}
         </Text>
         <View style={styles.navBtn} />
       </View>
@@ -702,7 +776,7 @@ export default function AddPartyScreen() {
         {/* Sticky footer */}
         <View style={styles.footer}>
           <Button
-            label="Save Party"
+            label={isEdit ? 'Save Changes' : 'Save Party'}
             onPress={handleSubmit(onSubmit)}
             loading={isSubmitting}
             disabled={!isValid || !orgId}

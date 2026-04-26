@@ -7,6 +7,13 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isOrgMember(orgId) {
+      return request.auth != null
+        && orgId is string
+        && exists(/databases/$(database)/documents/organizations/$(orgId))
+        && request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.memberIds;
+    }
+
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
@@ -39,8 +46,14 @@ service cloud.firestore {
         && request.resource.data.memberIds.size() >= 1
         && request.auth.uid in request.resource.data.memberIds;
 
-      allow read, update: if request.auth != null
-        && request.auth.uid in resource.data.memberIds;
+      // Read / update: any member of the project's org. Using
+      // isOrgMember() (instead of project.memberIds) lets list queries
+      // work — Firestore evaluates list rules per-doc, so a single
+      // legacy project missing the user's uid in its memberIds would
+      // otherwise reject the whole list. Org membership is the right
+      // boundary here since `where('orgId', '==', myOrg)` already
+      // filters the query client-side.
+      allow read, update: if isOrgMember(resource.data.orgId);
 
       allow delete: if request.auth != null
         && request.auth.uid == resource.data.ownerId;
@@ -57,8 +70,28 @@ service cloud.firestore {
     }
 
     // ── Attendance (project-scoped) ──
+    // Per-day attendance records. Scoped to org members so historical
+    // data can't leak across orgs. Create / update / delete are gated
+    // on the writer being a member of the record's org.
     match /attendance/{recordId} {
-      allow read, write: if request.auth != null;
+      allow read, update, delete: if isOrgMember(resource.data.orgId);
+      allow create: if isOrgMember(request.resource.data.orgId)
+        && request.resource.data.projectId is string
+        && request.resource.data.labourId is string
+        && request.resource.data.date is string;
+    }
+
+    // ── Project Labour Roster (project-scoped master list) ──
+    // Source-of-truth labour list per project. Used to render the
+    // attendance roster across every date (incl. dates with no marks
+    // yet). Any org member may upsert / read; write is open across
+    // members so silent backfill from existing attendance docs works
+    // regardless of who originally marked the labour.
+    match /projectLabour/{labourId} {
+      allow read, update, delete: if isOrgMember(resource.data.orgId);
+      allow create: if isOrgMember(request.resource.data.orgId)
+        && request.resource.data.projectId is string
+        && request.resource.data.labourId is string;
     }
 
     // ── Materials (project-scoped) ──
@@ -71,6 +104,13 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    // ── Task Category Library (org-scoped catalog) ──
+    match /taskCategoryLibrary/{itemId} {
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if isOrgMember(request.resource.data.orgId);
+      allow update, delete: if isOrgMember(resource.data.orgId);
+    }
+
     // ── Material Requests (project-scoped) ──
     match /materialRequests/{requestId} {
       allow read, write: if request.auth != null;
@@ -78,6 +118,23 @@ service cloud.firestore {
 
     // ── Tasks (project-scoped) ──
     match /tasks/{taskId} {
+      allow read, write: if request.auth != null;
+
+      // Progress update feed — append-only posts with %, note, photos.
+      match /updates/{updateId} {
+        allow read, create: if request.auth != null;
+        allow update, delete: if false;
+      }
+
+      // Legacy comment log — kept for back-compat until migrated.
+      match /comments/{commentId} {
+        allow read, create: if request.auth != null;
+        allow update, delete: if false;
+      }
+    }
+
+    // ── Daily Progress Reports (project-scoped, one per date) ──
+    match /dpr/{dprId} {
       allow read, write: if request.auth != null;
     }
 
@@ -89,6 +146,34 @@ service cloud.firestore {
     // ── Laminates (project-scoped) ──
     match /laminates/{laminateId} {
       allow read, write: if request.auth != null;
+    }
+
+    // ── Whiteboards (project-scoped vector sketch documents) ──
+    match /whiteboards/{boardId} {
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if isOrgMember(request.resource.data.orgId)
+        && request.resource.data.projectId is string
+        && request.resource.data.authorId == request.auth.uid;
+      // Any org member can edit boards (collaborative). orgId / projectId /
+      // authorId are immutable.
+      allow update: if isOrgMember(resource.data.orgId)
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.projectId == resource.data.projectId
+        && request.resource.data.authorId == resource.data.authorId;
+      // Only the original author may delete their board.
+      allow delete: if isOrgMember(resource.data.orgId)
+        && resource.data.authorId == request.auth.uid;
+    }
+
+    // ── CRM: Leads & Appointments (org-scoped) ──
+    match /leads/{leadId} {
+      allow read, update, delete: if isOrgMember(resource.data.orgId);
+      allow create: if isOrgMember(request.resource.data.orgId);
+    }
+
+    match /appointments/{appointmentId} {
+      allow read, update, delete: if isOrgMember(resource.data.orgId);
+      allow create: if isOrgMember(request.resource.data.orgId);
     }
 
     match /{document=**} {
