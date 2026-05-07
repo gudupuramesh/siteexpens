@@ -3,10 +3,13 @@
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Alert,
   FlatList,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   StyleSheet,
   TextInput,
@@ -16,6 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useOrgMembers } from '@/src/features/org/useOrgMembers';
+import { usePermissions } from '@/src/features/org/usePermissions';
 import { useProject } from '@/src/features/projects/useProject';
 import { getCategoryConfig, type MaterialCategory } from '@/src/features/materialLibrary/types';
 import { useMaterialRequest } from '@/src/features/materialRequests/useMaterialRequest';
@@ -43,11 +47,13 @@ function compactDateTime(ts: { toDate: () => Date } | null | undefined): string 
 }
 
 export default function MaterialRequestDetailScreen() {
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ id: string; reqId: string }>();
   const projectId = params.id;
   const reqId = params.reqId;
 
   const { user } = useAuth();
+  const { can } = usePermissions();
   const { data: project } = useProject(projectId);
   const { members } = useOrgMembers(project?.orgId);
   const { data: request, loading } = useMaterialRequest(reqId);
@@ -57,17 +63,34 @@ export default function MaterialRequestDetailScreen() {
   const [actionLoading, setActionLoading] = useState(false);
   const [showDeliveryPicker, setShowDeliveryPicker] = useState<number | null>(null);
 
-  const isOwner = user?.uid === project?.ownerId;
-  const isApprover = isOwner || ((project as any)?.approverIds?.includes(user?.uid) ?? false);
+  const canApproveMat = can('material.request.approve');
   const isPending = request?.status === 'pending';
   const isApproved = request?.status === 'approved';
+  const isRejected = request?.status === 'rejected';
+  const isCreator = !!user?.uid && !!request && request.createdBy === user.uid;
   const membersByUid = new Map(members.map((m) => [m.uid, m]));
   const getMemberLabel = (uid?: string): string => {
     if (!uid) return 'Unknown';
-    if (uid === project?.ownerId) return `${membersByUid.get(uid)?.displayName ?? 'Owner'} (Owner)`;
-    if (project?.approverIds?.includes(uid)) return `${membersByUid.get(uid)?.displayName ?? 'Approver'} (Approver)`;
     return membersByUid.get(uid)?.displayName ?? 'Team member';
   };
+  const canShowPrices =
+    !!user?.uid && request ? canApproveMat || request.createdBy === user.uid : false;
+  // Creator can edit their own pending request via the nav-bar pencil icon
+  // (existing behavior). The new "Edit" CTA in the action footer is for
+  // approvers who want to clean up items before approving.
+  const showPendingNavActions =
+    !!user?.uid &&
+    !!request &&
+    isPending &&
+    isCreator &&
+    can('material.request.write');
+  // Approvers (not creator) get a separate "Edit" button alongside Approve
+  // / Reject when the request is pending. Silent edit — no notification.
+  const showApproverEditCta = !!request && isPending && canApproveMat && !isCreator;
+  // Rejected request → only the creator gets the "Edit & Re-submit" CTA.
+  // Routes to the same edit form with `?resubmit=1` so the form knows to
+  // show the rejection-note banner and call the resubmit writer on save.
+  const showResubmitCta = !!request && isRejected && isCreator;
 
   const receivedCount = request?.items.filter((i) => i.deliveryStatus === 'received_at_site').length ?? 0;
   const totalItems = request?.items.length ?? 0;
@@ -95,10 +118,10 @@ export default function MaterialRequestDetailScreen() {
   }, [reqId, user]);
 
   const handleReject = useCallback(async () => {
-    if (!reqId) return;
+    if (!reqId || !user) return;
     setActionLoading(true);
     try {
-      await rejectRequest(reqId, rejectNote.trim() || 'Rejected');
+      await rejectRequest(reqId, user.uid, rejectNote.trim() || 'Rejected');
       setShowRejectModal(false);
       setRejectNote('');
     } catch (err) {
@@ -106,17 +129,17 @@ export default function MaterialRequestDetailScreen() {
     } finally {
       setActionLoading(false);
     }
-  }, [reqId, rejectNote]);
+  }, [reqId, rejectNote, user]);
 
   const handleDeliveryUpdate = useCallback(async (idx: number, status: DeliveryStatus) => {
-    if (!reqId) return;
+    if (!reqId || !user) return;
     try {
-      await updateItemDeliveryStatus(reqId, idx, status);
+      await updateItemDeliveryStatus(reqId, idx, status, user.uid);
     } catch (err) {
       Alert.alert('Error', (err as Error).message);
     }
     setShowDeliveryPicker(null);
-  }, [reqId]);
+  }, [reqId, user]);
 
   const handleShare = useCallback(async () => {
     if (!request || !project) return;
@@ -156,6 +179,14 @@ export default function MaterialRequestDetailScreen() {
     });
   }, [isPending, projectId, reqId]);
 
+  const handleResubmit = useCallback(() => {
+    if (!projectId || !reqId || !isRejected) return;
+    router.push({
+      pathname: '/(app)/projects/[id]/add-material-request',
+      params: { id: projectId, reqId, resubmit: '1' },
+    });
+  }, [isRejected, projectId, reqId]);
+
   if (loading || !request) {
     return (
       <Screen bg="grouped" padded={false}>
@@ -173,8 +204,16 @@ export default function MaterialRequestDetailScreen() {
     : '—';
   const requestedMeta = `REQ ${getMemberLabel(request.createdBy)} · ${compactDateTime(request.createdAt)}`;
   const approvedMeta = request.status === 'approved'
-    ? `APR ${getMemberLabel(request.approvedBy)} · ${compactDateTime(request.approvedAt)}`
+    ? `APR ${getMemberLabel(request.approvedBy)} · ${compactDateTime(request.approvedAt)}${
+        request.autoApproved ? ' · Auto-approved' : ''
+      }`
     : null;
+  const designatedMeta =
+    request.status === 'pending' &&
+    request.designatedApproverUids &&
+    request.designatedApproverUids.length > 0
+      ? request.designatedApproverUids.map((uid) => getMemberLabel(uid)).join(', ')
+      : null;
 
   return (
     <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
@@ -188,7 +227,7 @@ export default function MaterialRequestDetailScreen() {
         <Text variant="bodyStrong" color="text" style={styles.navTitle} numberOfLines={1}>
           {request.title || 'Material Request'}
         </Text>
-        {isPending ? (
+        {showPendingNavActions ? (
           <View style={styles.navActions}>
             <Pressable onPress={handleEdit} hitSlop={12} style={styles.navBtn}>
               <Ionicons name="create-outline" size={20} color={color.primary} />
@@ -197,7 +236,9 @@ export default function MaterialRequestDetailScreen() {
               <Ionicons name="trash-outline" size={20} color={color.danger} />
             </Pressable>
           </View>
-        ) : <View style={styles.navBtn} />}
+        ) : (
+          <View style={styles.navBtn} />
+        )}
       </View>
 
       {/* Status header */}
@@ -250,17 +291,34 @@ export default function MaterialRequestDetailScreen() {
             </Text>
           </View>
         ) : null}
+        {designatedMeta ? (
+          <View style={styles.metaIconRow}>
+            <Ionicons name="people-outline" size={12} color={color.textFaint} />
+            <Text variant="caption" color="textMuted" numberOfLines={2} style={styles.compactMetaLine}>
+              Heads-up: {designatedMeta}
+            </Text>
+          </View>
+        ) : null}
+        {request.editedAt ? (
+          <View style={styles.metaIconRow}>
+            <Ionicons name="create-outline" size={12} color={color.textFaint} />
+            <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.compactMetaLine}>
+              EDT {getMemberLabel(request.editedBy)} · {compactDateTime(request.editedAt)}
+            </Text>
+          </View>
+        ) : null}
       </View>
 
       {/* Items list */}
       <FlatList
+        style={styles.listFlex}
         data={request.items}
         keyExtractor={(_, idx) => String(idx)}
         renderItem={({ item, index }) => (
           <ItemRow
             item={item}
             index={index}
-            showPrice={isApprover}
+            showPrice={canShowPrices}
             showDelivery={isApproved}
             onDeliveryPress={() => setShowDeliveryPicker(index)}
           />
@@ -279,27 +337,53 @@ export default function MaterialRequestDetailScreen() {
       )}
 
       {/* Action footer */}
-      {(isPending && isApprover) || isApproved ? (
-        <View style={styles.footer}>
-          {isPending && isApprover && (
-            <View style={styles.footerRow}>
-              <Pressable
-                onPress={() => setShowRejectModal(true)}
-                style={[styles.actionBtn, styles.rejectBtn]}
-                disabled={actionLoading}
-              >
-                <Ionicons name="close-circle-outline" size={18} color={color.danger} />
-                <Text variant="metaStrong" color="danger">Reject</Text>
-              </Pressable>
-              <Pressable
-                onPress={handleApprove}
-                style={[styles.actionBtn, styles.approveBtn]}
-                disabled={actionLoading}
-              >
-                <Ionicons name="checkmark-circle-outline" size={18} color="#fff" />
-                <Text variant="metaStrong" style={{ color: '#fff' }}>Approve</Text>
-              </Pressable>
-            </View>
+      {(isPending && canApproveMat) || isApproved || showResubmitCta ? (
+        <View style={[styles.footer, { paddingBottom: space.sm + insets.bottom }]}>
+          {isPending && canApproveMat && (
+            <>
+              {showApproverEditCta && (
+                <Pressable
+                  onPress={handleEdit}
+                  style={[styles.actionBtn, styles.editBtn]}
+                  disabled={actionLoading}
+                >
+                  <Ionicons name="create-outline" size={18} color={color.primary} />
+                  <Text variant="metaStrong" color="primary">
+                    Edit before approving
+                  </Text>
+                </Pressable>
+              )}
+              <View style={styles.footerRow}>
+                <Pressable
+                  onPress={() => setShowRejectModal(true)}
+                  style={[styles.actionBtn, styles.footerRowBtn, styles.rejectBtn]}
+                  disabled={actionLoading}
+                >
+                  <Ionicons name="close-circle-outline" size={18} color={color.danger} />
+                  <Text variant="metaStrong" color="danger">Reject</Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleApprove}
+                  style={[styles.actionBtn, styles.footerRowBtn, styles.approveBtn]}
+                  disabled={actionLoading}
+                >
+                  <Ionicons name="checkmark-circle-outline" size={18} color={color.onPrimary} />
+                  <Text variant="metaStrong" color="onPrimary">Approve</Text>
+                </Pressable>
+              </View>
+            </>
+          )}
+          {showResubmitCta && (
+            <Pressable
+              onPress={handleResubmit}
+              style={[styles.actionBtn, styles.shareBtn]}
+              disabled={actionLoading}
+            >
+              <Ionicons name="refresh-outline" size={18} color={color.onPrimary} />
+              <Text variant="metaStrong" color="onPrimary">
+                Edit & Re-submit
+              </Text>
+            </Pressable>
           )}
           {isApproved && (
             <Pressable
@@ -307,8 +391,8 @@ export default function MaterialRequestDetailScreen() {
               style={[styles.actionBtn, styles.shareBtn]}
               disabled={actionLoading}
             >
-              <Ionicons name="share-outline" size={18} color="#fff" />
-              <Text variant="metaStrong" style={{ color: '#fff' }}>
+              <Ionicons name="share-outline" size={18} color={color.onPrimary} />
+              <Text variant="metaStrong" color="onPrimary">
                 {actionLoading ? 'Generating...' : 'Share to Shop (No Prices)'}
               </Text>
             </Pressable>
@@ -317,27 +401,41 @@ export default function MaterialRequestDetailScreen() {
       ) : null}
 
       {/* Reject Modal */}
-      <Modal visible={showRejectModal} animationType="fade" transparent onRequestClose={() => setShowRejectModal(false)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setShowRejectModal(false)}><View /></Pressable>
-        <View style={styles.rejectSheet}>
-          <Text variant="bodyStrong" color="text" style={{ marginBottom: space.sm }}>Reject Request</Text>
-          <TextInput
-            placeholder="Reason for rejection (optional)"
-            placeholderTextColor={color.textFaint}
-            value={rejectNote}
-            onChangeText={setRejectNote}
-            multiline
-            style={styles.rejectInput}
-          />
-          <View style={styles.rejectActions}>
-            <Pressable onPress={() => setShowRejectModal(false)} style={[styles.actionBtn, { borderColor: color.border, borderWidth: 1, flex: 1 }]}>
-              <Text variant="metaStrong" color="text">Cancel</Text>
-            </Pressable>
-            <Pressable onPress={handleReject} style={[styles.actionBtn, styles.rejectBtn, { flex: 1 }]} disabled={actionLoading}>
-              <Text variant="metaStrong" color="danger">{actionLoading ? 'Rejecting...' : 'Reject'}</Text>
-            </Pressable>
+      <Modal
+        visible={showRejectModal}
+        animationType="fade"
+        transparent
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+        onRequestClose={() => setShowRejectModal(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+          style={{ flex: 1 }}
+          keyboardVerticalOffset={0}
+        >
+          <Pressable style={styles.modalOverlay} onPress={() => setShowRejectModal(false)}>
+            <View />
+          </Pressable>
+          <View style={styles.rejectSheet}>
+            <Text variant="bodyStrong" color="text" style={{ marginBottom: space.sm }}>Reject Request</Text>
+            <TextInput
+              placeholder="Reason for rejection (optional)"
+              placeholderTextColor={color.textFaint}
+              value={rejectNote}
+              onChangeText={setRejectNote}
+              multiline
+              style={styles.rejectInput}
+            />
+            <View style={styles.rejectActions}>
+              <Pressable onPress={() => setShowRejectModal(false)} style={[styles.actionBtn, styles.footerRowBtn, { borderColor: color.border, borderWidth: 1 }]}>
+                <Text variant="metaStrong" color="text">Cancel</Text>
+              </Pressable>
+              <Pressable onPress={handleReject} style={[styles.actionBtn, styles.footerRowBtn, styles.rejectBtn]} disabled={actionLoading}>
+                <Text variant="metaStrong" color="danger">{actionLoading ? 'Rejecting...' : 'Reject'}</Text>
+              </Pressable>
+            </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Delivery Status Picker */}
@@ -444,7 +542,7 @@ const styles = StyleSheet.create({
   statusBar: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: space.xs, paddingHorizontal: screenInset, backgroundColor: color.surface },
   statusDot: { width: 8, height: 8, borderRadius: 4 },
 
-  progressBar: { height: 24, backgroundColor: color.bgGrouped, marginHorizontal: screenInset, marginTop: space.xs, borderRadius: 0, overflow: 'hidden', justifyContent: 'center', borderWidth: 1, borderColor: color.borderStrong },
+  progressBar: { height: 24, backgroundColor: color.bgGrouped, marginHorizontal: screenInset, marginTop: space.xs, borderRadius: 8, overflow: 'hidden', justifyContent: 'center', borderWidth: 1, borderColor: color.borderStrong },
   progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: color.successSoft },
   progressText: { textAlign: 'center', zIndex: 1 },
 
@@ -463,6 +561,7 @@ const styles = StyleSheet.create({
   metaIconRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   compactMetaLine: { letterSpacing: 0.2 },
 
+  listFlex: { flex: 1 },
   listContent: { paddingBottom: 20, paddingTop: 2 },
   itemRow: {
     flexDirection: 'row',
@@ -484,12 +583,24 @@ const styles = StyleSheet.create({
 
   rejectionBar: { flexDirection: 'row', alignItems: 'center', gap: space.xs, paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.dangerSoft },
 
-  footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.bgGrouped, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.borderStrong },
+  footer: { paddingHorizontal: screenInset, paddingTop: space.sm, backgroundColor: color.bgGrouped, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.borderStrong, gap: space.sm },
   footerRow: { flexDirection: 'row', gap: space.sm },
-  actionBtn: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.xs, paddingVertical: space.sm, borderRadius: 0 },
+  /** Full-width or row cell: never use flex:1 height-wise — only footerRowBtn adds flex in a horizontal row. */
+  actionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space.xs,
+    paddingVertical: 14,
+    minHeight: 48,
+    borderRadius: 10,
+    alignSelf: 'stretch',
+  },
+  footerRowBtn: { flex: 1 },
   approveBtn: { backgroundColor: color.success },
   rejectBtn: { backgroundColor: color.dangerSoft, borderWidth: 1, borderColor: color.danger },
   shareBtn: { backgroundColor: color.primary },
+  editBtn: { backgroundColor: color.primarySoft, borderWidth: 1, borderColor: color.primary },
 
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
   rejectSheet: { backgroundColor: color.surface, borderRadius: radius.lg, padding: space.lg, marginHorizontal: screenInset * 2, width: '85%', alignSelf: 'center' },

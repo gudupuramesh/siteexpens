@@ -6,11 +6,14 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as Contacts from 'expo-contacts';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
 import { Controller, useForm } from 'react-hook-form';
 import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
+  InteractionManager,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -61,6 +64,7 @@ const schema = z.object({
 type FormData = z.infer<typeof schema>;
 
 export default function AddLabourScreen() {
+  useGuardedRoute({ capability: 'attendance.write' });
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -143,25 +147,54 @@ export default function AddLabourScreen() {
   }, [setValue]);
 
   const pickContactAndAdd = useCallback(async () => {
-    const { status } = await Contacts.requestPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
-      return;
-    }
-    const result = await Contacts.presentContactPickerAsync();
-    if (result) {
+    Keyboard.dismiss();
+    setShowPartyPicker(false);
+    try {
+      await new Promise<void>((resolve) => {
+        InteractionManager.runAfterInteractions(() => setTimeout(resolve, 500));
+      });
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
+        return;
+      }
+      const result = await Contacts.presentContactPickerAsync();
+      if (!result) return;
+
       const contactName =
-        result.name ??
-        [result.firstName, result.lastName].filter(Boolean).join(' ') ??
+        (result.name ?? '').trim() ||
+        [result.firstName, result.lastName].filter(Boolean).join(' ').trim() ||
+        (result.company ?? '').trim() ||
         '';
-      const phone =
-        result.phoneNumbers?.[0]?.number ??
-        result.phoneNumbers?.[0]?.digits ??
-        '';
+      const rawEntry =
+        result.phoneNumbers?.find(
+          (p) => (p.number ?? p.digits ?? '').replace(/\D/g, '').length >= 10,
+        ) ?? result.phoneNumbers?.[0];
+      const rawPhone = rawEntry?.number ?? rawEntry?.digits ?? '';
+      const phoneDigits = rawPhone.replace(/\D/g, '');
+
+      if (!contactName) {
+        Alert.alert(
+          'Missing name',
+          'That contact has no name or company. Add one in Contacts and try again.',
+        );
+        return;
+      }
+      if (phoneDigits.length < 10) {
+        Alert.alert('Missing phone', 'That contact needs a phone with at least 10 digits.');
+        return;
+      }
+
       setNewPartyName(contactName);
-      setNewPartyPhone(phone.replace(/[^\d+]/g, ''));
-      setShowPartyPicker(false);
-      setShowNewPartyType(true);
+      setNewPartyPhone(phoneDigits);
+      InteractionManager.runAfterInteractions(() => {
+        setTimeout(() => setShowNewPartyType(true), 120);
+      });
+    } catch (e) {
+      Alert.alert(
+        'Contacts',
+        e instanceof Error ? e.message : 'Could not open the contact picker.',
+      );
     }
   }, []);
 
@@ -205,6 +238,8 @@ export default function AddLabourScreen() {
         status: 'present',
         createdBy: user.uid,
       });
+      // Snapshot-propagation buffer (see add-transaction.tsx).
+      await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
       setSubmitError((err as Error).message);
@@ -225,11 +260,12 @@ export default function AddLabourScreen() {
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
           {/* Party selector */}
@@ -366,32 +402,46 @@ export default function AddLabourScreen() {
         visible={showPartyPicker}
         animationType="slide"
         transparent
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
         onRequestClose={() => setShowPartyPicker(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setShowPartyPicker(false)}>
-          <View />
-        </Pressable>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-            Select Worker
-          </Text>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
+        >
+          <Pressable
+            style={styles.modalOverlay}
+            onPress={() => {
+              Keyboard.dismiss();
+              setShowPartyPicker(false);
+            }}
+          >
+            <View />
+          </Pressable>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
+              Select Worker
+            </Text>
 
-          <View style={styles.searchBar}>
-            <Ionicons name="search" size={18} color={color.textMuted} />
-            <TextInput
-              placeholder="Search by name..."
-              placeholderTextColor={color.textFaint}
-              value={partySearch}
-              onChangeText={setPartySearch}
-              style={styles.searchInput}
-              autoFocus
-            />
-          </View>
+            <View style={styles.searchBar}>
+              <Ionicons name="search" size={18} color={color.textMuted} />
+              <TextInput
+                placeholder="Search by name..."
+                placeholderTextColor={color.textFaint}
+                value={partySearch}
+                onChangeText={setPartySearch}
+                style={styles.searchInput}
+                autoFocus={Platform.OS !== 'ios'}
+                returnKeyType="search"
+              />
+            </View>
 
-          <SectionList
-            sections={partySections}
-            keyExtractor={(p) => p.id}
+            <SectionList
+              keyboardShouldPersistTaps="handled"
+              sections={partySections}
+              keyExtractor={(p) => p.id}
             renderSectionHeader={({ section: { title } }) => (
               <View style={styles.sectionHeader}>
                 <Text variant="caption" color="textMuted">{title.toUpperCase()}</Text>
@@ -433,7 +483,13 @@ export default function AddLabourScreen() {
 
           {/* Bottom actions */}
           <View style={styles.partyActions}>
-            <Pressable onPress={pickContactAndAdd} style={styles.partyActionBtn}>
+            <Pressable
+              onPress={() => {
+                Keyboard.dismiss();
+                pickContactAndAdd();
+              }}
+              style={styles.partyActionBtn}
+            >
               <Ionicons name="person-add-outline" size={18} color={color.primary} />
               <Text variant="metaStrong" color="primary">Add from Contact</Text>
             </Pressable>
@@ -458,6 +514,7 @@ export default function AddLabourScreen() {
             </Pressable>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ── New Party Type Picker Modal ── */}
@@ -465,6 +522,7 @@ export default function AddLabourScreen() {
         visible={showNewPartyType}
         animationType="slide"
         transparent
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
         onRequestClose={() => setShowNewPartyType(false)}
       >
         <Pressable style={styles.modalOverlay} onPress={() => setShowNewPartyType(false)}>
@@ -479,7 +537,12 @@ export default function AddLabourScreen() {
             Adding: {newPartyName}{newPartyPhone ? ` (${newPartyPhone})` : ''}
           </Text>
 
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.modalList}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            style={styles.modalList}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+          >
             {PARTY_TYPE_GROUPS.map((group) => (
               <View key={group.label} style={styles.typeGroup}>
                 <Text variant="caption" color="textMuted" style={styles.typeGroupLabel}>
@@ -552,7 +615,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.sm,
     backgroundColor: color.bgGrouped,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: color.borderStrong,
     paddingHorizontal: space.md,
@@ -571,7 +634,7 @@ const styles = StyleSheet.create({
   roleBadge: {
     paddingHorizontal: space.sm,
     paddingVertical: space.xxs,
-    borderRadius: 0,
+    borderRadius: 8,
     backgroundColor: color.primarySoft,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.primary,
@@ -659,7 +722,7 @@ const styles = StyleSheet.create({
     marginBottom: space.sm,
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,
-    borderRadius: 0,
+    borderRadius: 8,
     backgroundColor: color.bgGrouped,
     borderWidth: 1,
     borderColor: color.borderStrong,
@@ -667,15 +730,16 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
+    lineHeight: 20,
     color: color.text,
-    paddingVertical: Platform.OS === 'ios' ? space.xs : 0,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
   },
 
   sectionHeader: {
     paddingVertical: space.xs,
     paddingHorizontal: space.xxs,
     backgroundColor: color.surface,
-    borderRadius: 0,
+    borderRadius: 8,
     marginTop: space.xs,
     marginBottom: space.xxs,
     borderTopWidth: StyleSheet.hairlineWidth,
@@ -695,7 +759,7 @@ const styles = StyleSheet.create({
   partyAvatar: {
     width: 36,
     height: 36,
-    borderRadius: 0,
+    borderRadius: 8,
     backgroundColor: color.primarySoft,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
@@ -736,7 +800,7 @@ const styles = StyleSheet.create({
     gap: space.sm,
     paddingVertical: space.sm,
     paddingHorizontal: space.xs,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.border,
     marginBottom: 6,
@@ -744,7 +808,7 @@ const styles = StyleSheet.create({
   typeIconWrap: {
     width: 36,
     height: 36,
-    borderRadius: 0,
+    borderRadius: 8,
     backgroundColor: color.bgGrouped,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,

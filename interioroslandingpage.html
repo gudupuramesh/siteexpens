@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>InteriorOS — Project Management Software for Interior Designers</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root{
+    --blue-deep:oklch(38% 0.18 265);
+    --blue-primary:oklch(48% 0.2 265);
+    --blue-mid:oklch(58% 0.16 265);
+    --blue-light:oklch(72% 0.1 265);
+    --lavender:oklch(72% 0.1 275);
+    --lavender-light:oklch(92% 0.04 275);
+    --lavender-wash:oklch(97% 0.015 275);
+    --white:#fff;
+    --off-white:#fafbfd;
+    --fg:oklch(18% 0.02 265);
+    --muted:oklch(50% 0.02 265);
+    --border:oklch(90% 0.015 270);
+    --green:oklch(52% 0.14 150);
+    --green-bg:oklch(94% 0.04 150);
+    --red:oklch(55% 0.2 25);
+    --amber:oklch(65% 0.15 70);
+
+    --font-display:'Iowan Old Style','Charter','Palatino Linotype',Georgia,serif;
+    --font-body:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+    --font-mono:ui-monospace,'SF Mono','JetBrains Mono',Menlo,monospace;
+
+    --max-w:1200px;
+    --section-py:100px;
+  }
+
+  html{scroll-behavior:smooth}
+  body{font-family:var(--font-body);color:var(--fg);background:var(--white);-webkit-font-smoothing:antialiased;line-height:1.6}
+
+  .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,0.88);backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border)}
+  .nav-inner{max-width:var(--max-w);margin:0 auto;padding:0 32px;height:64px;display:flex;align-items:center;justify-content:space-between}
+  .nav-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--fg)}
+  .nav-logo{width:36px;height:36px;border-radius:10px;background:var(--blue-primary);display:flex;align-items:center;justify-content:center;color:white;font-family:var(--font-display);font-size:15px;font-weight:700;letter-spacing:-0.02em}
+  .nav-name{font-family:var(--font-display);font-size:18px;font-weight:700;letter-spacing:-0.03em}
+  .nav-links{display:flex;align-items:center;gap:32px;list-style:none}
+  .nav-links a{font-size:14px;font-weight:500;color:var(--muted);text-decoration:none;transition:color 0.2s}
+  .nav-links a:hover{color:var(--fg)}
+  .nav-cta{padding:10px 22px;border-radius:10px;background:var(--blue-primary);color:white !important;font-weight:600;transition:background 0.2s}
+  .nav-cta:hover{background:var(--blue-deep) !important}
+
+  .hero{padding:140px 32px 80px;text-align:center;background:linear-gradient(180deg, var(--lavender-wash) 0%, var(--white) 100%);position:relative;overflow:hidden}
+  .hero-inner{max-width:var(--max-w);margin:0 auto}
+  .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;background:var(--lavender-light);color:var(--blue-primary);font-size:13px;font-weight:600;letter-spacing:0.02em;margin-bottom:24px}
+  .hero-badge svg{width:14px;height:14px}
+  .hero h1{font-family:var(--font-display);font-size:clamp(36px, 5vw, 56px);font-weight:700;letter-spacing:-0.04em;line-height:1.1;color:var(--fg);margin-bottom:20px;max-width:800px;margin-left:auto;margin-right:auto}
+  .hero h1 .accent{color:var(--blue-primary)}
+  .hero-sub{font-size:18px;color:var(--muted);max-width:620px;margin:0 auto 36px;line-height:1.65}
+  .hero-actions{display:flex;gap:14px;justify-content:center;margin-bottom:60px;flex-wrap:wrap}
+  .btn-primary{padding:14px 32px;border-radius:12px;background:var(--blue-primary);color:white;font-size:16px;font-weight:600;font-family:var(--font-body);text-decoration:none;border:none;cursor:pointer;transition:background 0.2s, transform 0.1s;display:inline-flex;align-items:center;gap:8px}
+  .btn-primary:hover{background:var(--blue-deep)}
+  .btn-primary:active{transform:scale(0.98)}
+  .btn-secondary{padding:14px 32px;border-radius:12px;background:var(--white);color:var(--fg);font-size:16px;font-weight:600;font-family:var(--font-body);text-decoration:none;border:1.5px solid var(--border);cursor:pointer;transition:border-color 0.2s;display:inline-flex;align-items:center;gap:8px}
+  .btn-secondary:hover{border-color:var(--blue-mid)}
+
+  .stats{display:flex;justify-content:center;gap:60px;margin-bottom:60px}
+  .stat{text-align:center}
+  .stat-num{font-family:var(--font-display);font-size:42px;font-weight:700;color:var(--blue-primary);letter-spacing:-0.03em;line-height:1;margin-bottom:6px}
+  .stat-label{font-size:13px;color:var(--muted);font-weight:500;line-height:1.4}
+
+  .hero-mockup{position:relative;max-width:900px;margin:0 auto;display:flex;justify-content:center;gap:24px;align-items:flex-end}
+  .phone-mock{width:240px;border-radius:28px;border:4px solid oklch(20% 0.02 265);box-shadow:0 20px 60px oklch(50% 0.06 265 / 0.15), 0 4px 16px oklch(50% 0.04 265 / 0.08);overflow:hidden;background:white;position:relative}
+  .phone-mock.center{width:260px;z-index:2}
+  .phone-mock.side{transform:scale(0.9);opacity:0.85}
+  .phone-screen{width:100%;aspect-ratio:390/844;background:var(--off-white);overflow:hidden;position:relative}
+  .phone-notch{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:80px;height:24px;background:oklch(20% 0.02 265);border-radius:14px;z-index:2}
+
+  .trust{padding:80px 32px;background:var(--off-white);border-bottom:1px solid var(--border)}
+  .trust-inner{max-width:var(--max-w);margin:0 auto;display:grid;grid-template-columns:1fr 1.4fr;gap:60px;align-items:center}
+  .trust-text h2{font-family:var(--font-display);font-size:clamp(28px, 3vw, 36px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:16px;color:var(--fg)}
+  .trust-text p{font-size:15px;color:var(--muted);line-height:1.65}
+  .trust-logos{display:grid;grid-template-columns:repeat(4, 1fr);gap:16px}
+  .trust-logo-card{height:56px;border-radius:10px;background:var(--white);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;font-family:var(--font-display);font-size:13px;font-weight:700;color:var(--muted);letter-spacing:-0.01em;transition:border-color 0.2s}
+  .trust-logo-card:hover{border-color:var(--blue-mid)}
+  .trust-logo-card .logo-placeholder{width:100%;height:100%;border-radius:10px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;font-weight:600;overflow:hidden}
+  .trust-logo-card .logo-placeholder img{width:100%;height:100%;object-fit:contain;padding:10px}
+
+  .pain{padding:var(--section-py) 32px;background:var(--off-white)}
+  .pain-inner{max-width:var(--max-w);margin:0 auto}
+  .section-eyebrow{font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--blue-mid);margin-bottom:12px}
+  .section-headline{font-family:var(--font-display);font-size:clamp(28px, 3.5vw, 40px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:16px;max-width:600px}
+  .section-sub{font-size:16px;color:var(--muted);max-width:560px;line-height:1.65;margin-bottom:48px}
+  .pain-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:24px}
+  .pain-card{background:var(--white);border:1px solid var(--border);border-radius:16px;padding:0;overflow:hidden}
+  .pain-card-img{width:100%;height:180px;background:var(--lavender-wash);display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
+  .pain-card-img .img-placeholder{width:100%;height:100%;object-fit:cover}
+  .pain-card-img .img-label{position:absolute;bottom:10px;left:12px;right:12px;font-size:10px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase;background:rgba(255,255,255,0.85);backdrop-filter:blur(8px);padding:5px 10px;border-radius:6px}
+  .pain-card-body{padding:22px 24px 26px}
+  .pain-icon{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;margin-bottom:14px}
+  .pain-card h3{font-size:16px;font-weight:700;margin-bottom:8px;letter-spacing:-0.01em}
+  .pain-card p{font-size:14px;color:var(--muted);line-height:1.6}
+
+  .feature-section{padding:var(--section-py) 32px}
+  .feature-section.alt{background:var(--off-white)}
+  .feature-inner{max-width:var(--max-w);margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center}
+  .feature-inner.reverse .feature-text{order:2}
+  .feature-inner.reverse .feature-visual{order:1}
+  .feature-text{display:flex;flex-direction:column}
+  .feature-num{font-family:var(--font-mono);font-size:13px;font-weight:700;color:var(--blue-mid);margin-bottom:12px}
+  .feature-title{font-family:var(--font-display);font-size:clamp(24px, 3vw, 32px);font-weight:700;letter-spacing:-0.03em;line-height:1.2;margin-bottom:16px}
+  .feature-desc{font-size:16px;color:var(--muted);line-height:1.65;margin-bottom:24px}
+  .feature-bullets{list-style:none;display:flex;flex-direction:column;gap:12px}
+  .feature-bullets li{display:flex;align-items:flex-start;gap:10px;font-size:14px;line-height:1.5;color:var(--fg)}
+  .feature-bullets li .check{width:20px;height:20px;border-radius:6px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
+  .feature-bullets li .check svg{width:12px;height:12px;color:var(--green)}
+  .feature-visual{display:flex;justify-content:center;align-items:center}
+
+  .app-card{background:var(--white);border:1px solid var(--border);border-radius:20px;padding:24px;box-shadow:0 8px 32px oklch(50% 0.04 265 / 0.08);max-width:380px;width:100%}
+  .app-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .app-card-title{font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted)}
+  .app-card-badge{padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.04em}
+
+  .ledger-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border)}
+  .ledger-row:last-child{border-bottom:none}
+  .ledger-name{font-size:13px;font-weight:600}
+  .ledger-desc{font-size:11px;color:var(--muted)}
+  .ledger-amount{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+  .ledger-in{color:var(--green)}
+  .ledger-out{color:var(--red)}
+
+  .tool-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;max-width:380px}
+  .tool-cell{background:white;border:1px solid var(--border);border-radius:14px;padding:16px}
+  .tool-cell-label{font-size:10px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px}
+  .swatch-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .swatch{aspect-ratio:1;border-radius:4px}
+  .vendor-row{display:flex;align-items:center;gap:8px;padding:4px 0}
+  .vendor-avatar{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700;color:white;flex-shrink:0}
+  .vendor-name{font-size:11px;font-weight:600;flex:1}
+  .vendor-bal{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums}
+
+  .diff{padding:var(--section-py) 32px;background:var(--lavender-wash)}
+  .diff-inner{max-width:var(--max-w);margin:0 auto;text-align:center}
+  .diff .section-eyebrow{color:var(--blue-mid)}
+  .diff .section-headline{color:var(--fg);max-width:700px;margin-left:auto;margin-right:auto;margin-bottom:48px}
+  .diff-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:24px;text-align:left}
+  .diff-card{background:var(--white);border:1px solid var(--border);border-radius:16px;padding:28px 24px;transition:box-shadow 0.2s}
+  .diff-card:hover{box-shadow:0 4px 16px oklch(50% 0.04 265 / 0.08)}
+  .diff-card h3{font-size:16px;font-weight:700;color:var(--fg);margin-bottom:8px}
+  .diff-card p{font-size:14px;color:var(--muted);line-height:1.6}
+  .diff-icon{width:40px;height:40px;border-radius:10px;background:var(--lavender-light);display:flex;align-items:center;justify-content:center;margin-bottom:14px;color:var(--blue-primary)}
+
+  .faq{padding:var(--section-py) 32px}
+  .faq-inner{max-width:720px;margin:0 auto}
+  .faq .section-headline{text-align:center;max-width:600px;margin-left:auto;margin-right:auto;margin-bottom:48px}
+  .faq .section-eyebrow{text-align:center}
+  .faq-item{border-bottom:1px solid var(--border);padding:20px 0}
+  .faq-item:first-child{border-top:1px solid var(--border)}
+  .faq-q{display:flex;align-items:center;justify-content:space-between;cursor:pointer;gap:16px}
+  .faq-q h3{font-size:15px;font-weight:600;letter-spacing:-0.01em;flex:1}
+  .faq-q .faq-icon{width:28px;height:28px;border-radius:8px;background:var(--off-white);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:transform 0.3s, background 0.2s}
+  .faq-q .faq-icon svg{width:14px;height:14px;color:var(--muted)}
+  .faq-item.open .faq-q .faq-icon{transform:rotate(45deg);background:var(--lavender-light)}
+  .faq-item.open .faq-q .faq-icon svg{color:var(--blue-primary)}
+  .faq-a{max-height:0;overflow:hidden;transition:max-height 0.35s ease, padding 0.3s ease}
+  .faq-item.open .faq-a{max-height:300px;padding-top:12px}
+  .faq-a p{font-size:14px;color:var(--muted);line-height:1.7}
+
+  .download{padding:var(--section-py) 32px;background:linear-gradient(180deg, var(--white) 0%, var(--lavender-wash) 100%)}
+  .download-inner{max-width:var(--max-w);margin:0 auto}
+  .download-layout{display:grid;grid-template-columns:1fr 1fr;gap:60px;align-items:center}
+  .download-text .section-headline{margin-bottom:16px}
+  .download-desc{font-size:16px;color:var(--muted);line-height:1.7;margin-bottom:24px}
+  .download-features{list-style:none;display:flex;flex-direction:column;gap:12px;margin-bottom:32px}
+  .download-features li{display:flex;align-items:flex-start;gap:10px;font-size:14px;line-height:1.5;color:var(--fg)}
+  .download-features li .dl-icon{width:20px;height:20px;border-radius:6px;background:var(--lavender-light);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;color:var(--blue-primary)}
+  .download-features li .dl-icon svg{width:12px;height:12px}
+  .download-btns{display:flex;gap:14px;flex-wrap:wrap}
+  .download-btn{display:inline-flex;align-items:center;gap:8px;padding:14px 24px;border-radius:12px;background:var(--blue-primary);color:white;font-size:14px;font-weight:600;text-decoration:none;transition:background 0.2s}
+  .download-btn:hover{background:var(--blue-deep)}
+  .download-btn.outline{background:var(--white);color:var(--fg);border:1.5px solid var(--border)}
+  .download-btn.outline:hover{border-color:var(--blue-mid)}
+  .download-visual{display:flex;justify-content:center;align-items:center;position:relative}
+  .download-phone{width:280px;border-radius:32px;border:4px solid oklch(20% 0.02 265);box-shadow:0 24px 64px oklch(50% 0.06 265 / 0.18), 0 4px 16px oklch(50% 0.04 265 / 0.08);overflow:hidden;background:white;position:relative}
+  .download-phone .phone-notch{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:90px;height:26px;background:oklch(20% 0.02 265);border-radius:14px;z-index:2}
+  .download-phone-screen{width:100%;aspect-ratio:390/844;background:var(--lavender-wash);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 24px 24px;gap:12px}
+  .download-phone-label{font-size:10px;font-weight:600;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase}
+  .download-glow{position:absolute;width:360px;height:360px;border-radius:50%;background:oklch(72% 0.1 275 / 0.12);filter:blur(60px);z-index:-1}
+
+  .testimonials{padding:var(--section-py) 32px}
+  .test-inner{max-width:var(--max-w);margin:0 auto;text-align:center}
+  .test-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:24px;text-align:left;margin-top:48px}
+  .test-card{background:var(--off-white);border:1px solid var(--border);border-radius:16px;padding:28px 24px}
+  .test-stars{display:flex;gap:2px;margin-bottom:14px;color:var(--amber)}
+  .test-quote{font-size:14px;line-height:1.65;color:var(--fg);margin-bottom:18px;font-style:italic}
+  .test-author{display:flex;align-items:center;gap:10px}
+  .test-avatar{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:white;flex-shrink:0}
+  .test-name{font-size:13px;font-weight:700}
+  .test-role{font-size:12px;color:var(--muted)}
+
+  .cta-section{padding:80px 32px;text-align:center;background:linear-gradient(180deg, var(--white) 0%, var(--lavender-wash) 100%)}
+  .cta-inner{max-width:640px;margin:0 auto}
+  .cta-section h2{font-family:var(--font-display);font-size:clamp(28px, 3.5vw, 40px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:16px}
+  .cta-section p{font-size:16px;color:var(--muted);margin-bottom:32px;line-height:1.6}
+
+  .footer{padding:60px 32px 40px;background:var(--off-white);border-top:1px solid var(--border)}
+  .footer-inner{max-width:var(--max-w);margin:0 auto;display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:40px}
+  .footer-brand p{font-size:14px;line-height:1.6;max-width:280px;color:var(--muted);margin-top:12px}
+  .footer h4{font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+  .footer ul{list-style:none;display:flex;flex-direction:column;gap:10px}
+  .footer ul a{color:var(--muted);text-decoration:none;font-size:14px;transition:color 0.2s}
+  .footer ul a:hover{color:var(--fg)}
+  .footer-bottom{max-width:var(--max-w);margin:40px auto 0;padding-top:24px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted)}
+
+  @media (max-width:768px){
+    .nav-links{display:none}
+    .hero h1{font-size:32px}
+    .stats{gap:30px}
+    .stat-num{font-size:32px}
+    .pain-grid,.diff-grid,.test-grid{grid-template-columns:1fr}
+    .feature-inner{grid-template-columns:1fr;gap:40px}
+    .feature-inner.reverse .feature-text{order:1}
+    .feature-inner.reverse .feature-visual{order:2}
+    .hero-mockup{flex-direction:column;align-items:center}
+    .phone-mock.side{display:none}
+    .footer-inner{grid-template-columns:1fr 1fr}
+    .download-layout{grid-template-columns:1fr;gap:40px}
+    .trust-inner{grid-template-columns:1fr}
+    .trust-logos{grid-template-columns:repeat(2,1fr)}
+  }
+</style>
+</head>
+<body>
+
+<nav class="nav"><div class="nav-inner">
+  <a href="#" class="nav-brand"><div class="nav-logo">iO</div><span class="nav-name">InteriorOS</span></a>
+  <ul class="nav-links"><li><a href="#features">Features</a></li><li><a href="#solutions">Solutions</a></li><li><a href="#testimonials">Testimonials</a></li><li><a href="#pricing">Pricing</a></li><li><a href="#contact" class="nav-cta">Get Started Free</a></li></ul>
+</div></nav>
+
+<section class="hero"><div class="hero-inner">
+  <div class="hero-badge"><svg viewBox="0 0 14 14" fill="none"><path d="M7 1l2 4h4l-3.5 3 1.5 4L7 9.5 3 12l1.5-4L1 5h4z" fill="currentColor"/></svg>Built exclusively for interior design studios</div>
+  <h1>Interior Project Management Software <span class="accent">Built to Save Money</span></h1>
+  <p class="hero-sub">Stop losing money on WhatsApp chaos and Excel errors. InteriorOS connects your site teams, supervisors, vendors, and finance — delivering real-time control over projects, materials, labour, and costs.</p>
+  <div class="hero-actions">
+    <a href="#" class="btn-primary">Start Free Trial <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+    <a href="#" class="btn-secondary"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><polygon points="6,3 13,8 6,13" fill="currentColor"/></svg>Watch Demo</a>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="stat-num">2X</div><div class="stat-label">Field–Office<br>Communication</div></div>
+    <div class="stat"><div class="stat-num">25%</div><div class="stat-label">Faster Project<br>Delivery</div></div>
+    <div class="stat"><div class="stat-num">10%</div><div class="stat-label">Savings on<br>Project Costs</div></div>
+  </div>
+  <div class="hero-mockup">
+    <div class="phone-mock side"><div class="phone-notch"></div><div class="phone-screen" style="background:white;display:flex;flex-direction:column;align-items:center;padding:60px 20px 20px"><div style="width:32px;height:32px;border-radius:9px;background:var(--blue-primary);display:flex;align-items:center;justify-content:center;color:white;font-family:var(--font-display);font-size:13px;font-weight:700;margin-bottom:8px">iO</div><div style="font-family:var(--font-display);font-size:16px;font-weight:700;letter-spacing:-0.02em;margin-bottom:2px">InteriorOS</div><div style="font-size:8px;color:var(--muted);letter-spacing:0.06em;text-transform:uppercase;margin-bottom:24px">Studio · Projects · Ledger</div><div style="width:100%;background:rgba(255,255,255,0.7);border:1px solid var(--border);border-radius:12px;padding:16px 14px"><div style="font-size:8px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Sign in to continue</div><div style="display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:8px"><div style="padding:8px;font-size:10px;font-weight:500;border-right:1px solid var(--border);background:var(--lavender-wash)">+91</div><div style="padding:8px;font-size:10px;color:var(--border)">98765 43210</div></div><div style="font-size:8px;color:var(--muted);margin-bottom:8px">We'll send a 6-digit OTP</div><div style="width:100%;padding:8px;background:var(--blue-primary);color:white;text-align:center;border-radius:8px;font-size:10px;font-weight:600">Send OTP</div></div></div></div>
+    <div class="phone-mock center"><div class="phone-notch"></div><div class="phone-screen" style="padding:50px 14px 14px"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px"><div style="font-family:var(--font-display);font-size:16px;font-weight:700;letter-spacing:-0.02em">Projects</div><div style="display:flex;gap:6px"><div style="width:24px;height:24px;border-radius:7px;border:1px solid var(--border);display:flex;align-items:center;justify-content:center"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v4l2.5 1.5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1"/></svg></div><div style="width:24px;height:24px;border-radius:7px;background:var(--blue-primary);display:flex;align-items:center;justify-content:center;color:white"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div></div></div><div style="font-size:8px;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);font-weight:500;margin-bottom:10px">Happy Interior</div><div style="display:flex;flex-direction:column;gap:8px"><div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px"><span style="font-family:var(--font-display);font-size:12px;font-weight:700">Image Comprrss</span><span style="font-size:7px;font-weight:700;color:var(--green);background:var(--green-bg);padding:2px 6px;border-radius:4px;text-transform:uppercase">Active</span></div><div style="font-size:8px;color:var(--muted);margin-bottom:6px">Hyderabad · Residential · 5BHK+</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:2px;font-size:8px;margin-bottom:6px"><div><span style="color:var(--muted);font-size:7px;display:block;text-transform:uppercase;font-weight:600">Budget</span><span style="font-weight:700">&#8377;2.5L</span></div><div><span style="color:var(--muted);font-size:7px;display:block;text-transform:uppercase;font-weight:600">In</span><span style="font-weight:700;color:var(--green)">+&#8377;2.5Cr</span></div><div><span style="color:var(--muted);font-size:7px;display:block;text-transform:uppercase;font-weight:600">Out</span><span style="font-weight:700;color:var(--red)">-&#8377;2k</span></div><div><span style="color:var(--muted);font-size:7px;display:block;text-transform:uppercase;font-weight:600">Bal</span><span style="font-weight:700">+&#8377;2.5Cr</span></div></div><div style="height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div style="width:45%;height:100%;background:var(--blue-mid);border-radius:2px"></div></div><div style="text-align:right;font-size:8px;font-weight:700;color:var(--muted);margin-top:2px">45%</div></div><div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px;border-left:2px solid var(--amber)"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px"><span style="font-family:var(--font-display);font-size:12px;font-weight:700">Ramesh</span><div style="display:flex;gap:3px"><span style="font-size:7px;font-weight:700;color:var(--red);background:oklch(94% 0.04 25);padding:2px 6px;border-radius:4px;text-transform:uppercase">Due</span><span style="font-size:7px;font-weight:700;color:var(--amber);background:oklch(94% 0.04 60);padding:2px 6px;border-radius:4px;text-transform:uppercase">Late</span></div></div><div style="font-size:8px;color:var(--muted);margin-bottom:6px">Hyderabad · Commercial</div><div style="display:grid;grid-template-columns:repeat(4,1fr);gap:2px;font-size:8px;margin-bottom:6px"><div><span style="color:var(--muted);font-size:7px;display:block;text-transform:uppercase;font-weight:600">Budget</span><span style="font-weight:700">&#8377;2.5L</span></div><div><span style="color:var(--muted);font-size:7px;display:block;text-transform:uppercase;font-weight:600">In</span><span style="font-weight:700;color:var(--green)">+&#8377;5k</span></div><div><span style="color:var(--muted);font-size:7px;display:block;text-transform:uppercase;font-weight:600">Out</span><span style="font-weight:700;color:var(--red)">-&#8377;2.6L</span></div><div><span style="color:var(--muted);font-size:7px;display:block;text-transform:uppercase;font-weight:600">Bal</span><span style="font-weight:700;color:var(--red)">-&#8377;2.6L</span></div></div><div style="height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div style="width:44%;height:100%;background:var(--amber);border-radius:2px"></div></div></div><div style="border:1px solid var(--border);border-radius:10px;padding:10px 12px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px"><span style="font-family:var(--font-display);font-size:12px;font-weight:700">Lavanaya</span><span style="font-size:7px;font-weight:700;color:var(--green);background:var(--green-bg);padding:2px 6px;border-radius:4px;text-transform:uppercase">Active</span></div><div style="font-size:8px;color:var(--muted)">Hyderabad · Residential · 3BHK</div></div></div></div></div>
+    <div class="phone-mock side"><div class="phone-notch"></div><div class="phone-screen" style="background:white;display:flex;flex-direction:column;align-items:center;padding:50px 16px 16px"><div style="width:100%;background:white;border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:12px"><div style="font-size:8px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;color:var(--fg);margin-bottom:10px">Project Timeline</div><div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;align-items:center;gap:6px"><span style="font-size:8px;width:50px;color:var(--fg);font-weight:600">Demolition</span><div style="flex:1;height:8px;background:var(--green);border-radius:3px;opacity:0.8"></div><svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 5l2 2 4-4" stroke="var(--green)" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg></div><div style="display:flex;align-items:center;gap:6px"><span style="font-size:8px;width:50px;color:var(--fg);font-weight:600">Civil Work</span><div style="height:8px;background:var(--border);border-radius:3px;flex:1;overflow:hidden"><div style="width:60%;height:100%;background:var(--blue-primary);border-radius:3px"></div></div></div><div style="display:flex;align-items:center;gap:6px"><span style="font-size:8px;width:50px;color:var(--fg);font-weight:600">Electrical</span><div style="height:8px;background:var(--border);border-radius:3px;flex:1;overflow:hidden"><div style="width:25%;height:100%;background:var(--amber);border-radius:3px"></div></div></div><div style="display:flex;align-items:center;gap:6px"><span style="font-size:8px;width:50px;color:var(--fg);font-weight:600">Carpentry</span><div style="flex:1;height:8px;background:var(--border);border-radius:3px"></div></div></div></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%"><div style="background:var(--green-bg);border-radius:10px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:var(--green)">70%</div><div style="font-size:7px;font-weight:600;color:var(--green);text-transform:uppercase">Overall</div></div><div style="background:var(--lavender-light);border-radius:10px;padding:10px;text-align:center"><div style="font-size:18px;font-weight:800;color:var(--blue-primary)">8</div><div style="font-size:7px;font-weight:600;color:var(--blue-primary);text-transform:uppercase">Labour</div></div></div><div style="width:100%;margin-top:12px;border:1px solid var(--border);border-radius:10px;padding:10px 12px"><div style="font-size:8px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Daily Report</div><div style="display:flex;gap:6px"><div style="width:36px;height:28px;border-radius:5px;background:oklch(90% 0.04 150)"></div><div style="width:36px;height:28px;border-radius:5px;background:oklch(90% 0.04 70)"></div><div style="width:36px;height:28px;border-radius:5px;background:oklch(90% 0.04 265)"></div></div></div></div></div>
+  </div>
+</div></section>
+
+<section class="trust"><div class="trust-inner">
+  <div class="trust-text">
+    <h2>Trusted by 500+ Interior Design Studios Across India</h2>
+    <p>Interior design firms, studio owners, contractors, and design-build companies across India trust InteriorOS to replace WhatsApp, Excel, and Tally with one connected platform — from Hyderabad to Mumbai, Bangalore to Delhi.</p>
+  </div>
+  <div class="trust-logos">
+    <div class="trust-logo-card"><div class="logo-placeholder">Bhavya Interiors</div></div>
+    <div class="trust-logo-card"><div class="logo-placeholder">DFine Homes</div></div>
+    <div class="trust-logo-card"><div class="logo-placeholder">Cfolios Design</div></div>
+    <div class="trust-logo-card"><div class="logo-placeholder">Shivam Studios</div></div>
+    <div class="trust-logo-card"><div class="logo-placeholder">HEM Interiors</div></div>
+    <div class="trust-logo-card"><div class="logo-placeholder">Reidus Infra</div></div>
+    <div class="trust-logo-card"><div class="logo-placeholder">Your Studio</div></div>
+    <div class="trust-logo-card"><div class="logo-placeholder">+ 500 more</div></div>
+  </div>
+</div></section>
+
+<section class="pain" id="solutions"><div class="pain-inner">
+  <div class="section-eyebrow">The Problem</div>
+  <h2 class="section-headline">Every interior designer running a studio faces this chaos</h2>
+  <p class="section-sub">You're running 5 projects across 3 cities. Your supervisor sends updates on WhatsApp. Your accountant tracks payments in Tally. Material orders live in Excel. Nothing talks to anything.</p>
+  <div class="pain-grid">
+    <div class="pain-card"><div class="pain-card-img" style="background:linear-gradient(135deg, oklch(94% 0.03 25), oklch(97% 0.015 275))"><svg width="120" height="80" viewBox="0 0 120 80" fill="none" opacity="0.25"><rect x="10" y="10" width="100" height="60" rx="8" stroke="oklch(50% 0.02 265)" stroke-width="1.5"/><circle cx="85" cy="25" r="8" stroke="oklch(50% 0.02 265)" stroke-width="1.2"/><line x1="20" y1="35" x2="70" y2="35" stroke="oklch(50% 0.02 265)" stroke-width="1"/><line x1="20" y1="42" x2="55" y2="42" stroke="oklch(50% 0.02 265)" stroke-width="1"/><line x1="20" y1="49" x2="60" y2="49" stroke="oklch(50% 0.02 265)" stroke-width="1"/><line x1="20" y1="56" x2="45" y2="56" stroke="oklch(50% 0.02 265)" stroke-width="1"/></svg><span class="img-label">Designer checking WhatsApp for site updates</span></div><div class="pain-card-body"><div class="pain-icon" style="background:oklch(94% 0.04 25)"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><path d="M11 3v8l5 3" stroke="var(--red)" stroke-width="2" stroke-linecap="round"/><circle cx="11" cy="11" r="8" stroke="var(--red)" stroke-width="2"/></svg></div><h3>WhatsApp is not a project tool</h3><p>Updates buried in group chats, site photos lost in media folders, no search, no accountability. Critical decisions vanish in scroll.</p></div></div>
+    <div class="pain-card"><div class="pain-card-img" style="background:linear-gradient(135deg, oklch(94% 0.03 60), oklch(97% 0.015 275))"><svg width="120" height="80" viewBox="0 0 120 80" fill="none" opacity="0.25"><rect x="8" y="8" width="104" height="64" rx="4" stroke="oklch(50% 0.02 265)" stroke-width="1.5"/><line x1="8" y1="24" x2="112" y2="24" stroke="oklch(50% 0.02 265)" stroke-width="1"/><line x1="40" y1="8" x2="40" y2="72" stroke="oklch(50% 0.02 265)" stroke-width="0.8"/><line x1="72" y1="8" x2="72" y2="72" stroke="oklch(50% 0.02 265)" stroke-width="0.8"/><text x="22" y="18" font-size="6" fill="oklch(50% 0.02 265)" font-family="system-ui" font-weight="600">Budget</text><text x="52" y="18" font-size="6" fill="oklch(50% 0.02 265)" font-family="system-ui" font-weight="600">Actual</text><text x="82" y="18" font-size="6" fill="oklch(50% 0.02 265)" font-family="system-ui" font-weight="600">Diff</text></svg><span class="img-label">Studio owner struggling with Excel budgets</span></div><div class="pain-card-body"><div class="pain-icon" style="background:oklch(94% 0.04 60)"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><rect x="3" y="3" width="16" height="16" rx="2" stroke="var(--amber)" stroke-width="2"/><path d="M3 8h16M8 8v11" stroke="var(--amber)" stroke-width="1.5"/></svg></div><h3>Excel doesn't sync with reality</h3><p>Your budget spreadsheet says &#8377;18L. Your site spent &#8377;22L. You find out a month later. By then, the margin is gone.</p></div></div>
+    <div class="pain-card"><div class="pain-card-img" style="background:linear-gradient(135deg, oklch(94% 0.03 275), oklch(97% 0.015 275))"><svg width="120" height="80" viewBox="0 0 120 80" fill="none" opacity="0.25"><circle cx="30" cy="30" r="12" stroke="oklch(50% 0.02 265)" stroke-width="1.5"/><circle cx="60" cy="30" r="12" stroke="oklch(50% 0.02 265)" stroke-width="1.5"/><circle cx="90" cy="30" r="12" stroke="oklch(50% 0.02 265)" stroke-width="1.5"/><path d="M15 55a15 15 0 0130 0M45 55a15 15 0 0130 0M75 55a15 15 0 0130 0" stroke="oklch(50% 0.02 265)" stroke-width="1.2"/></svg><span class="img-label">Designer calling supervisors for updates</span></div><div class="pain-card-body"><div class="pain-icon" style="background:oklch(94% 0.04 275)"><svg width="22" height="22" viewBox="0 0 22 22" fill="none"><circle cx="7" cy="8" r="3" stroke="var(--lavender)" stroke-width="2"/><circle cx="15" cy="8" r="3" stroke="var(--lavender)" stroke-width="2"/><path d="M2 19a5 5 0 0110 0M10 19a5 5 0 0110 0" stroke="var(--lavender)" stroke-width="2"/></svg></div><h3>No visibility across sites</h3><p>You call each supervisor individually for updates. Labour attendance is a paper register. Material approvals happen verbally.</p></div></div>
+  </div>
+</div></section>
+
+<section class="feature-section" id="features"><div class="feature-inner">
+  <div class="feature-text"><span class="feature-num">01</span><h3 class="feature-title">Run every site without losing your mind</h3><p class="feature-desc">Project timelines with milestones, daily progress reports with photos, labour attendance, and task assignments — one thread per project.</p><ul class="feature-bullets"><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Gantt timelines with milestones — see the full picture</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>DPR with photos — supervisor fills, you review from anywhere</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>GPS-based labour attendance — no paper registers</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Assign tasks to team members with deadlines & tracking</li></ul></div>
+  <div class="feature-visual"><div class="app-card"><div class="app-card-header"><span class="app-card-title">Project Timeline</span><span class="app-card-badge" style="background:var(--green-bg);color:var(--green)">Live</span></div><div style="display:flex;flex-direction:column;gap:10px"><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;width:80px;font-weight:600">Demolition</span><div style="flex:1;height:10px;background:var(--green);border-radius:4px;opacity:0.8"></div><svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7l3 3 5-5" stroke="var(--green)" stroke-width="2" stroke-linecap="round" fill="none"/></svg></div><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;width:80px;font-weight:600">Civil Work</span><div style="flex:1;height:10px;background:var(--border);border-radius:4px;overflow:hidden"><div style="width:60%;height:100%;background:var(--blue-primary);border-radius:4px"></div></div><span style="font-size:11px;font-weight:700;color:var(--muted)">60%</span></div><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;width:80px;font-weight:600">Electrical</span><div style="flex:1;height:10px;background:var(--border);border-radius:4px;overflow:hidden"><div style="width:25%;height:100%;background:var(--amber);border-radius:4px"></div></div><span style="font-size:11px;font-weight:700;color:var(--muted)">25%</span></div><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;width:80px;font-weight:600">Carpentry</span><div style="flex:1;height:10px;background:var(--border);border-radius:4px"></div></div><div style="display:flex;align-items:center;gap:8px"><span style="font-size:12px;width:80px;font-weight:600">Finishing</span><div style="flex:1;height:10px;background:var(--border);border-radius:4px"></div></div></div><div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);display:flex;gap:12px;align-items:center"><div style="text-align:center"><div style="font-size:20px;font-weight:800;color:var(--blue-primary)">70%</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:600">Overall</div></div><div style="width:1px;height:32px;background:var(--border)"></div><div style="text-align:center"><div style="font-size:20px;font-weight:800;color:var(--green)">8</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:600">Labour</div></div><div style="width:1px;height:32px;background:var(--border)"></div><div style="text-align:center"><div style="font-size:20px;font-weight:800;color:var(--amber)">12</div><div style="font-size:9px;color:var(--muted);text-transform:uppercase;font-weight:600">Photos</div></div></div></div></div>
+</div></section>
+
+<section class="feature-section alt"><div class="feature-inner reverse">
+  <div class="feature-text"><span class="feature-num">02</span><h3 class="feature-title">Money, finally clear</h3><p class="feature-desc">Payment in/out tracking per project, expense submissions with approval workflows, and a full studio ledger across all projects. Share payment summary PDFs with clients in one tap.</p><ul class="feature-bullets"><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Track every &#8377; — in, out, balance per project in real time</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Supervisors submit expenses with photos — you approve</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Full studio ledger — all projects, one view</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Export payment summary PDFs for clients</li></ul></div>
+  <div class="feature-visual"><div class="app-card"><div class="app-card-header"><span class="app-card-title">Studio Ledger</span><span class="app-card-badge" style="background:var(--lavender-light);color:var(--blue-primary)">All Projects</span></div><div style="display:flex;justify-content:space-between;padding:16px 0;border-bottom:1px solid var(--border)"><div style="text-align:center"><div style="font-size:22px;font-weight:800;color:var(--fg)">&#8377;12.4L</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:600">Balance</div></div><div style="text-align:center"><div style="font-size:16px;font-weight:700;color:var(--green)">+&#8377;18.2L</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:600">Total In</div></div><div style="text-align:center"><div style="font-size:16px;font-weight:700;color:var(--red)">-&#8377;5.8L</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase;font-weight:600">Total Out</div></div></div><div class="ledger-row"><div><div class="ledger-name">Ramesh — 2nd Installment</div><div class="ledger-desc">Today · Payment In</div></div><div class="ledger-amount ledger-in">+&#8377;2,50,000</div></div><div class="ledger-row"><div><div class="ledger-name">Carpenter Wages</div><div class="ledger-desc">Yesterday · Lavanaya Project</div></div><div class="ledger-amount ledger-out">-&#8377;18,000</div></div><div class="ledger-row"><div><div class="ledger-name">Asian Paints</div><div class="ledger-desc">28 Apr · Material Purchase</div></div><div class="ledger-amount ledger-out">-&#8377;42,500</div></div><div class="ledger-row"><div><div class="ledger-name">Lavanaya — Advance</div><div class="ledger-desc">27 Apr · Payment In</div></div><div class="ledger-amount ledger-in">+&#8377;5,00,000</div></div></div></div>
+</div></section>
+
+<section class="feature-section"><div class="feature-inner">
+  <div class="feature-text"><span class="feature-num">03</span><h3 class="feature-title">Designer-only tools, built in</h3><p class="feature-desc">No generic project app has this. Laminate library with room-by-room selection, whiteboard for sketches, material requests with photo approvals, and a vendor directory with running balances.</p><ul class="feature-bullets"><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Laminate library — browse, shortlist, assign per room</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Whiteboard for quick sketches during client meetings</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Material requests with photos & approval workflow</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Vendor directory with running balances</li></ul></div>
+  <div class="feature-visual"><div class="tool-grid"><div class="tool-cell"><div class="tool-cell-label">Laminates</div><div class="swatch-grid"><div class="swatch" style="background:oklch(65% 0.08 60)"></div><div class="swatch" style="background:oklch(42% 0.06 50)"></div><div class="swatch" style="background:oklch(78% 0.06 75)"></div><div class="swatch" style="background:oklch(28% 0.04 40)"></div><div class="swatch" style="background:oklch(55% 0.06 55)"></div><div class="swatch" style="background:oklch(72% 0.05 65)"></div></div><div style="font-size:10px;color:var(--muted);margin-top:8px;font-weight:500">Master Bedroom</div></div><div class="tool-cell"><div class="tool-cell-label">Whiteboard</div><svg viewBox="0 0 120 100" fill="none" style="width:100%"><rect x="10" y="10" width="55" height="40" rx="2" stroke="var(--blue-mid)" stroke-width="1"/><text x="25" y="33" font-size="7" fill="var(--muted)" font-family="system-ui">LIVING</text><rect x="68" y="10" width="40" height="40" rx="2" stroke="var(--blue-mid)" stroke-width="1"/><text x="77" y="33" font-size="7" fill="var(--muted)" font-family="system-ui">BED</text><rect x="10" y="55" width="55" height="35" rx="2" stroke="var(--blue-mid)" stroke-width="1"/><text x="18" y="76" font-size="7" fill="var(--muted)" font-family="system-ui">KITCHEN</text></svg></div><div class="tool-cell"><div class="tool-cell-label">Materials</div><div style="display:flex;flex-direction:column;gap:6px"><div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:10px;font-weight:600">Italian Marble</span><span style="font-size:8px;font-weight:700;color:var(--green);background:var(--green-bg);padding:1px 5px;border-radius:3px">Done</span></div><div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:10px;font-weight:600">Hettich Hinges</span><span style="font-size:8px;font-weight:700;color:var(--amber);background:oklch(94% 0.04 60);padding:1px 5px;border-radius:3px">Pending</span></div><div style="display:flex;align-items:center;justify-content:space-between"><span style="font-size:10px;font-weight:600">Asian Paints</span><span style="font-size:8px;font-weight:700;color:var(--green);background:var(--green-bg);padding:1px 5px;border-radius:3px">Done</span></div></div></div><div class="tool-cell"><div class="tool-cell-label">Vendors</div><div style="display:flex;flex-direction:column;gap:5px"><div class="vendor-row"><div class="vendor-avatar" style="background:oklch(55% 0.2 25)">RK</div><span class="vendor-name">Raju</span><span class="vendor-bal" style="color:var(--red)">-&#8377;45k</span></div><div class="vendor-row"><div class="vendor-avatar" style="background:var(--green)">SP</div><span class="vendor-name">Sharma</span><span class="vendor-bal" style="color:var(--green)">&#8377;0</span></div><div class="vendor-row"><div class="vendor-avatar" style="background:var(--blue-primary)">MK</div><span class="vendor-name">Mohan</span><span class="vendor-bal" style="color:var(--red)">-&#8377;12k</span></div></div></div></div></div>
+</div></section>
+
+<section class="feature-section alt"><div class="feature-inner reverse">
+  <div class="feature-text"><span class="feature-num">04</span><h3 class="feature-title">Win more projects</h3><p class="feature-desc">Lead capture with follow-up reminders, appointment scheduling, quotation drafting, invoice generation, and notifications when payments are due — all in one place.</p><ul class="feature-bullets"><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Capture leads — auto follow-up reminders so nobody slips</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Schedule appointments with calendar reminders</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Draft quotations & generate invoices in minutes</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Payment due notifications — never chase manually</li></ul></div>
+  <div class="feature-visual"><div class="app-card"><div class="app-card-header"><span class="app-card-title">CRM Pipeline</span><span class="app-card-badge" style="background:oklch(94% 0.04 60);color:var(--amber)">4 Active</span></div><div style="display:flex;flex-direction:column;gap:10px"><div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;border-left:3px solid var(--green)"><div style="width:32px;height:32px;border-radius:8px;background:var(--green-bg);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--green)">SP</div><div style="flex:1"><div style="font-size:13px;font-weight:600">Suresh Patel</div><div style="font-size:10px;color:var(--muted)">4BHK · Banjara Hills</div></div><div style="font-size:9px;font-weight:700;color:var(--green);background:var(--green-bg);padding:3px 8px;border-radius:5px;text-transform:uppercase">Quote Sent</div></div><div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;border-left:3px solid var(--amber)"><div style="width:32px;height:32px;border-radius:8px;background:oklch(94% 0.04 60);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--amber)">AK</div><div style="flex:1"><div style="font-size:13px;font-weight:600">Anita Kumar</div><div style="font-size:10px;color:var(--muted)">3BHK · Jubilee Hills</div></div><div style="font-size:9px;font-weight:700;color:var(--amber);background:oklch(94% 0.04 60);padding:3px 8px;border-radius:5px;text-transform:uppercase">Follow Up</div></div><div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:10px;border-left:3px solid var(--blue-mid)"><div style="width:32px;height:32px;border-radius:8px;background:var(--lavender-light);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--blue-primary)">RJ</div><div style="flex:1"><div style="font-size:13px;font-weight:600">Raj Joshi</div><div style="font-size:10px;color:var(--muted)">Office · Gachibowli</div></div><div style="font-size:9px;font-weight:700;color:var(--blue-primary);background:var(--lavender-light);padding:3px 8px;border-radius:5px;text-transform:uppercase">New Lead</div></div></div><div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);font-size:11px;color:var(--muted)">Next: <strong style="color:var(--fg)">Anita — call tomorrow 2pm</strong></div></div></div>
+</div></section>
+
+<section class="feature-section"><div class="feature-inner">
+  <div class="feature-text"><span class="feature-num">05</span><h3 class="feature-title">Your studio, your team, your rules</h3><p class="feature-desc">Add multiple supervisors, assign them to projects, control what they see. Team members can join other organizations too. Multi-level approvals ensure nothing gets spent without your sign-off.</p><ul class="feature-bullets"><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Add supervisors, assign to specific projects</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Role-based access — owners, managers, field staff</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Join multiple organizations with one account</li><li><span class="check"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Multi-level approvals — every expense needs sign-off</li></ul></div>
+  <div class="feature-visual"><div class="app-card"><div class="app-card-header"><span class="app-card-title">Team</span><span class="app-card-badge" style="background:var(--lavender-light);color:var(--blue-primary)">Happy Interior</span></div><div style="display:flex;flex-direction:column;gap:10px"><div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)"><div style="width:36px;height:36px;border-radius:10px;background:var(--blue-primary);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:white">RP</div><div style="flex:1"><div style="font-size:13px;font-weight:600">Ramesh P.</div><div style="font-size:10px;color:var(--muted)">Studio Owner</div></div><div style="font-size:9px;font-weight:700;color:var(--blue-primary);background:var(--lavender-light);padding:3px 8px;border-radius:5px">Admin</div></div><div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)"><div style="width:36px;height:36px;border-radius:10px;background:var(--green);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:white">VK</div><div style="flex:1"><div style="font-size:13px;font-weight:600">Vijay K.</div><div style="font-size:10px;color:var(--muted)">Site Supervisor · 3 projects</div></div><div style="font-size:9px;font-weight:700;color:var(--green);background:var(--green-bg);padding:3px 8px;border-radius:5px">Active</div></div><div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)"><div style="width:36px;height:36px;border-radius:10px;background:var(--amber);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:white">SP</div><div style="flex:1"><div style="font-size:13px;font-weight:600">Sonia P.</div><div style="font-size:10px;color:var(--muted)">Accounts · All projects</div></div><div style="font-size:9px;font-weight:700;color:var(--green);background:var(--green-bg);padding:3px 8px;border-radius:5px">Active</div></div><div style="display:flex;align-items:center;gap:10px;padding:8px 0"><div style="width:36px;height:36px;border-radius:10px;background:var(--lavender);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:white">AJ</div><div style="flex:1"><div style="font-size:13px;font-weight:600">Arun J.</div><div style="font-size:10px;color:var(--muted)">Designer · 2 projects</div></div><div style="font-size:9px;font-weight:700;color:var(--green);background:var(--green-bg);padding:3px 8px;border-radius:5px">Active</div></div></div><div style="margin-top:14px;padding:10px;background:var(--lavender-wash);border-radius:10px;display:flex;align-items:center;gap:8px"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="3" stroke="var(--blue-mid)" stroke-width="1.5"/><path d="M5 8h6M8 5v6" stroke="var(--blue-mid)" stroke-width="1.5" stroke-linecap="round"/></svg><span style="font-size:11px;color:var(--blue-mid);font-weight:600">Join another organization</span></div></div></div>
+</div></section>
+
+<section class="diff"><div class="diff-inner">
+  <div class="section-eyebrow">Why InteriorOS</div>
+  <h2 class="section-headline">What makes InteriorOS different from generic project tools</h2>
+  <div class="diff-grid">
+    <div class="diff-card"><div class="diff-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2l3 6h6l-5 4 2 6-6-4-6 4 2-6-5-4h6z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg></div><h3>Built for interior designers, not IT</h3><p>Laminate library, whiteboard, material approvals with photos — features no generic PM tool will ever ship.</p></div>
+    <div class="diff-card"><div class="diff-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="2" y="4" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M2 8h16" stroke="currentColor" stroke-width="1.2"/><circle cx="10" cy="13" r="2" fill="currentColor"/></svg></div><h3>Finance connected to operations</h3><p>A material delivery at site updates inventory, triggers bill matching, and reflects in project P&L automatically.</p></div>
+    <div class="diff-card"><div class="diff-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M10 6v4l3 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></div><h3>Real-time, not end-of-month</h3><p>Budget overruns surface as they develop, not after the damage is done.</p></div>
+    <div class="diff-card"><div class="diff-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M4 10l4 4 8-8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h3>Multi-level approvals</h3><p>Every purchase request and site expense goes through a defined chain. No bypassing. No verbal authorizations.</p></div>
+    <div class="diff-card"><div class="diff-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M3 7h14M7 7v10" stroke="currentColor" stroke-width="1.2"/></svg></div><h3>Simple as WhatsApp to use</h3><p>Your carpenter supervisor doesn't need training. If they can use WhatsApp, they can fill a DPR.</p></div>
+    <div class="diff-card"><div class="diff-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="7" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/><circle cx="13" cy="8" r="3" stroke="currentColor" stroke-width="1.5"/><path d="M2 17a5 5 0 0110 0M8 17a5 5 0 0110 0" stroke="currentColor" stroke-width="1.5"/></svg></div><h3>Multi-site visibility</h3><p>See project health, attendance, procurement, and financials across every active site from one dashboard.</p></div>
+  </div>
+</div></section>
+
+<section class="testimonials" id="testimonials"><div class="test-inner">
+  <div class="section-eyebrow">Testimonials</div>
+  <h2 class="section-headline" style="max-width:600px;margin-left:auto;margin-right:auto">What interior design studios say about InteriorOS</h2>
+  <div class="test-grid">
+    <div class="test-card"><div class="test-stars"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg></div><p class="test-quote">"We used to lose track of material costs across 4 sites. InteriorOS gave us one dashboard where every rupee is visible. Budget overruns dropped by 15% in the first quarter."</p><div class="test-author"><div class="test-avatar" style="background:var(--blue-primary)">AA</div><div><div class="test-name">Ali Afzal</div><div class="test-role">DFine Homes, Hyderabad</div></div></div></div>
+    <div class="test-card"><div class="test-stars"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg></div><p class="test-quote">"The laminate library alone saved us hours per project. My designers pick laminates per room, and clients see the selection instantly. No more 50 WhatsApp photos."</p><div class="test-author"><div class="test-avatar" style="background:var(--green)">VK</div><div><div class="test-name">Vikram K.</div><div class="test-role">Cfolios Design, Bangalore</div></div></div></div>
+    <div class="test-card"><div class="test-stars"><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg><svg width="16" height="16" viewBox="0 0 16 16"><path d="M8 1l2 4h4.5l-3.5 3 1.5 4.5L8 9.5 3.5 12.5 5 8 1.5 5H6z" fill="currentColor"/></svg></div><p class="test-quote">"My supervisors now submit DPRs with photos every evening. I review from home. No more calling 3 people for updates. InteriorOS made delegation actually work."</p><div class="test-author"><div class="test-avatar" style="background:var(--amber)">MP</div><div><div class="test-name">Manish P.</div><div class="test-role">Reidus Infra, Mumbai</div></div></div></div>
+  </div>
+</div></section>
+
+<section class="faq" id="faq"><div class="faq-inner">
+  <div class="section-eyebrow">FAQs</div>
+  <h2 class="section-headline">Frequently asked questions</h2>
+  <div class="faq-item">
+    <div class="faq-q" onclick="this.parentElement.classList.toggle('open')"><h3>What is InteriorOS?</h3><div class="faq-icon"><svg viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div></div>
+    <div class="faq-a"><p>InteriorOS is a project management platform built specifically for interior design studios. It connects your site teams, supervisors, vendors, and finance on one platform — replacing WhatsApp groups, Excel sheets, and Tally with a single system designed for how interior designers actually work.</p></div>
+  </div>
+  <div class="faq-item">
+    <div class="faq-q" onclick="this.parentElement.classList.toggle('open')"><h3>How is InteriorOS different from generic project management tools?</h3><div class="faq-icon"><svg viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div></div>
+    <div class="faq-a"><p>Unlike Asana, Monday, or Trello, InteriorOS includes interior-specific features: a laminate library with room-by-room selection, whiteboard for sketches, material requests with photo approvals, vendor directory with running balances, and a full financial ledger with GST-ready invoices. Generic tools will never ship these.</p></div>
+  </div>
+  <div class="faq-item">
+    <div class="faq-q" onclick="this.parentElement.classList.toggle('open')"><h3>Does InteriorOS work on mobile and desktop?</h3><div class="faq-icon"><svg viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div></div>
+    <div class="faq-a"><p>Yes. InteriorOS is available on iOS (App Store), Android (Play Store), and as a web app accessible from any browser. Site supervisors typically use the mobile app for DPRs, attendance, and photos, while studio owners use the web app for dashboards, financials, and planning.</p></div>
+  </div>
+  <div class="faq-item">
+    <div class="faq-q" onclick="this.parentElement.classList.toggle('open')"><h3>Can my team members join multiple organizations?</h3><div class="faq-icon"><svg viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div></div>
+    <div class="faq-a"><p>Yes. A supervisor or designer can belong to multiple studios with one account. They simply switch between organizations from the app. Each organization's data is completely separate and secure.</p></div>
+  </div>
+  <div class="faq-item">
+    <div class="faq-q" onclick="this.parentElement.classList.toggle('open')"><h3>How does the financial tracking work?</h3><div class="faq-icon"><svg viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div></div>
+    <div class="faq-a"><p>Every payment in/out is tracked per project in real time. Supervisors submit expenses with photos; you approve before any money is committed. The studio-wide ledger gives you a single view of all projects' finances. You can export payment summary PDFs for clients with one tap.</p></div>
+  </div>
+  <div class="faq-item">
+    <div class="faq-q" onclick="this.parentElement.classList.toggle('open')"><h3>Is there a free trial?</h3><div class="faq-icon"><svg viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></div></div>
+    <div class="faq-a"><p>Yes. Start free — no credit card required. Set up your studio in under 5 minutes, invite your team, and start managing your first project immediately. Upgrade when you're ready.</p></div>
+  </div>
+</div></section>
+
+<section class="download"><div class="download-inner">
+  <div class="download-layout">
+    <div class="download-text">
+      <div class="section-eyebrow">Get the App</div>
+      <h2 class="section-headline">Interior Project & Field Management App for Studio Teams</h2>
+      <p class="download-desc">Manage site work, track daily progress, capture photos, and update tasks from anywhere with InteriorOS. Designed for interior designers, site supervisors, and studio teams — the app keeps every project on track with real-time updates synced across mobile, tablet, and desktop. Your supervisors fill DPRs on-site, you review from home. Material approvals, labour attendance, payment tracking — all in your pocket.</p>
+      <ul class="download-features">
+        <li><span class="dl-icon"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Mobile app for supervisors — DPR, photos, attendance in 2 taps</li>
+        <li><span class="dl-icon"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Web dashboard for owners — financials, planning, reporting</li>
+        <li><span class="dl-icon"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Works offline — syncs when back online at the site</li>
+        <li><span class="dl-icon"><svg viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>Push notifications for approvals, payments due, and milestones</li>
+      </ul>
+      <div class="download-btns">
+        <a href="#" class="download-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M17.05 12.54c-.03-.07-.6-1.2-.6-2.44 0-1.94 1.27-2.85 1.33-2.9-.72-1.06-1.85-1.2-2.25-1.22-.96-.1-1.87.56-2.36.56-.49 0-1.24-.55-2.04-.53-.1 0-2.1.07-3.16 1.63-.64 1.02-.97 2.37-.84 4.07.14 1.68.91 4.62 2.17 6.11.58.69 1.27 1.46 2.18 1.43.87-.03 1.2-.56 2.25-.56 1.05 0 1.35.56 2.27.54.94-.02 1.52-.7 2.1-1.38.4-.5.72-1.05.95-1.63-.02-.01-1.83-.71-1.85-2.82z" fill="currentColor"/></svg>iOS App</a>
+        <a href="#" class="download-btn"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1l3 5.5H13L9.5 10l1.5 5L8 12.5 4.5 15 6 10 2.5 6.5H5z" fill="currentColor"/></svg>Android App</a>
+        <a href="#" class="download-btn outline"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="3" width="12" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 6h12" stroke="currentColor" stroke-width="1"/><path d="M6 14h4M8 12v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>Web App</a>
+      </div>
+    </div>
+    <div class="download-visual">
+      <div class="download-glow"></div>
+      <div class="download-phone">
+        <div class="phone-notch"></div>
+        <div class="download-phone-screen">
+          <div style="width:36px;height:36px;border-radius:10px;background:var(--blue-primary);display:flex;align-items:center;justify-content:center;color:white;font-family:var(--font-display);font-size:15px;font-weight:700">iO</div>
+          <div style="font-family:var(--font-display);font-size:18px;font-weight:700;letter-spacing:-0.02em;color:var(--fg)">InteriorOS</div>
+          <span class="download-phone-label">Studio · Projects · Ledger</span>
+          <div style="width:100%;margin-top:12px">
+            <div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;background:white">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-family:var(--font-display);font-size:12px;font-weight:700">Ramesh · 3BHK</span><span style="font-size:7px;font-weight:700;color:var(--green);background:var(--green-bg);padding:2px 6px;border-radius:4px;text-transform:uppercase">Active</span></div>
+              <div style="height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div style="width:65%;height:100%;background:var(--blue-mid);border-radius:2px"></div></div>
+              <div style="text-align:right;font-size:8px;font-weight:700;color:var(--muted);margin-top:2px">65%</div>
+            </div>
+            <div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:8px;background:white">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="font-family:var(--font-display);font-size:12px;font-weight:700">Lavanaya · 4BHK</span><span style="font-size:7px;font-weight:700;color:var(--amber);background:oklch(94% 0.04 60);padding:2px 6px;border-radius:4px;text-transform:uppercase">Late</span></div>
+              <div style="height:3px;background:var(--border);border-radius:2px;overflow:hidden"><div style="width:42%;height:100%;background:var(--amber);border-radius:2px"></div></div>
+              <div style="text-align:right;font-size:8px;font-weight:700;color:var(--muted);margin-top:2px">42%</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+              <div style="background:var(--green-bg);border-radius:8px;padding:8px;text-align:center"><div style="font-size:16px;font-weight:800;color:var(--green)">&#8377;12L</div><div style="font-size:7px;font-weight:600;color:var(--green);text-transform:uppercase">Balance</div></div>
+              <div style="background:var(--lavender-light);border-radius:8px;padding:8px;text-align:center"><div style="font-size:16px;font-weight:800;color:var(--blue-primary)">8</div><div style="font-size:7px;font-weight:600;color:var(--blue-primary);text-transform:uppercase">On Site</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<section class="cta-section" id="pricing"><div class="cta-inner">
+  <h2>You focus on designing spaces.<br>Let InteriorOS handle the chaos.</h2>
+  <p>Start free. No credit card required. Set up your studio in under 5 minutes.</p>
+  <div class="hero-actions"><a href="#" class="btn-primary">Start Free Trial <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></a><a href="#" class="btn-secondary">Book a Demo</a></div>
+</div></section>
+
+<footer class="footer" id="contact"><div class="footer-inner">
+  <div class="footer-brand"><div class="nav-logo">iO</div><p>InteriorOS is project management software built specifically for interior design studios in India. Replace WhatsApp, Excel, and Tally with one connected platform.</p></div>
+  <div><h4>Product</h4><ul><li><a href="#">Project Management</a></li><li><a href="#">Financial Tracking</a></li><li><a href="#">Designer Tools</a></li><li><a href="#">CRM & Pipeline</a></li><li><a href="#">Team Management</a></li></ul></div>
+  <div><h4>Company</h4><ul><li><a href="#">About</a></li><li><a href="#">Pricing</a></li><li><a href="#">Careers</a></li><li><a href="#">Contact</a></li></ul></div>
+  <div><h4>Resources</h4><ul><li><a href="#">Blog</a></li><li><a href="#">Help Center</a></li><li><a href="#">iOS App</a></li><li><a href="#">Android App</a></li><li><a href="#">Privacy Policy</a></li><li><a href="#">Terms</a></li></ul></div>
+</div><div class="footer-bottom"><span>&copy; 2026 InteriorOS. All rights reserved.</span><span>Made with care in Hyderabad</span></div></footer>
+
+</body>
+</html>

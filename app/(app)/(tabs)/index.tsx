@@ -1,24 +1,11 @@
 /**
- * Projects tab — InteriorOS visual port, wired to live Firestore data.
- *
- * Visual reference: `interior os/src/screens-projects.jsx::ProjectsScreen`.
- *
- * Layout:
- *   1. Eyebrow "{N} PROJECTS · {M} ACTIVE" + large "Projects" title
- *      + inline 36×36 square accent "+" button
- *   2. Hairline-bordered search field
- *   3. InteriorOS chip filters (All / Active / On Hold / Completed)
- *   4. Stack of hairline-bordered project cards (ProjectRow)
- *
- * Data: useProjects() — live Firestore subscription scoped to org.
- * Tapping a row routes to /(app)/projects/{id}.
+ * Projects tab — dashboard stats, search + filter, reference-style project cards.
  */
 import { router, Stack } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   FlatList,
   Pressable,
-  ScrollView,
   StyleSheet,
   TextInput,
   View,
@@ -26,22 +13,31 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 
-import { useProjects } from '@/src/features/projects/useProjects';
-import { useProjectTotals } from '@/src/features/transactions/useProjectTotals';
-import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
+import { useOrgMaterialRequests } from '@/src/features/materialRequests/useOrgMaterialRequests';
+import { ProjectListFilterSheet } from '@/src/features/projects/ProjectListFilterSheet';
+import { ProjectsSlimStatCards } from '@/src/features/projects/ProjectsSlimStatCards';
 import {
-  PROJECT_TYPOLOGIES,
   type Project,
   type ProjectStatus,
 } from '@/src/features/projects/types';
-import { ProjectRow, type ProjectRowStatus } from '@/src/ui/ProjectRow';
+import { useProjects } from '@/src/features/projects/useProjects';
+import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
+import { usePermissions } from '@/src/features/org/usePermissions';
+import { useOrgOpenTaskCount } from '@/src/features/tasks/useOrgOpenTaskCount';
+import { isTransactionCountedInTotals } from '@/src/features/transactions/types';
+import { useProjectTotals } from '@/src/features/transactions/useProjectTotals';
+import { KeyboardAvoidingShell } from '@/src/ui/KeyboardFormLayout';
+import { OrgSwitcherChip } from '@/src/ui/OrgSwitcherChip';
 import { PageEnter } from '@/src/ui/PageEnter';
+import { BlueprintLoader } from '@/src/ui/loaders';
+import {
+  ProjectRowSheet,
+  type ProjectRowSheetStatus,
+} from '@/src/ui/ProjectRowSheet';
 import { Screen } from '@/src/ui/Screen';
-import { Spinner } from '@/src/ui/Spinner';
 import { Text } from '@/src/ui/Text';
+import { TutorialEmptyState } from '@/src/ui/TutorialEmptyState';
 import { color, fontFamily, space } from '@/src/theme/tokens';
-
-type FilterKey = 'all' | ProjectStatus;
 
 function getAreaFromSiteAddress(siteAddress?: string): string | undefined {
   if (!siteAddress) return undefined;
@@ -49,270 +45,312 @@ function getAreaFromSiteAddress(siteAddress?: string): string | undefined {
   return firstChunk || undefined;
 }
 
-/** Map our internal status keys to the prototype's display labels. */
-const STATUS_DISPLAY: Record<ProjectStatus, ProjectRowStatus> = {
-  active:    'Active',
-  on_hold:   'On Hold',
+const STATUS_DISPLAY: Record<ProjectStatus, ProjectRowSheetStatus> = {
+  active: 'Active',
+  on_hold: 'On Hold',
   completed: 'Completed',
-  archived:  'Completed', // closest visual equivalent
+  archived: 'Completed',
 };
 
 export default function ProjectsTabScreen() {
   const { data: projects, loading } = useProjects();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? undefined;
-  const { totalsByProject } = useProjectTotals(orgId);
-  const [filter, setFilter] = useState<FilterKey>('all');
+  const { totalsByProject, transactions, loading: totalsLoading } = useProjectTotals(orgId);
+  const { can, role } = usePermissions();
+  const canCreateProject = can('project.create');
+
+  const { data: materialRequests, loading: materialsLoading } = useOrgMaterialRequests(orgId);
+  const { openCount, loading: tasksLoading } = useOrgOpenTaskCount(orgId);
+
+  const approvedTxnCount = useMemo(
+    () => transactions.filter((t) => isTransactionCountedInTotals(t)).length,
+    [transactions],
+  );
+  const pendingMaterialCount = useMemo(
+    () => materialRequests.filter((r) => r.status === 'pending').length,
+    [materialRequests],
+  );
+
+  const statsLoading = totalsLoading || materialsLoading || tasksLoading;
+
+  const canSeeProjectFinance =
+    role === 'superAdmin'
+    || role === 'admin'
+    || role === 'manager'
+    || role === 'accountant'
+    || role === 'viewer'
+    || role === 'siteEngineer';
+
   const [query, setQuery] = useState('');
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterDate, setFilterDate] = useState<Date | null>(null);
+  const [filterStatus, setFilterStatus] = useState<ProjectStatus | null>(null);
 
-  const counts = useMemo(() => {
-    const c: Record<FilterKey, number> = {
-      all: projects.length,
-      active: 0,
-      on_hold: 0,
-      completed: 0,
-      archived: 0,
-    };
-    for (const p of projects) c[p.status] = (c[p.status] ?? 0) + 1;
-    return c;
-  }, [projects]);
-
-  const filters: { key: FilterKey; label: string; count: number }[] = [
-    { key: 'all',       label: 'All',       count: counts.all },
-    { key: 'active',    label: 'Active',    count: counts.active },
-    { key: 'on_hold',   label: 'On Hold',   count: counts.on_hold },
-    { key: 'completed', label: 'Completed', count: counts.completed },
-  ];
+  const hasActiveFilters = filterDate !== null || filterStatus !== null;
 
   const filtered = useMemo(() => {
-    let list: Project[] =
-      filter === 'all' ? projects : projects.filter((p) => p.status === filter);
+    let list: Project[] = projects;
+
+    if (filterStatus) list = list.filter((p) => p.status === filterStatus);
+
+    if (filterDate) {
+      const fd = filterDate.getTime();
+      list = list.filter((p) => {
+        if (!p.endDate) return false;
+        const end = p.endDate.toDate();
+        end.setHours(0, 0, 0, 0);
+        return end.getTime() <= fd;
+      });
+    }
+
     if (query) {
       const q = query.toLowerCase();
       list = list.filter(
         (p) =>
-          p.name.toLowerCase().includes(q) ||
-          p.siteAddress.toLowerCase().includes(q),
+          p.name.toLowerCase().includes(q)
+          || p.siteAddress.toLowerCase().includes(q),
       );
     }
     return list;
-  }, [projects, filter, query]);
+  }, [projects, query, filterStatus, filterDate]);
 
   const handleAdd = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     router.push('/(app)/projects/new');
   };
 
-  const eyebrow = `${projects.length} PROJECT${projects.length === 1 ? '' : 'S'} · ${counts.active} ACTIVE`;
+  const clearFilters = useCallback(() => {
+    setFilterDate(null);
+    setFilterStatus(null);
+  }, []);
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <Screen padded={false} style={{ backgroundColor: color.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      {/* Header — eyebrow + title + bell + square + button */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <Text style={styles.eyebrow}>{eyebrow}</Text>
-          <Text style={styles.title}>Projects</Text>
-        </View>
-        <Pressable
-          onPress={() => router.push('/(app)/notifications' as never)}
-          style={({ pressed }) => [styles.bellBtn, pressed && { opacity: 0.6 }]}
-          accessibilityRole="button"
-          accessibilityLabel="Notifications"
-        >
-          <Ionicons name="notifications-outline" size={20} color={color.text} />
-        </Pressable>
-        <Pressable
-          onPress={handleAdd}
-          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
-          accessibilityRole="button"
-          accessibilityLabel="New project"
-        >
-          <Ionicons name="add" size={20} color="#fff" />
-        </Pressable>
-      </View>
-
-      {/* Search bar */}
-      <View style={styles.searchWrap}>
-        <View style={styles.searchField}>
-          <Ionicons name="search" size={16} color={color.textFaint} />
-          <TextInput
-            value={query}
-            onChangeText={setQuery}
-            placeholder="Search by name or address"
-            placeholderTextColor={color.textFaint}
-            style={styles.searchInput}
-            returnKeyType="search"
-          />
-          {query ? (
-            <Pressable onPress={() => setQuery('')} hitSlop={8}>
-              <Ionicons name="close" size={14} color={color.textFaint} />
-            </Pressable>
-          ) : null}
-        </View>
-      </View>
-
-      {/* Filter chips */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.chipsScroll}
-        contentContainerStyle={styles.chipsContent}
-      >
-        {filters.map((f) => {
-          const active = filter === f.key;
-          return (
+      <KeyboardAvoidingShell headerInset={0}>
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>Projects</Text>
+          <View style={styles.headerRight}>
+            <OrgSwitcherChip />
             <Pressable
-              key={f.key}
-              onPress={() => setFilter(f.key)}
-              style={[styles.chip, active && styles.chipActive]}
+              onPress={() => router.push('/(app)/notifications' as never)}
+              style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.6 }]}
+              accessibilityLabel="Notifications"
             >
-              <Text style={active ? [styles.chipLabel, styles.chipLabelActive] : styles.chipLabel}>
-                {f.label}
-              </Text>
-              <Text style={active ? [styles.chipCount, styles.chipCountActive] : styles.chipCount}>
-                {f.count}
-              </Text>
+              <Ionicons name="notifications-outline" size={18} color={color.text} />
             </Pressable>
-          );
-        })}
-      </ScrollView>
-
-      {/* List */}
-      {loading && projects.length === 0 ? (
-        <PageEnter viewKey="loading">
-          <View style={styles.empty}>
-            <Spinner size={28} />
-            <Text variant="meta" color="textMuted" style={{ marginTop: space.sm }}>
-              Loading projects…
-            </Text>
+            {canCreateProject ? (
+              <Pressable
+                onPress={handleAdd}
+                style={({ pressed }) => [
+                  styles.addBtn,
+                  pressed && { opacity: 0.85 },
+                ]}
+                accessibilityLabel="New project"
+              >
+                <Ionicons name="add" size={18} color="#fff" />
+              </Pressable>
+            ) : null}
           </View>
-        </PageEnter>
-      ) : filtered.length === 0 ? (
-        <View style={styles.empty}>
-          <Ionicons name="folder-open-outline" size={28} color={color.textFaint} />
-          <Text variant="body" color="textMuted" align="center" style={styles.emptyText}>
-            {query
-              ? 'No matches.'
-              : filter === 'all'
-              ? 'No projects yet.'
-              : `No ${filters.find((f) => f.key === filter)?.label.toLowerCase()} projects.`}
-          </Text>
-          {!query && filter === 'all' ? (
-            <Pressable onPress={handleAdd}>
-              <Text variant="metaStrong" color="primary">
-                Create your first project
-              </Text>
-            </Pressable>
-          ) : null}
         </View>
-      ) : (
-        <FlatList
-          data={filtered}
-          keyExtractor={(p) => p.id}
-          renderItem={({ item }) => {
-            const typologyLabel = item.typology
-              ? PROJECT_TYPOLOGIES.find((t) => t.key === item.typology)?.label
-              : undefined;
-            const typeLine =
-              typologyLabel && item.subType
-                ? `${typologyLabel} — ${item.subType}`
-                : typologyLabel ?? item.subType ?? undefined;
-            const area = getAreaFromSiteAddress(item.siteAddress);
-            const locationLine = [area, item.location].filter(Boolean).join(' · ') || item.siteAddress;
-            const totals = totalsByProject.get(item.id);
-            return (
-              <ProjectRow
-                name={item.name}
-                client={item.client}
-                location={locationLine}
-                type={typeLine}
-                budget={item.value ?? 0}
-                totalIn={totals?.income}
-                totalOut={totals?.expense}
-                progress={item.progress}
-                status={STATUS_DISPLAY[item.status]}
-                startDate={item.startDate ? item.startDate.toDate() : null}
-                endDate={item.endDate ? item.endDate.toDate() : null}
-                photoUri={item.photoUri ?? undefined}
-                onPress={() => router.push(`/(app)/projects/${item.id}` as never)}
-              />
-            );
-          }}
-          ItemSeparatorComponent={() => <View style={styles.cardGap} />}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContent}
+
+        <ProjectsSlimStatCards
+          approvedTxnCount={approvedTxnCount}
+          pendingMaterialCount={pendingMaterialCount}
+          openTaskCount={openCount}
+          loading={statsLoading}
         />
-      )}
+
+        {role === 'client' ? (
+          <Text variant="meta" color="textMuted" style={styles.roleHint}>
+            Transaction, material, and task counts reflect your org role. Clients do not see finance totals on project cards.
+          </Text>
+        ) : null}
+
+        <View style={styles.searchRow}>
+          <View style={styles.searchField}>
+            <Ionicons name="search" size={15} color={color.textFaint} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder="Search projects…"
+              placeholderTextColor={color.textFaint}
+              style={styles.searchInput}
+              returnKeyType="search"
+            />
+            {query ? (
+              <Pressable onPress={() => setQuery('')} hitSlop={8}>
+                <Ionicons name="close" size={14} color={color.textFaint} />
+              </Pressable>
+            ) : null}
+          </View>
+          <Pressable
+            onPress={() => setFilterOpen(true)}
+            style={({ pressed }) => [
+              styles.filterBtn,
+              hasActiveFilters && styles.filterBtnActive,
+              pressed && { opacity: 0.7 },
+            ]}
+            accessibilityLabel="Filter projects"
+          >
+            <Ionicons
+              name="options-outline"
+              size={16}
+              color={hasActiveFilters ? '#fff' : color.text}
+            />
+            <Text
+              style={hasActiveFilters ? [styles.filterBtnLabel, { color: '#fff' }] : styles.filterBtnLabel}
+              numberOfLines={1}
+            >
+              Filter
+            </Text>
+          </Pressable>
+        </View>
+
+        <View style={{ flex: 1, minHeight: 0 }}>
+          {loading && projects.length === 0 ? (
+            <PageEnter viewKey="loading">
+              <View style={styles.empty}>
+                <BlueprintLoader size={56} />
+                <Text variant="meta" color="textMuted" style={{ marginTop: space.sm }}>
+                  Loading projects…
+                </Text>
+              </View>
+            </PageEnter>
+          ) : filtered.length === 0 ? (
+            <TutorialEmptyState
+              pageKey="projects"
+              fallback={
+                <View style={styles.empty}>
+                  <Ionicons name="folder-open-outline" size={28} color={color.textFaint} />
+                  <Text variant="body" color="textMuted" align="center" style={styles.emptyText}>
+                    {query || hasActiveFilters ? 'No matching projects.' : 'No projects yet.'}
+                  </Text>
+                  {!query && !hasActiveFilters && canCreateProject ? (
+                    <Pressable onPress={handleAdd}>
+                      <Text variant="metaStrong" color="primary">
+                        Create your first project
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              }
+            />
+          ) : (
+            <FlatList
+              style={{ flex: 1 }}
+              data={filtered}
+              keyExtractor={(p) => p.id}
+              renderItem={({ item, index }) => {
+                const totals = canSeeProjectFinance ? totalsByProject.get(item.id) : undefined;
+                const area = getAreaFromSiteAddress(item.siteAddress);
+                const subtitleParts = [area, item.subType].filter(Boolean);
+                return (
+                  <ProjectRowSheet
+                    index={index + 1}
+                    name={item.name}
+                    photoUri={item.photoUri}
+                    subtitle={subtitleParts.length ? subtitleParts.join(' • ') : undefined}
+                    budget={item.value ?? 0}
+                    totalIn={totals?.income}
+                    totalOut={totals?.expense}
+                    progress={item.progress}
+                    status={STATUS_DISPLAY[item.status]}
+                    startDate={item.startDate ? item.startDate.toDate() : null}
+                    endDate={item.endDate ? item.endDate.toDate() : null}
+                    variant="reference"
+                    onPress={() => router.push(`/(app)/projects/${item.id}` as never)}
+                    onStatusPress={() => router.push(`/(app)/projects/${item.id}/overview` as never)}
+                  />
+                );
+              }}
+              ItemSeparatorComponent={() => <View style={styles.cardGap} />}
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.listContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+            />
+          )}
+        </View>
+      </KeyboardAvoidingShell>
+
+      <ProjectListFilterSheet
+        visible={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        filterStatus={filterStatus}
+        onStatusChange={setFilterStatus}
+        filterDate={filterDate}
+        onDateChange={setFilterDate}
+        onClear={clearFilters}
+      />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingTop: 0,
-    paddingBottom: 12,
-    backgroundColor: color.bgGrouped,
-    gap: 8,
+    paddingVertical: 8,
+    backgroundColor: color.bg,
   },
-  headerLeft: {
-    flex: 1,
-  },
-  eyebrow: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    color: color.textFaint,
-    letterSpacing: 1.8,
-  },
-  title: {
+  headerTitle: {
     fontFamily: fontFamily.sans,
-    fontSize: 26,
-    fontWeight: '600',
+    fontSize: 22,
+    fontWeight: '700',
     color: color.text,
-    letterSpacing: -0.6,
-    marginTop: 2,
+    letterSpacing: -0.4,
   },
-  bellBtn: {
-    width: 36,
-    height: 36,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  iconBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    backgroundColor: color.bg,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 0,
   },
   addBtn: {
-    width: 36,
-    height: 36,
+    width: 38,
+    height: 38,
+    borderRadius: 11,
     backgroundColor: color.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 0,
   },
-
-  // Search
-  searchWrap: {
+  roleHint: {
     paddingHorizontal: 16,
-    paddingBottom: 12,
-    backgroundColor: color.bgGrouped,
+    paddingBottom: 6,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 8,
   },
   searchField: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     height: 40,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
     backgroundColor: color.bg,
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     gap: 8,
-    borderRadius: 0,
   },
   searchInput: {
     flex: 1,
@@ -321,65 +359,35 @@ const styles = StyleSheet.create({
     paddingVertical: 0,
     fontFamily: fontFamily.sans,
   },
-
-  // Chips
-  chipsScroll: {
-    flexGrow: 0,
-    backgroundColor: color.bgGrouped,
-  },
-  chipsContent: {
-    paddingHorizontal: 16,
-    paddingBottom: 14,
-    gap: 6,
-    alignItems: 'center',
-  },
-  chip: {
+  filterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    height: 28,
+    height: 40,
     paddingHorizontal: 12,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: color.separator,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
     backgroundColor: color.bg,
   },
-  chipActive: {
-    borderColor: color.primary,
+  filterBtnActive: {
     backgroundColor: color.primary,
+    borderColor: color.primary,
   },
-  chipLabel: {
+  filterBtnLabel: {
     fontFamily: fontFamily.sans,
     fontSize: 13,
-    fontWeight: '500',
+    fontWeight: '600',
     color: color.text,
-    letterSpacing: -0.1,
   },
-  chipLabelActive: {
-    color: '#fff',
-  },
-  chipCount: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    color: color.text,
-    opacity: 0.55,
-    fontVariant: ['tabular-nums'],
-  },
-  chipCountActive: {
-    color: '#fff',
-    opacity: 0.85,
-  },
-
-  // List
   listContent: {
     paddingHorizontal: 16,
+    paddingTop: 8,
     paddingBottom: 30,
   },
   cardGap: {
-    height: 10,
+    height: 8,
   },
-
-  // Empty
   empty: {
     flex: 1,
     alignItems: 'center',

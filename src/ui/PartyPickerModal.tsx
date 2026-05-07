@@ -7,11 +7,14 @@
  *  - List: parties referenced by transactions/attendance/tasks on this project
  *  - Add-from-contacts: uses expo-contacts picker, then role sheet (all 9 types)
  */
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import * as Contacts from 'expo-contacts';
 import {
   Alert,
   FlatList,
+  InteractionManager,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -75,33 +78,54 @@ export function PartyPickerModal({
   }, [parties, search]);
 
   const pickFromContacts = async () => {
-    const { status } = await Contacts.requestPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow contacts access to add a new party.');
-      return;
-    }
-    const result = await Contacts.presentContactPickerAsync();
-    if (!result) return;
+    Keyboard.dismiss();
+    // Close our sheet first so iOS has a valid key window / presenter for
+    // CNContactPickerViewController (see add-transaction fix).
+    onClose();
+    try {
+      await new Promise<void>((resolve) => {
+        InteractionManager.runAfterInteractions(() => setTimeout(resolve, 500));
+      });
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow contacts access to add a new party.');
+        return;
+      }
+      const result = await Contacts.presentContactPickerAsync();
+      if (!result) return;
 
-    const contactName =
-      result.name ??
-      [result.firstName, result.lastName].filter(Boolean).join(' ') ??
-      '';
-    const rawPhone =
-      result.phoneNumbers?.[0]?.number ?? result.phoneNumbers?.[0]?.digits ?? '';
-    const phone = rawPhone.replace(/[^\d+]/g, '');
-    const email = result.emails?.[0]?.email;
+      const contactName =
+        (result.name ?? '').trim() ||
+        [result.firstName, result.lastName].filter(Boolean).join(' ').trim() ||
+        (result.company ?? '').trim() ||
+        '';
+      const rawEntry =
+        result.phoneNumbers?.find(
+          (p) => (p.number ?? p.digits ?? '').replace(/\D/g, '').length >= 10,
+        ) ?? result.phoneNumbers?.[0];
+      const rawPhone = rawEntry?.number ?? rawEntry?.digits ?? '';
+      const phoneDigits = rawPhone.replace(/\D/g, '');
+      const email = result.emails?.[0]?.email;
 
-    if (!contactName) {
-      Alert.alert('Missing name', 'That contact does not have a name.');
-      return;
-    }
-    if (!phone || phone.length < 10) {
-      Alert.alert('Missing phone', 'That contact does not have a valid phone number.');
-      return;
-    }
+      if (!contactName) {
+        Alert.alert(
+          'Missing name',
+          'That contact has no name or company. Add one in Contacts and try again.',
+        );
+        return;
+      }
+      if (phoneDigits.length < 10) {
+        Alert.alert('Missing phone', 'That contact does not have a valid phone number.');
+        return;
+      }
 
-    setPendingContact({ name: contactName, phone, email });
+      setPendingContact({ name: contactName, phone: phoneDigits, email });
+    } catch (e) {
+      Alert.alert(
+        'Contacts',
+        e instanceof Error ? e.message : 'Could not open the contact picker.',
+      );
+    }
   };
 
   const createFromContact = async (partyType: PartyType) => {
@@ -128,12 +152,30 @@ export function PartyPickerModal({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.overlay} onPress={onClose}>
-        <View />
-      </Pressable>
+    <Fragment>
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent
+      presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+      onRequestClose={onClose}
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
+      >
+        <Pressable
+          style={styles.overlay}
+          onPress={() => {
+            Keyboard.dismiss();
+            onClose();
+          }}
+        >
+          <View />
+        </Pressable>
 
-      <View style={styles.sheet}>
+        <View style={styles.sheet}>
         <View style={styles.handle} />
         <Text variant="bodyStrong" color="text" style={styles.title}>
           Assign to Party
@@ -147,7 +189,8 @@ export function PartyPickerModal({
             value={search}
             onChangeText={setSearch}
             style={styles.searchInput}
-            autoFocus
+            autoFocus={Platform.OS !== 'ios'}
+            returnKeyType="search"
           />
         </View>
 
@@ -171,6 +214,8 @@ export function PartyPickerModal({
         <FlatList
           data={filtered}
           keyExtractor={(p) => p.id}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           renderItem={({ item }) => (
             <Pressable
               onPress={() => {
@@ -221,64 +266,72 @@ export function PartyPickerModal({
             Add from Contacts
           </Text>
         </Pressable>
-      </View>
-
-      {/* Role picker for newly-added contact */}
-      <Modal
-        visible={!!pendingContact}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setPendingContact(null)}
-      >
-        <Pressable style={styles.overlay} onPress={() => !creating && setPendingContact(null)}>
-          <View />
-        </Pressable>
-        <View style={styles.sheet}>
-          <View style={styles.handle} />
-          <Text variant="bodyStrong" color="text" style={styles.title}>
-            Assign Role
-          </Text>
-          {pendingContact && (
-            <Text variant="caption" color="textMuted" style={styles.subtitle}>
-              {pendingContact.name} · {pendingContact.phone}
-            </Text>
-          )}
-
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.roleScroll}>
-            {PARTY_TYPE_GROUPS.map((group) => (
-              <View key={group.label} style={styles.roleGroup}>
-                <Text variant="caption" color="textMuted" style={styles.roleGroupLabel}>
-                  {group.label.toUpperCase()}
-                </Text>
-                {group.types.map((t) => (
-                  <Pressable
-                    key={t.key}
-                    disabled={creating}
-                    onPress={() => createFromContact(t.key)}
-                    style={({ pressed }) => [
-                      styles.roleOption,
-                      pressed && { opacity: 0.7 },
-                    ]}
-                  >
-                    <View style={styles.roleIconWrap}>
-                      <Ionicons
-                        name={t.icon as never}
-                        size={18}
-                        color={color.textMuted}
-                      />
-                    </View>
-                    <Text variant="body" color="text" style={styles.flex}>
-                      {t.label}
-                    </Text>
-                    <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
-                  </Pressable>
-                ))}
-              </View>
-            ))}
-          </ScrollView>
         </View>
-      </Modal>
+      </KeyboardAvoidingView>
     </Modal>
+
+    {/* Sibling modal so closing the party sheet does not unmount the role sheet. */}
+    <Modal
+      visible={!!pendingContact}
+      animationType="slide"
+      transparent
+      presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+      onRequestClose={() => setPendingContact(null)}
+    >
+      <Pressable style={styles.overlay} onPress={() => !creating && setPendingContact(null)}>
+        <View />
+      </Pressable>
+      <View style={styles.sheet}>
+        <View style={styles.handle} />
+        <Text variant="bodyStrong" color="text" style={styles.title}>
+          Assign Role
+        </Text>
+        {pendingContact && (
+          <Text variant="caption" color="textMuted" style={styles.subtitle}>
+            {pendingContact.name} · {pendingContact.phone}
+          </Text>
+        )}
+
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          style={styles.roleScroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+        >
+          {PARTY_TYPE_GROUPS.map((group) => (
+            <View key={group.label} style={styles.roleGroup}>
+              <Text variant="caption" color="textMuted" style={styles.roleGroupLabel}>
+                {group.label.toUpperCase()}
+              </Text>
+              {group.types.map((t) => (
+                <Pressable
+                  key={t.key}
+                  disabled={creating}
+                  onPress={() => createFromContact(t.key)}
+                  style={({ pressed }) => [
+                    styles.roleOption,
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <View style={styles.roleIconWrap}>
+                    <Ionicons
+                      name={t.icon as never}
+                      size={18}
+                      color={color.textMuted}
+                    />
+                  </View>
+                  <Text variant="body" color="text" style={styles.flex}>
+                    {t.label}
+                  </Text>
+                  <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
+                </Pressable>
+              ))}
+            </View>
+          ))}
+        </ScrollView>
+      </View>
+    </Modal>
+    </Fragment>
   );
 }
 
@@ -319,8 +372,9 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
+    lineHeight: 20,
     color: color.text,
-    paddingVertical: Platform.OS === 'ios' ? space.xs : 0,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
   },
   list: { paddingHorizontal: screenInset, maxHeight: 360 },
   row: {

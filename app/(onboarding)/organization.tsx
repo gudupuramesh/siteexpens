@@ -1,9 +1,7 @@
 /**
- * Organization onboarding. Two fields — company name and work email —
- * and a single "Continue" CTA. Validation is done with zod + react-hook-
- * form so we get accessible inline errors. On submit we create the org
- * document and patch the user doc; the onboarding layout then auto-
- * redirects to /(app) as soon as primaryOrgId appears on the user doc.
+ * First-time studio setup: studio name, work email, and verified mobile
+ * (read-only from phone auth). On submit we create the org and set
+ * primaryOrgId on the user doc.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Controller, useForm } from 'react-hook-form';
@@ -28,8 +26,8 @@ const schema = z.object({
   name: z
     .string()
     .trim()
-    .min(2, 'Company name is too short')
-    .max(80, 'Company name is too long'),
+    .min(2, 'Studio name is too short')
+    .max(80, 'Studio name is too long'),
   email: z.string().trim().toLowerCase().email('Enter a valid email'),
 });
 
@@ -72,12 +70,21 @@ export default function OrganizationOnboardingScreen() {
       >
         <View style={styles.body}>
           <Text variant="largeTitle" color="text">
-            Set up your firm
+            Set up your studio
           </Text>
           <Text variant="body" color="textMuted" style={styles.subtitle}>
-            Tell us about your company. You can invite your team and create
-            projects right after.
+            Your mobile number is already verified. Add your studio name and
+            work email — you can fill in the rest from Studio profile later.
           </Text>
+
+          <View style={styles.field}>
+            <TextField
+              label="Mobile number"
+              value={user?.phoneNumber ?? ''}
+              editable={false}
+              placeholder="—"
+            />
+          </View>
 
           <View style={styles.field}>
             <Controller
@@ -85,7 +92,7 @@ export default function OrganizationOnboardingScreen() {
               name="name"
               render={({ field: { onChange, onBlur, value } }) => (
                 <TextField
-                  label="Company name"
+                  label="Studio name"
                   placeholder="e.g. Studio Vastra Interiors"
                   value={value}
                   onChangeText={onChange}

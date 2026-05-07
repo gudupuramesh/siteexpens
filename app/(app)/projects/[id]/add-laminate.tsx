@@ -5,11 +5,13 @@
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as ImagePicker from 'expo-image-picker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
 import { Controller, useForm } from 'react-hook-form';
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -17,8 +19,10 @@ import {
   ScrollView,
   StyleSheet,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { z } from 'zod';
 
@@ -26,7 +30,11 @@ import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { createLaminate } from '@/src/features/laminates/laminates';
 import { useLaminates } from '@/src/features/laminates/useLaminates';
+import { guessImageMimeType, recordStorageEvent } from '@/src/lib/r2Upload';
+import { commitStagedFiles, type StagedFile } from '@/src/lib/commitStagedFiles';
 import { Button } from '@/src/ui/Button';
+import { useKeyboardVerticalOffset } from '@/src/ui/KeyboardFormLayout';
+import { useKeyboardHeightWhile } from '@/src/ui/useKeyboardHeightWhile';
 import { Screen } from '@/src/ui/Screen';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
@@ -45,13 +53,15 @@ const schema = z.object({
   brand: z.string().trim().min(1, 'Brand required'),
   laminateCode: z.string().trim().optional().or(z.literal('')),
   finish: z.string().trim().min(1, 'Finish required'),
-  edgeBandCode: z.string().trim().min(1, 'Edge band code required'),
+  // Optional — many laminates ship without a separate edge-band SKU.
+  edgeBandCode: z.string().trim().optional().or(z.literal('')),
   notes: z.string().optional(),
 });
 
 type FormData = z.infer<typeof schema>;
 
 export default function AddLaminateScreen() {
+  useGuardedRoute({ capability: 'laminate.write' });
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -60,8 +70,40 @@ export default function AddLaminateScreen() {
 
   const [showRoomPicker, setShowRoomPicker] = useState(false);
   const [roomSearch, setRoomSearch] = useState('');
-  const [photoUri, setPhotoUri] = useState<string>();
+  // Photo is staged locally on pick — R2 upload only happens during
+  // Save, so abandoning the form leaves nothing in the bucket.
+  const [stagedPhoto, setStagedPhoto] = useState<StagedFile | null>(null);
+  const [savePhase, setSavePhase] = useState<string>();
   const [submitError, setSubmitError] = useState<string>();
+  const insets = useSafeAreaInsets();
+  const { height: windowHeight } = useWindowDimensions();
+  const roomKeyboardHeight = useKeyboardHeightWhile(showRoomPicker);
+  const keyboardVerticalOffset = useKeyboardVerticalOffset(0);
+
+  const closeRoomPicker = useCallback(() => {
+    Keyboard.dismiss();
+    setShowRoomPicker(false);
+    setRoomSearch('');
+  }, []);
+
+  const roomListMaxHeight = useMemo(() => {
+    const headerBlock = 200;
+    if (roomKeyboardHeight > 0) {
+      return Math.max(140, windowHeight - roomKeyboardHeight - headerBlock - 16);
+    }
+    return Math.min(380, windowHeight * 0.44);
+  }, [windowHeight, roomKeyboardHeight]);
+  // iOS handles keyboard insets natively on the ScrollView (auto-scroll +
+  // contentInset). Android relies on KeyboardAvoidingView padding behavior.
+  const KeyboardWrap = Platform.OS === 'ios' ? View : KeyboardAvoidingView;
+  const keyboardWrapProps =
+    Platform.OS === 'ios'
+      ? { style: styles.flex }
+      : {
+          style: styles.flex,
+          behavior: 'padding' as const,
+          keyboardVerticalOffset,
+        };
 
   const {
     control,
@@ -91,6 +133,17 @@ export default function AddLaminateScreen() {
     : allRooms;
 
   // ── Photo picker ──
+  // Picking just stores the local URI. Upload happens during Save
+  // (see onSubmit) so backing out without saving creates no orphans.
+
+  const stagePicked = useCallback((asset: ImagePicker.ImagePickerAsset) => {
+    setSubmitError(undefined);
+    setStagedPhoto({
+      id: 'photo',
+      localUri: asset.uri,
+      contentType: asset.mimeType || guessImageMimeType(asset.uri),
+    });
+  }, []);
 
   const pickPhoto = useCallback(async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -100,12 +153,10 @@ export default function AddLaminateScreen() {
     }
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
-      quality: 0.8,
+      quality: 0.85,
     });
-    if (!result.canceled && result.assets[0]) {
-      setPhotoUri(result.assets[0].uri);
-    }
-  }, []);
+    if (!result.canceled && result.assets[0]) stagePicked(result.assets[0]);
+  }, [stagePicked]);
 
   const takePhoto = useCallback(async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
@@ -113,13 +164,9 @@ export default function AddLaminateScreen() {
       Alert.alert('Permission needed', 'Allow camera access to take laminate photos.');
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({
-      quality: 0.8,
-    });
-    if (!result.canceled && result.assets[0]) {
-      setPhotoUri(result.assets[0].uri);
-    }
-  }, []);
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.85 });
+    if (!result.canceled && result.assets[0]) stagePicked(result.assets[0]);
+  }, [stagePicked]);
 
   // ── Submit ──
 
@@ -127,27 +174,71 @@ export default function AddLaminateScreen() {
     if (!user || !orgId || !projectId) return;
     setSubmitError(undefined);
     try {
-      // TODO: Upload photo to Firebase Storage and get URL
-      await createLaminate({
+      // Step 1 — upload the staged photo (if any) to R2.
+      let photoPublicUrl: string | undefined;
+      let photoKey: string | undefined;
+      let photoSize = 0;
+      let photoContentType = '';
+      if (stagedPhoto) {
+        setSavePhase('Uploading photo…');
+        const { uploaded, failed } = await commitStagedFiles({
+          files: [stagedPhoto],
+          kind: 'laminate',
+          refId: projectId,
+          compress: 'balanced',
+        });
+        if (failed.length > 0) {
+          setSubmitError(`Photo upload failed: ${failed[0].error}`);
+          setSavePhase(undefined);
+          return;
+        }
+        const ok = uploaded[0];
+        photoPublicUrl = ok.publicUrl;
+        photoKey = ok.key;
+        photoSize = ok.sizeBytes;
+        photoContentType = ok.contentType;
+      }
+
+      // Step 2 — create the laminate doc.
+      setSavePhase('Saving laminate…');
+      const laminateId = await createLaminate({
         projectId,
         orgId,
         roomName: data.roomName,
         brand: data.brand,
         finish: data.finish,
-        edgeBandCode: data.edgeBandCode,
+        edgeBandCode: data.edgeBandCode?.trim() || undefined,
         laminateCode: data.laminateCode || undefined,
-        photoUrl: photoUri || undefined,
+        photoUrl: photoPublicUrl,
+        photoStoragePath: photoKey,
         notes: data.notes || undefined,
         createdBy: user.uid,
       });
+
+      // Step 3 — record storage event (best effort).
+      if (photoKey) {
+        void recordStorageEvent({
+          projectId,
+          kind: 'laminate',
+          refId: laminateId,
+          key: photoKey,
+          sizeBytes: photoSize,
+          contentType: photoContentType,
+          action: 'upload',
+        });
+      }
+      // Snapshot-propagation buffer (see add-transaction.tsx).
+      await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
       setSubmitError((err as Error).message);
+    } finally {
+      setSavePhase(undefined);
     }
   }
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
+    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
       <Stack.Screen options={{ headerShown: false }} />
 
       {/* Nav */}
@@ -161,24 +252,29 @@ export default function AddLaminateScreen() {
         <View style={styles.navBtn} />
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      <KeyboardWrap {...keyboardWrapProps}>
         <ScrollView
+          style={styles.flex}
           contentContainerStyle={styles.scroll}
           keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+          contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? 'automatic' : 'never'}
         >
           {/* Photo */}
           <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
             LAMINATE PHOTO
           </Text>
-          {photoUri ? (
+          {stagedPhoto ? (
             <View style={styles.photoPreview}>
-              <Image source={{ uri: photoUri }} style={styles.photoImage} resizeMode="cover" />
+              <Image
+                source={{ uri: stagedPhoto.localUri }}
+                style={styles.photoImage}
+                resizeMode="cover"
+              />
               <Pressable
-                onPress={() => setPhotoUri(undefined)}
+                onPress={() => setStagedPhoto(null)}
                 style={styles.photoRemove}
               >
                 <Ionicons name="close-circle" size={24} color={color.danger} />
@@ -277,8 +373,8 @@ export default function AddLaminateScreen() {
             name="edgeBandCode"
             render={({ field: { onChange, onBlur, value } }) => (
               <TextField
-                label="Edge Band Code *"
-                placeholder="e.g. EB-22003, Matching"
+                label="Edge Band Code"
+                placeholder="Optional — e.g. EB-22003, Matching"
                 autoCapitalize="characters"
                 value={value}
                 onChangeText={onChange}
@@ -309,30 +405,39 @@ export default function AddLaminateScreen() {
               {submitError}
             </Text>
           )}
-        </ScrollView>
 
-        {/* Footer */}
-        <View style={styles.footer}>
-          <Button
-            label="Save Laminate"
-            onPress={handleSubmit(onSubmit)}
-            loading={isSubmitting}
-            disabled={!isValid || !orgId}
-          />
-        </View>
-      </KeyboardAvoidingView>
+          {/* Save inside scroll so Notes + CTA can scroll above the keyboard */}
+          <View style={styles.footer}>
+            <Button
+              label={savePhase ?? 'Save Laminate'}
+              onPress={handleSubmit(onSubmit)}
+              loading={isSubmitting}
+              disabled={!isValid || !orgId}
+            />
+          </View>
+        </ScrollView>
+      </KeyboardWrap>
 
       {/* ── Room Picker Modal ── */}
       <Modal
         visible={showRoomPicker}
         animationType="slide"
         transparent
-        onRequestClose={() => setShowRoomPicker(false)}
+        onRequestClose={closeRoomPicker}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setShowRoomPicker(false)}>
-          <View />
-        </Pressable>
-        <View style={styles.modalSheet}>
+        <View style={styles.modalRoot}>
+          <Pressable style={styles.modalBackdrop} onPress={closeRoomPicker} accessibilityRole="button" />
+          <View
+            style={[
+              styles.modalSheet,
+              {
+                marginBottom:
+                  roomKeyboardHeight > 0
+                    ? roomKeyboardHeight
+                    : Math.max(insets.bottom, space.sm),
+              },
+            ]}
+          >
           <View style={styles.modalHandle} />
           <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
             Select Room
@@ -347,6 +452,7 @@ export default function AddLaminateScreen() {
               onChangeText={setRoomSearch}
               style={styles.searchInput}
               autoFocus
+              returnKeyType="search"
             />
           </View>
 
@@ -357,15 +463,20 @@ export default function AddLaminateScreen() {
             </View>
           )}
 
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.modalList}>
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            style={[styles.modalList, { maxHeight: roomListMaxHeight }]}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+          >
             {/* Existing project rooms first */}
             {!roomSearch && existingRooms.map((r) => (
               <Pressable
                 key={`existing_${r}`}
                 onPress={() => {
                   setValue('roomName', r, { shouldValidate: true });
-                  setShowRoomPicker(false);
-                  setRoomSearch('');
+                  Keyboard.dismiss();
+                  closeRoomPicker();
                 }}
                 style={({ pressed }) => [
                   styles.roomOption,
@@ -402,8 +513,8 @@ export default function AddLaminateScreen() {
                   key={r}
                   onPress={() => {
                     setValue('roomName', r, { shouldValidate: true });
-                    setShowRoomPicker(false);
-                    setRoomSearch('');
+                    Keyboard.dismiss();
+                    closeRoomPicker();
                   }}
                   style={({ pressed }) => [
                     styles.roomOption,
@@ -431,8 +542,8 @@ export default function AddLaminateScreen() {
             <Pressable
               onPress={() => {
                 setValue('roomName', roomSearch.trim(), { shouldValidate: true });
-                setShowRoomPicker(false);
-                setRoomSearch('');
+                Keyboard.dismiss();
+                closeRoomPicker();
               }}
               style={styles.addCustomRoom}
             >
@@ -442,6 +553,7 @@ export default function AddLaminateScreen() {
               </Text>
             </Pressable>
           )}
+          </View>
         </View>
       </Modal>
     </Screen>
@@ -463,9 +575,10 @@ const styles = StyleSheet.create({
   navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
   navTitle: { flex: 1, textAlign: 'center' },
   scroll: {
+    flexGrow: 1,
     paddingHorizontal: screenInset,
     paddingTop: space.md,
-    paddingBottom: space.xxl,
+    paddingBottom: space.xl,
   },
 
   sectionLabel: {
@@ -487,8 +600,11 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.primary,
-    borderStyle: 'dashed',
-    backgroundColor: color.primarySoft,
+    // Match the New File form's Image/PDF picker — white surface
+    // with a primary border, not a primary-soft fill. The dashed
+    // outline is dropped because the New File form uses a solid
+    // border there too.
+    backgroundColor: color.bg,
   },
   photoPreview: {
     width: '100%',
@@ -506,6 +622,13 @@ const styles = StyleSheet.create({
     top: space.xs,
     right: space.xs,
   },
+  // Translucent overlay shown while the picked photo uploads to R2.
+  photoUploadOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center', justifyContent: 'center',
+  },
 
   // Dropdown
   dropdown: {
@@ -517,26 +640,33 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.border,
     paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    minHeight: 48,
+    paddingVertical: space.md,
+    minHeight: 52,
   },
   dropdownActive: {
     borderColor: color.primary,
     backgroundColor: color.primarySoft,
   },
 
-  // Footer
+  // Footer (inside ScrollView — scrolls with form above keyboard)
   footer: {
+    marginTop: space.lg,
+    marginHorizontal: -screenInset,
     paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
+    paddingTop: space.md,
+    paddingBottom: space.lg,
     backgroundColor: color.surface,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: color.separator,
   },
 
-  // Modal
-  modalOverlay: {
+  // Modal — bottom sheet lifted by keyboard via marginBottom + listeners
+  modalRoot: {
     flex: 1,
+    justifyContent: 'flex-end',
+  },
+  modalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(0,0,0,0.35)',
   },
   modalSheet: {
@@ -544,8 +674,8 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: radius.lg,
     borderTopRightRadius: radius.lg,
     paddingTop: space.sm,
-    paddingBottom: space.xxl,
-    maxHeight: '70%',
+    paddingBottom: space.lg,
+    maxHeight: '88%',
   },
   modalHandle: {
     width: 36,
@@ -561,7 +691,6 @@ const styles = StyleSheet.create({
   },
   modalList: {
     paddingHorizontal: screenInset,
-    maxHeight: 350,
   },
 
   searchBar: {
@@ -580,8 +709,9 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
+    lineHeight: 20,
     color: color.text,
-    paddingVertical: Platform.OS === 'ios' ? space.xs : 0,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
   },
 
   roomSectionHeader: {

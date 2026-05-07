@@ -52,3 +52,21 @@ app-example
 # generated native folders
 /ios
 /android
+
+# local IDE / agent state
+.claude/
+.cursor/
+.idea/
+.vscode/
+
+# local dev artifacts
+expo-dev-*
+*.html.zip
+
+# secrets folder (kept OUTSIDE the repo at ~/secrets/, this guard is belt-and-suspenders)
+/secrets/
+secrets/
+
+# release signing properties (sensitive)
+keystore.properties
+*.keystore

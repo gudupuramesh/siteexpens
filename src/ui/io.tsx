@@ -18,6 +18,7 @@ import {
   ActivityIndicator,
   Modal,
   PanResponder,
+  Platform,
   Pressable,
   StyleSheet,
   Text as RNText,
@@ -186,7 +187,12 @@ export function InputRow({
           },
           // Multiline (e.g. site address) reads better left-aligned and
           // top-anchored so longer text wraps naturally.
-          multiline && { textAlign: 'left', paddingTop: 14, textAlignVertical: 'top' },
+          multiline && {
+            textAlign: 'left',
+            paddingTop: 14,
+            lineHeight: Platform.OS === 'ios' ? 20 : 22,
+            textAlignVertical: 'top',
+          },
         ]}
         {...inputProps}
       />
@@ -794,10 +800,16 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   groupBody: {
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: color.border,
+    // White interior so each row inside reads as a clear strip
+    // separated by visible dividers (instead of grey-tinted bands
+    // that blur together). Bounded card pattern: 4-side hairline
+    // border + 10px corners + horizontal margin.
+    backgroundColor: color.bg,
+    marginHorizontal: GUTTER,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
+    overflow: 'hidden',
   },
   groupFooter: {
     fontFamily: fontFamily.sans,
@@ -812,7 +824,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: GUTTER,
-    backgroundColor: color.surface,
+    // White, not surface — pairs with the white groupBody so a
+    // stack of rows reads as separate strips with crisp dividers
+    // between them.
+    backgroundColor: color.bg,
     position: 'relative',
   },
   rowLeft: {
@@ -857,7 +872,10 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     height: StyleSheet.hairlineWidth,
-    backgroundColor: color.border,
+    // Stronger divider so the boundary between consecutive rows
+    // is unambiguous on a white surface — was `color.border`
+    // (#EEF2F7) which is almost invisible on white.
+    backgroundColor: color.borderStrong,
   },
 
   // InputRow
@@ -872,12 +890,23 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    paddingVertical: 8,
     paddingLeft: 8,
     fontFamily: fontFamily.sans,
     fontSize: 15, // intentionally one step larger for keyboard input comfort
     color: color.text,
     textAlign: 'left',
+    ...Platform.select({
+      ios: {
+        lineHeight: 20,
+        paddingTop: 9,
+        paddingBottom: 10,
+      },
+      android: {
+        lineHeight: 22,
+        paddingVertical: 8,
+        textAlignVertical: 'center',
+      },
+    }),
   },
 
   // PickerRow
@@ -898,7 +927,7 @@ const styles = StyleSheet.create({
   // Buttons
   primaryBtn: {
     height: 48,
-    borderRadius: 0,
+    borderRadius: 10,
     backgroundColor: color.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -917,7 +946,7 @@ const styles = StyleSheet.create({
   },
   secondaryBtn: {
     height: 48,
-    borderRadius: 0,
+    borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
     backgroundColor: color.surface,

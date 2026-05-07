@@ -86,7 +86,7 @@ export function Button({
 const styles = StyleSheet.create({
   base: {
     height: minTouchTarget + 4, // 48pt
-    borderRadius: radius.md,
+    borderRadius: radius.lg2,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: space.lg,

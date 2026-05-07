@@ -2,6 +2,14 @@
   "projects": {
     "default": "sitexpens"
   },
-  "targets": {},
+  "targets": {
+    "sitexpens": {
+      "hosting": {
+        "admin": [
+          "sitexpens-admin"
+        ]
+      }
+    }
+  },
   "etags": {}
 }

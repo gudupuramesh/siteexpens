@@ -1,4 +1,4 @@
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
 // ── Material Categories for Interior Fitout ──
 

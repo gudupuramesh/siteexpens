@@ -31,8 +31,16 @@ import { addTaskUpdate, updateTaskStatus } from '@/src/features/tasks/tasks';
 import { useTask } from '@/src/features/tasks/useTasks';
 import { useTaskUpdates } from '@/src/features/tasks/useTaskUpdates';
 import { DEFAULT_TASK_CATEGORIES, type TaskStatus } from '@/src/features/tasks/types';
+import { guessImageMimeType } from '@/src/lib/r2Upload';
+import {
+  commitStagedFiles,
+  makeStagedFile,
+  type StagedFile,
+} from '@/src/lib/commitStagedFiles';
+import { ImageViewer } from '@/src/ui/ImageViewer';
 import { Button } from '@/src/ui/Button';
 import { Screen } from '@/src/ui/Screen';
+import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
 import { Text } from '@/src/ui/Text';
 import { formatDate } from '@/src/lib/format';
 import { color, radius, screenInset, shadow, space } from '@/src/theme';
@@ -82,7 +90,21 @@ export default function TaskDetailScreen() {
   const [showPostModal, setShowPostModal] = useState(false);
   const [draftProgress, setDraftProgress] = useState<number>(0);
   const [draftText, setDraftText] = useState('');
-  const [draftPhotos, setDraftPhotos] = useState<string[]>([]);
+  // Image preview state — one viewer can show any photo group
+  // (the task's reference photos or any update's photo array).
+  const [viewerImages, setViewerImages] = useState<string[]>([]);
+  const [viewerIndex, setViewerIndex] = useState(0);
+
+  function openPhotoViewer(images: string[], startIndex = 0) {
+    setViewerImages(images);
+    setViewerIndex(startIndex);
+  }
+
+  // Draft photos for the post-update modal — staged locally, uploaded
+  // only when the user taps Post. Backing out of the modal without
+  // posting leaves zero R2 objects.
+  const [draftPhotos, setDraftPhotos] = useState<StagedFile[]>([]);
+  const [postPhase, setPostPhase] = useState<string>();
   const [posting, setPosting] = useState(false);
 
   const isOwner = !!user && !!task && task.createdBy === user.uid;
@@ -95,6 +117,17 @@ export default function TaskDetailScreen() {
     setShowPostModal(true);
   };
 
+  // Stage picks locally — upload happens during Post Update.
+  const stageDraftAssets = (assets: ImagePicker.ImagePickerAsset[]) => {
+    const newEntries = assets.map((a) =>
+      makeStagedFile({
+        localUri: a.uri,
+        contentType: a.mimeType || guessImageMimeType(a.uri),
+      }),
+    );
+    setDraftPhotos((prev) => [...prev, ...newEntries]);
+  };
+
   const pickPhotos = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
@@ -104,11 +137,9 @@ export default function TaskDetailScreen() {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
-      quality: 0.7,
+      quality: 0.85,
     });
-    if (!res.canceled) {
-      setDraftPhotos((prev) => [...prev, ...res.assets.map((a) => a.uri)]);
-    }
+    if (!res.canceled) stageDraftAssets(res.assets);
   };
 
   const takePhoto = async () => {
@@ -117,11 +148,13 @@ export default function TaskDetailScreen() {
       Alert.alert('Permission needed', 'Camera access is required.');
       return;
     }
-    const res = await ImagePicker.launchCameraAsync({ quality: 0.7 });
-    if (!res.canceled) {
-      setDraftPhotos((prev) => [...prev, ...res.assets.map((a) => a.uri)]);
-    }
+    const res = await ImagePicker.launchCameraAsync({ quality: 0.85 });
+    if (!res.canceled) stageDraftAssets(res.assets);
   };
+
+  function removeDraftPhoto(id: string) {
+    setDraftPhotos((prev) => prev.filter((p) => p.id !== id));
+  }
 
   const changeStatus = async (next: TaskStatus) => {
     if (!task || next === task.status) return;
@@ -137,18 +170,51 @@ export default function TaskDetailScreen() {
     if (!task || !user) return;
     setPosting(true);
     try {
+      // Step 1 — upload any staged photos.
+      let uploadedUrls: string[] = [];
+      let failedCount = 0;
+      if (draftPhotos.length > 0 && projectId) {
+        setPostPhase(`Uploading 0 of ${draftPhotos.length}…`);
+        const { uploaded, failed } = await commitStagedFiles({
+          files: draftPhotos,
+          kind: 'task_update',
+          refId: task.id,
+          projectId,
+          compress: 'balanced',
+          onProgress: (done, total) => setPostPhase(`Uploading ${done} of ${total}…`),
+        });
+        uploadedUrls = uploaded.map((u) => u.publicUrl);
+        failedCount = failed.length;
+        if (uploaded.length === 0 && failed.length > 0) {
+          Alert.alert(
+            'Uploads failed',
+            `All ${failed.length} photo(s) failed to upload. Tap Post Update again to retry.`,
+          );
+          setPostPhase(undefined);
+          setPosting(false);
+          return;
+        }
+      }
+      setPostPhase('Posting update…');
       await addTaskUpdate(task.id, {
         authorId: user.uid,
         authorName: userDoc?.displayName ?? 'Member',
         progress: draftProgress,
         text: draftText.trim(),
-        photoUris: draftPhotos,
+        photoUris: uploadedUrls,
       });
+      if (failedCount > 0) {
+        Alert.alert(
+          'Some uploads failed',
+          `${failedCount} of ${draftPhotos.length} photo(s) failed. The update was posted with the rest.`,
+        );
+      }
       setShowPostModal(false);
     } catch (err) {
       Alert.alert('Error', (err as Error).message);
     } finally {
       setPosting(false);
+      setPostPhase(undefined);
     }
   };
 
@@ -326,8 +392,13 @@ export default function TaskDetailScreen() {
               REFERENCE PHOTOS
             </Text>
             <View style={styles.photoGrid}>
-              {task.photoUris.map((uri) => (
-                <Image key={uri} source={{ uri }} style={styles.photoThumb} />
+              {task.photoUris.map((uri, i) => (
+                <Pressable
+                  key={uri}
+                  onPress={() => openPhotoViewer(task.photoUris, i)}
+                >
+                  <Image source={{ uri }} style={styles.photoThumb} />
+                </Pressable>
               ))}
             </View>
           </View>
@@ -372,8 +443,13 @@ export default function TaskDetailScreen() {
                   )}
                   {(u.photoUris ?? []).length > 0 && (
                     <View style={styles.updatePhotoGrid}>
-                      {u.photoUris.map((uri) => (
-                        <Image key={uri} source={{ uri }} style={styles.updatePhoto} />
+                      {u.photoUris.map((uri, i) => (
+                        <Pressable
+                          key={uri}
+                          onPress={() => openPhotoViewer(u.photoUris, i)}
+                        >
+                          <Image source={{ uri }} style={styles.updatePhoto} />
+                        </Pressable>
                       ))}
                     </View>
                   )}
@@ -486,13 +562,11 @@ export default function TaskDetailScreen() {
             </Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={styles.draftPhotoRow}>
-                {draftPhotos.map((uri) => (
-                  <View key={uri} style={styles.photoThumbWrap}>
-                    <Image source={{ uri }} style={styles.draftPhoto} />
+                {draftPhotos.map((p) => (
+                  <View key={p.id} style={styles.photoThumbWrap}>
+                    <Image source={{ uri: p.localUri }} style={styles.draftPhoto} />
                     <Pressable
-                      onPress={() =>
-                        setDraftPhotos((prev) => prev.filter((u) => u !== uri))
-                      }
+                      onPress={() => removeDraftPhoto(p.id)}
                       style={styles.photoClose}
                       hitSlop={6}
                     >
@@ -513,7 +587,7 @@ export default function TaskDetailScreen() {
 
             <View style={styles.sheetFooter}>
               <Button
-                label="Post Update"
+                label={postPhase ?? 'Post Update'}
                 onPress={submitUpdate}
                 loading={posting}
                 disabled={posting}
@@ -522,6 +596,22 @@ export default function TaskDetailScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {/* Single shared full-screen viewer — works for the task's
+          reference photos AND any update's photo array, indexed by
+          openPhotoViewer(). Pinch / pan / swipe between images. */}
+      <ImageViewer
+        images={viewerImages}
+        index={viewerIndex}
+        visible={viewerImages.length > 0}
+        onClose={() => setViewerImages([])}
+      />
+
+      <SubmitProgressOverlay
+        visible={posting}
+        intent="updateTask"
+        phaseLabel={postPhase}
+      />
     </Screen>
   );
 }
@@ -547,7 +637,7 @@ const styles = StyleSheet.create({
 
   card: {
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     padding: space.md,
@@ -557,16 +647,16 @@ const styles = StyleSheet.create({
   badgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: space.sm,
+    marginTop: space.xs,
+  },
   categoryBadge: {
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     paddingHorizontal: 8,
     paddingVertical: 2,
-  },
-    gap: space.sm,
-    marginTop: space.xs,
   },
   statusLabel: { marginTop: space.md, marginBottom: space.xs },
   statusRow: { flexDirection: 'row', gap: space.xs },
@@ -578,7 +668,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: space.xs,
     paddingHorizontal: space.xs,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -593,10 +683,11 @@ const styles = StyleSheet.create({
   progressBg: {
     flex: 1,
     height: 8,
-    borderRadius: 0,
+    borderRadius: 4,
     backgroundColor: color.surface,
+    overflow: 'hidden',
   },
-  progressFill: { height: 8, borderRadius: 0 },
+  progressFill: { height: 8, borderRadius: 4 },
 
   metaRow: {
     flexDirection: 'row',
@@ -616,7 +707,7 @@ const styles = StyleSheet.create({
   photoThumb: {
     width: 72,
     height: 72,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.surface,
     borderWidth: 1,
     borderColor: color.borderStrong,
@@ -640,7 +731,7 @@ const styles = StyleSheet.create({
   updateAvatar: {
     width: 32,
     height: 32,
-    borderRadius: 0,
+    borderRadius: 8,
     backgroundColor: color.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -658,7 +749,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     paddingHorizontal: space.xs,
     paddingVertical: 2,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.bg,
     borderWidth: 1,
     borderColor: color.borderStrong,
@@ -672,7 +763,7 @@ const styles = StyleSheet.create({
   updatePhoto: {
     width: 84,
     height: 84,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.surface,
     borderWidth: 1,
     borderColor: color.borderStrong,
@@ -690,7 +781,7 @@ const styles = StyleSheet.create({
   },
   postBtn: {
     height: 44,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.primary,
     borderWidth: 1,
     borderColor: color.primary,
@@ -728,7 +819,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     paddingVertical: space.xs,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -748,7 +839,7 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -757,7 +848,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: color.text,
     padding: space.sm,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -768,10 +859,17 @@ const styles = StyleSheet.create({
   draftPhoto: {
     width: 72,
     height: 72,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.surface,
     borderWidth: 1,
     borderColor: color.borderStrong,
+  },
+  // Status overlay shown on top of each draft thumb during upload.
+  draftPhotoOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center', justifyContent: 'center',
   },
   photoThumbWrap: { position: 'relative' },
   photoClose: {
@@ -788,7 +886,7 @@ const styles = StyleSheet.create({
   photoAdd: {
     width: 72,
     height: 72,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     alignItems: 'center',

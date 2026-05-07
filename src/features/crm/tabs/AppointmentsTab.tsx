@@ -1,11 +1,15 @@
 /**
- * Appointments tab — 1:1 port of `interior os/src/screens-leads.jsx >
- * AppointmentsPanel`.
+ * Appointments tab.
  *
- *   1. Top: horizontal 14-day strip (rounded chips, day name + date,
- *      density dots, blue when active).
- *   2. Day header: long date + appointment count.
- *   3. Timeline: each appointment is rendered as
+ *   1. Top: compact date pager — `< Mon, 4 May  · 3 appts >` with
+ *      a "Today" jump-back chip when off today, and a calendar
+ *      icon for picking any date. Same vocabulary as the project
+ *      Site tab (chevron-step + tap-label-to-pick) so the two
+ *      date-driven views feel like one app, not two. Replaced the
+ *      earlier 14-day chip strip — at a phone width only ~6 chips
+ *      were visible at once and the tab fought the user when they
+ *      wanted to jump weeks.
+ *   2. Timeline: each appointment is rendered as
  *
  *        TIME      ●─────  ┌─ kind-color border-left card ─┐
  *        gutter    │        │ Title                  Pill │
@@ -15,13 +19,14 @@
  *                  │        │ [Call]  [Directions]         │
  *                           └──────────────────────────────┘
  *
- *   FAB at bottom-right, calendar picker via the calendar icon in the
- *   strip header.
+ *   FAB at bottom-right.
  */
 import { router } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
   Linking,
+  Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -45,11 +50,10 @@ import { updateAppointment } from '@/src/features/crm/appointments';
 import { useAppointments } from '@/src/features/crm/useAppointments';
 import { SelectModal } from '@/src/ui/io';
 import { Spinner } from '@/src/ui/Spinner';
+import { TutorialEmptyState } from '@/src/ui/TutorialEmptyState';
 import { color, fontFamily } from '@/src/theme/tokens';
 
 const GUTTER = 16;
-const STRIP_DAYS_BEFORE = 1;
-const STRIP_DAYS_AFTER = 13;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -75,11 +79,13 @@ function fmtTime(d: Date): string {
     .toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true })
     .toLowerCase();
 }
-function fmtLongDate(d: Date): string {
+/** Compact form for the pager label — "Mon, 4 May". Long enough
+ *  to be unambiguous, short enough to leave room for the count. */
+function fmtPagerDate(d: Date): string {
   return d.toLocaleDateString('en-IN', {
-    weekday: 'long',
+    weekday: 'short',
     day: 'numeric',
-    month: 'long',
+    month: 'short',
   });
 }
 
@@ -112,28 +118,28 @@ export function AppointmentsTab({ orgId }: Props) {
 
   const [selectedDate, setSelectedDate] = useState<Date>(today);
   const [showCalendar, setShowCalendar] = useState(false);
+  // iOS: the inline calendar picker doesn't auto-commit. We hold
+  // the user's tap in `pendingDate` and only apply it when they
+  // hit Done — that's why the iOS sheet has its own Cancel/Done
+  // buttons. On Android the native dialog handles commit/cancel
+  // itself, so this stays in sync but isn't user-visible there.
+  const [pendingDate, setPendingDate] = useState<Date>(today);
   const [statusTargetId, setStatusTargetId] = useState<string | null>(null);
   const [statusUpdatingId, setStatusUpdatingId] = useState<string | null>(null);
 
   const { data: appointments, loading } = useAppointments(orgId);
 
-  // 14 days starting from yesterday (today - 1) → today + 13
-  const stripDates = useMemo(() => {
-    const total = STRIP_DAYS_BEFORE + 1 + STRIP_DAYS_AFTER;
-    return Array.from({ length: total }, (_, i) => addDays(today, i - STRIP_DAYS_BEFORE));
+  const goPrev = useCallback(() => {
+    setSelectedDate((d) => addDays(d, -1));
+  }, []);
+  const goNext = useCallback(() => {
+    setSelectedDate((d) => addDays(d, 1));
+  }, []);
+  const goToday = useCallback(() => {
+    setSelectedDate(today);
   }, [today]);
 
-  // Per-day count for density dots
-  const countsByDate = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const a of appointments) {
-      const dt = a.scheduledAt?.toDate();
-      if (!dt) continue;
-      const k = startOfDay(dt).toISOString();
-      m.set(k, (m.get(k) ?? 0) + 1);
-    }
-    return m;
-  }, [appointments]);
+  const isOnToday = isSameDay(selectedDate, today);
 
   const dayItems = useMemo(() => {
     return appointments
@@ -150,16 +156,37 @@ export function AppointmentsTab({ orgId }: Props) {
 
   const onCalendarChange = useCallback(
     (e: DateTimePickerEvent, picked?: Date) => {
-      if (e.type === 'dismissed') {
+      // Android: the native dialog fires once on dismiss/set with
+      // the final selection — apply immediately.
+      if (Platform.OS === 'android') {
+        if (e.type === 'dismissed') {
+          setShowCalendar(false);
+          return;
+        }
+        if (!picked) return;
+        setSelectedDate(startOfDay(picked));
         setShowCalendar(false);
         return;
       }
-      if (!picked) return;
-      setSelectedDate(startOfDay(picked));
-      setShowCalendar(false);
+      // iOS: every tap inside the inline calendar fires onChange.
+      // Don't commit yet — the user confirms via the Done button
+      // in our wrapping sheet.
+      if (picked) setPendingDate(startOfDay(picked));
     },
     [],
   );
+
+  const openCalendar = useCallback(() => {
+    setPendingDate(selectedDate);
+    setShowCalendar(true);
+  }, [selectedDate]);
+  const cancelCalendar = useCallback(() => {
+    setShowCalendar(false);
+  }, []);
+  const confirmCalendar = useCallback(() => {
+    setSelectedDate(pendingDate);
+    setShowCalendar(false);
+  }, [pendingDate]);
 
   async function changeStatus(next: AppointmentStatus) {
     if (!statusTargetId) return;
@@ -176,76 +203,77 @@ export function AppointmentsTab({ orgId }: Props) {
 
   return (
     <View style={styles.flex}>
-      {/* ── Strip wrapper */}
-      <View style={styles.stripWrap}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.stripContent}
+      {/* ── Date pager — compact `< Mon, 4 May · 3 appts >` bar.
+          Three affordances for moving the date, in order of speed:
+            • chevrons step ±1 day,
+            • TODAY chip (only off today) snaps back,
+            • calendar icon (always visible on the right) opens the
+              native picker for any date weeks/months away.
+          The centre label is also tappable as a redundant entry to
+          the calendar picker — discoverable in usability tests. */}
+      <View style={styles.pagerBar}>
+        <Pressable
+          onPress={goPrev}
+          hitSlop={12}
+          style={({ pressed }) => [styles.pagerNav, pressed && { opacity: 0.5 }]}
+          accessibilityLabel="Previous day"
         >
-          {stripDates.map((d) => {
-            const active = isSameDay(d, selectedDate);
-            const isToday = isSameDay(d, today);
-            const count = countsByDate.get(d.toISOString()) ?? 0;
-            return (
-              <Pressable
-                key={d.toISOString()}
-                onPress={() => setSelectedDate(d)}
-                style={[styles.dayChip, active && styles.dayChipActive]}
-              >
-                <RNText
-                  style={[
-                    styles.dayName,
-                    active && { color: 'rgba(255,255,255,0.85)' },
-                  ]}
-                >
-                  {d.toLocaleDateString('en-IN', { weekday: 'short' }).toUpperCase()}
-                </RNText>
-                <RNText
-                  style={[
-                    styles.dayNum,
-                    active && { color: '#fff' },
-                  ]}
-                >
-                  {d.getDate()}
-                </RNText>
-                {count > 0 ? (
-                  <View style={styles.dotsRow}>
-                    {Array.from({ length: Math.min(count, 3) }).map((_, i) => (
-                      <View
-                        key={i}
-                        style={[
-                          styles.dot,
-                          { backgroundColor: active ? '#fff' : color.primary },
-                        ]}
-                      />
-                    ))}
-                  </View>
-                ) : isToday && !active ? (
-                  <View style={[styles.todayPip, { backgroundColor: color.primary }]} />
-                ) : null}
-              </Pressable>
-            );
-          })}
-        </ScrollView>
-      </View>
+          <Ionicons name="chevron-back" size={20} color={color.text} />
+        </Pressable>
 
-      {/* ── Day header */}
-      <View style={styles.dayHeader}>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <RNText style={styles.dayHeaderTitle}>{fmtLongDate(selectedDate)}</RNText>
-          <RNText style={styles.dayHeaderSub}>
+        <Pressable
+          onPress={openCalendar}
+          style={({ pressed }) => [styles.pagerLabel, pressed && { opacity: 0.7 }]}
+          hitSlop={6}
+          accessibilityLabel="Pick date"
+        >
+          <RNText style={styles.pagerDate} numberOfLines={1}>
+            {isOnToday ? 'Today' : fmtPagerDate(selectedDate)}
+          </RNText>
+          <RNText style={styles.pagerSub} numberOfLines={1}>
+            {isOnToday ? fmtPagerDate(selectedDate) + ' · ' : ''}
             {dayItems.length === 0
               ? 'No appointments'
-              : `${dayItems.length} appointment${dayItems.length === 1 ? '' : 's'}`}
+              : `${dayItems.length} appt${dayItems.length === 1 ? '' : 's'}`}
           </RNText>
-        </View>
+        </Pressable>
+
         <Pressable
-          onPress={() => setShowCalendar(true)}
-          hitSlop={10}
-          style={styles.calendarBtn}
+          onPress={goNext}
+          hitSlop={12}
+          style={({ pressed }) => [styles.pagerNav, pressed && { opacity: 0.5 }]}
+          accessibilityLabel="Next day"
         >
-          <Ionicons name="calendar-outline" size={18} color={color.textMuted} />
+          <Ionicons name="chevron-forward" size={20} color={color.text} />
+        </Pressable>
+
+        {!isOnToday ? (
+          <Pressable
+            onPress={goToday}
+            hitSlop={6}
+            style={({ pressed }) => [
+              styles.todayChip,
+              pressed && { opacity: 0.7 },
+            ]}
+            accessibilityLabel="Jump to today"
+          >
+            <RNText style={styles.todayChipText}>TODAY</RNText>
+          </Pressable>
+        ) : null}
+
+        {/* Calendar picker entry — always visible so users have a
+            stable one-tap path to any date, regardless of which
+            day they're currently on. */}
+        <Pressable
+          onPress={openCalendar}
+          hitSlop={8}
+          style={({ pressed }) => [
+            styles.pagerNav,
+            pressed && { opacity: 0.5 },
+          ]}
+          accessibilityLabel="Open calendar"
+        >
+          <Ionicons name="calendar-outline" size={18} color={color.text} />
         </Pressable>
       </View>
 
@@ -255,13 +283,18 @@ export function AppointmentsTab({ orgId }: Props) {
           <Spinner size={28} />
         </View>
       ) : dayItems.length === 0 ? (
-        <View style={styles.empty}>
-          <Ionicons name="calendar-outline" size={28} color={color.textFaint} />
-          <RNText style={styles.emptyTitle}>Free day.</RNText>
-          <RNText style={styles.emptySub}>
-            Use it to catch up with site teams or review BOQs.
-          </RNText>
-        </View>
+        <TutorialEmptyState
+          pageKey="crm_appointments"
+          fallback={
+            <View style={styles.empty}>
+              <Ionicons name="calendar-outline" size={28} color={color.textFaint} />
+              <RNText style={styles.emptyTitle}>Free day.</RNText>
+              <RNText style={styles.emptySub}>
+                Use it to catch up with site teams or review BOQs.
+              </RNText>
+            </View>
+          }
+        />
       ) : (
         <ScrollView
           contentContainerStyle={styles.timelineContent}
@@ -295,7 +328,46 @@ export function AppointmentsTab({ orgId }: Props) {
         <Ionicons name="add" size={26} color="#fff" />
       </Pressable>
 
-      {showCalendar ? (
+      {/* Calendar picker — different shape per platform.
+          • iOS: bottom sheet with a Cancel/Done header. The inline
+            calendar grid sits below; we hold the user's pick in
+            `pendingDate` and only commit on Done. iOS's bare
+            `<DateTimePicker display="default">` renders as an
+            uncommitted inline grid with no Done button — that's
+            why we wrap it.
+          • Android: render the native `<DateTimePicker>` directly;
+            the OS already provides a calendar dialog with OK/Cancel,
+            so wrapping it would just duplicate chrome. */}
+      {showCalendar && Platform.OS === 'ios' ? (
+        <Modal
+          visible
+          transparent
+          animationType="slide"
+          onRequestClose={cancelCalendar}
+        >
+          <View style={styles.sheetBackdrop}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={cancelCalendar} />
+            <View style={[styles.sheetContainer, { paddingBottom: 16 + insets.bottom }]}>
+              <View style={styles.sheetHeader}>
+                <Pressable onPress={cancelCalendar} hitSlop={10}>
+                  <RNText style={styles.sheetCancel}>Cancel</RNText>
+                </Pressable>
+                <RNText style={styles.sheetTitle}>Pick date</RNText>
+                <Pressable onPress={confirmCalendar} hitSlop={10}>
+                  <RNText style={styles.sheetDone}>Done</RNText>
+                </Pressable>
+              </View>
+              <DateTimePicker
+                mode="date"
+                value={pendingDate}
+                display="inline"
+                onChange={onCalendarChange}
+                themeVariant="light"
+              />
+            </View>
+          </View>
+        </Modal>
+      ) : showCalendar ? (
         <DateTimePicker
           mode="date"
           value={selectedDate}
@@ -482,97 +554,102 @@ function ApptRow({
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: color.bgGrouped },
 
-  // Day strip
-  stripWrap: {
-    paddingTop: 12,
-    paddingBottom: 12,
+  // Date pager — single horizontal bar replacing the old 14-day strip.
+  pagerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: GUTTER,
+    paddingTop: 10,
+    paddingBottom: 10,
     backgroundColor: color.bgGrouped,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: color.borderStrong,
-  },
-  stripContent: {
-    paddingHorizontal: GUTTER,
     gap: 6,
   },
-  dayChip: {
-    width: 56,
-    paddingVertical: 8,
-    paddingHorizontal: 4,
+  pagerNav: {
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
-    backgroundColor: color.bgGrouped,
-    position: 'relative',
+    backgroundColor: color.bg,
+    borderRadius: 8,
   },
-  dayChipActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
+  pagerLabel: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    minWidth: 0,
   },
-  dayName: {
+  pagerDate: {
     fontFamily: fontFamily.sans,
-    fontSize: 9.5,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 0.6,
-  },
-  dayNum: {
-    fontFamily: fontFamily.sans,
-    fontSize: 18,
-    fontWeight: '700',
-    color: color.text,
-    fontVariant: ['tabular-nums'],
-    marginTop: 2,
-  },
-  dotsRow: {
-    flexDirection: 'row',
-    gap: 2,
-    position: 'absolute',
-    bottom: 4,
-    left: '50%',
-    transform: [{ translateX: -8 }],
-    minHeight: 4,
-  },
-  dot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-  },
-  todayPip: {
-    position: 'absolute',
-    bottom: 5,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    opacity: 0.5,
-  },
-
-  // Day header
-  dayHeader: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    paddingHorizontal: GUTTER,
-    paddingTop: 12,
-    paddingBottom: 8,
-    gap: 8,
-  },
-  dayHeaderTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '700',
     color: color.text,
     letterSpacing: -0.2,
   },
-  dayHeaderSub: {
+  pagerSub: {
     fontFamily: fontFamily.sans,
     fontSize: 11,
     color: color.textMuted,
     marginTop: 1,
   },
-  calendarBtn: {
-    padding: 4,
-    alignSelf: 'center',
+  todayChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: color.primarySoft,
+    borderRadius: 8,
+  },
+  todayChipText: {
+    fontFamily: fontFamily.sans,
+    fontSize: 10,
+    fontWeight: '700',
+    color: color.primary,
+    letterSpacing: 0.8,
+  },
+
+  // iOS calendar sheet
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.45)',
+    justifyContent: 'flex-end',
+  },
+  sheetContainer: {
+    backgroundColor: color.bg,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingTop: 4,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: color.borderStrong,
+  },
+  sheetCancel: {
+    fontFamily: fontFamily.sans,
+    fontSize: 15,
+    fontWeight: '500',
+    color: color.textMuted,
+  },
+  sheetTitle: {
+    fontFamily: fontFamily.sans,
+    fontSize: 14,
+    fontWeight: '700',
+    color: color.text,
+    letterSpacing: -0.1,
+  },
+  sheetDone: {
+    fontFamily: fontFamily.sans,
+    fontSize: 15,
+    fontWeight: '700',
+    color: color.primary,
   },
 
   // Empty

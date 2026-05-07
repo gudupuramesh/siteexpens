@@ -1,11 +1,15 @@
 /**
  * Live subscription to attendance records for a project on a given date.
  */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { db } from '@/src/lib/firebase';
 
 import type { AttendanceRecord } from './types';
+
+function cacheKey(orgId: string, projectId: string, dateString: string) {
+  return `${orgId}\0${projectId}\0${dateString}`;
+}
 
 export type AttendanceSummary = {
   present: number;
@@ -27,6 +31,7 @@ export function useAttendance(
 ): UseAttendanceResult {
   const [data, setData] = useState<AttendanceRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const cacheRef = useRef<Map<string, AttendanceRecord[]>>(new Map());
 
   useEffect(() => {
     // orgId is required: Firestore rules check `resource.data.orgId` and
@@ -39,11 +44,16 @@ export function useAttendance(
       return;
     }
 
-    // Reset day records immediately on date change so we don't flash the
-    // previous date's status pills before the new snapshot resolves. The
-    // roster keeps the row list stable; only the per-day overlay clears.
-    setData([]);
-    setLoading(true);
+    const key = cacheKey(orgId, projectId, dateString);
+    const cached = cacheRef.current.get(key);
+    if (cached) {
+      setData(cached);
+      setLoading(false);
+    } else {
+      setData([]);
+      setLoading(true);
+    }
+
     const unsub = db
       .collection('attendance')
       .where('orgId', '==', orgId)
@@ -56,6 +66,7 @@ export function useAttendance(
             ...(d.data() as Omit<AttendanceRecord, 'id'>),
           }));
           rows.sort((a, b) => a.labourName.localeCompare(b.labourName));
+          cacheRef.current.set(key, rows);
           setData(rows);
           setLoading(false);
         },

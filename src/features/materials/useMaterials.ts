@@ -2,7 +2,7 @@
  * Live subscription to materials for a project, optionally filtered by category.
  */
 import { useEffect, useState } from 'react';
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
 import { db } from '@/src/lib/firebase';
 

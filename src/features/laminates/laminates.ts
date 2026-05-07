@@ -1,4 +1,4 @@
-import firestore from '@react-native-firebase/firestore';
+import { firestore } from '@/src/lib/firebase';
 import { db } from '@/src/lib/firebase';
 
 export type CreateLaminateInput = {
@@ -7,7 +7,8 @@ export type CreateLaminateInput = {
   roomName: string;
   brand: string;
   finish: string;
-  edgeBandCode: string;
+  // Optional — many laminates ship without a separate edge-band SKU.
+  edgeBandCode?: string;
   laminateCode?: string;
   photoUrl?: string;
   photoStoragePath?: string;
@@ -23,10 +24,10 @@ export async function createLaminate(input: CreateLaminateInput): Promise<string
     roomName: input.roomName,
     brand: input.brand,
     finish: input.finish,
-    edgeBandCode: input.edgeBandCode,
     createdBy: input.createdBy,
     createdAt: firestore.FieldValue.serverTimestamp(),
   };
+  if (input.edgeBandCode) doc.edgeBandCode = input.edgeBandCode;
   if (input.laminateCode) doc.laminateCode = input.laminateCode;
   if (input.photoUrl) doc.photoUrl = input.photoUrl;
   if (input.photoStoragePath) doc.photoStoragePath = input.photoStoragePath;

@@ -1,4 +1,4 @@
-import firestore from '@react-native-firebase/firestore';
+import { firestore } from '@/src/lib/firebase';
 
 import { db } from '@/src/lib/firebase';
 import type { TaskCategory } from './types';
@@ -13,7 +13,7 @@ export type TaskCategoryLibraryItem = {
   createdAt: FirebaseFirestoreTypes.Timestamp | null;
 };
 
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
 export function toCategoryKey(label: string): TaskCategory {
   return label

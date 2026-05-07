@@ -1,6 +1,4 @@
-import firestore from '@react-native-firebase/firestore';
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
-import { db } from '@/src/lib/firebase';
+import { db, firestore, type FirebaseFirestoreTypes } from '@/src/lib/firebase';
 import type { AttendanceRecord, AttendanceStatus, ProjectLabour } from './types';
 
 export type MarkAttendanceInput = {
@@ -215,7 +213,7 @@ export async function deleteLabourAcrossProject(
 ): Promise<number> {
   const rosterRef = db.collection('projectLabour').doc(getProjectLabourDocId(projectId, labourId));
   const rosterSnap = await rosterRef.get();
-  if (rosterSnap.exists()) {
+  if (rosterSnap.exists) {
     await rosterRef.delete();
   }
 

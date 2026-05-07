@@ -1,4 +1,4 @@
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
 export type Laminate = {
   id: string;
@@ -7,7 +7,8 @@ export type Laminate = {
   roomName: string;
   brand: string;
   finish: string;
-  edgeBandCode: string;
+  // Optional in newer entries; older docs always have it.
+  edgeBandCode?: string;
   laminateCode?: string;
   photoUrl?: string;
   photoStoragePath?: string;

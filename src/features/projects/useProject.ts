@@ -32,10 +32,8 @@ export function useProject(projectId: string | undefined): UseProjectResult {
       .doc(projectId)
       .onSnapshot(
         (snap) => {
-          const existsField = (snap as unknown as { exists: boolean | (() => boolean) }).exists;
-          const exists = typeof existsField === 'function' ? existsField() : existsField;
           const raw = snap.data();
-          if (exists && raw) {
+          if (snap.exists && raw) {
             setData({ id: snap.id, ...(raw as Omit<Project, 'id'>) });
           } else {
             setData(null);

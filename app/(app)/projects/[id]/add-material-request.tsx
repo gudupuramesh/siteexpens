@@ -5,10 +5,12 @@
  * category-specific fields.
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -21,33 +23,63 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 
 import { useAuth } from '@/src/features/auth/useAuth';
+import { can as roleCan } from '@/src/features/org/permissions';
+import { useCurrentOrganization } from '@/src/features/org/useCurrentOrganization';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
+import { useOrgMembers } from '@/src/features/org/useOrgMembers';
+import { usePermissions } from '@/src/features/org/usePermissions';
+import type { Organization, RoleKey } from '@/src/features/org/types';
 import { useMaterialLibrary } from '@/src/features/materialLibrary/useMaterialLibrary';
 import { createLibraryItem } from '@/src/features/materialLibrary/materialLibrary';
-import { createMaterialRequest, updateMaterialRequest } from '@/src/features/materialRequests/materialRequests';
+import {
+  createMaterialRequest,
+  resubmitRejectedRequest,
+  updateMaterialRequest,
+} from '@/src/features/materialRequests/materialRequests';
+import { materialAutoApprovesOnCreate } from '@/src/features/materialRequests/materialApproval';
 import type { MaterialLibraryItem, MaterialCategory } from '@/src/features/materialLibrary/types';
 import { MATERIAL_CATEGORIES, getCategoryConfig } from '@/src/features/materialLibrary/types';
 import type { MaterialRequestItem } from '@/src/features/materialRequests/types';
 import { useMaterialRequest } from '@/src/features/materialRequests/useMaterialRequest';
 import { Button } from '@/src/ui/Button';
 import { Screen } from '@/src/ui/Screen';
+import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
 import { color, radius, screenInset, space } from '@/src/theme';
 
 const UNITS = ['pcs', 'kg', 'bags', 'sqft', 'rft', 'cft', 'litres', 'meters', 'tons', 'sets'];
 
+function resolveOrgMemberRole(uid: string, org: Organization | null): RoleKey | null {
+  if (!org) return null;
+  const explicit = org.roles?.[uid];
+  if (explicit) return explicit;
+  if (org.ownerId === uid) return 'superAdmin';
+  if (org.memberIds?.includes(uid)) return 'admin';
+  return null;
+}
+
 type CategoryFilter = 'all' | MaterialCategory;
 
 type RequestLineItem = MaterialRequestItem & { _key: string };
 
 export default function AddMaterialRequestScreen() {
-  const { id: projectId, reqId } = useLocalSearchParams<{ id: string; reqId?: string }>();
+  useGuardedRoute({ capability: 'material.request.write' });
+  const { id: projectId, reqId, resubmit } = useLocalSearchParams<{
+    id: string;
+    reqId?: string;
+    resubmit?: string;
+  }>();
+  const isResubmitting = resubmit === '1';
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
+  const { data: org } = useCurrentOrganization();
+  const { role } = usePermissions();
+  const { members } = useOrgMembers(orgId || undefined);
 
   const [title, setTitle] = useState('');
+  const [designatedApproverUids, setDesignatedApproverUids] = useState<string[]>([]);
   const [items, setItems] = useState<RequestLineItem[]>([]);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showManual, setShowManual] = useState(false);
@@ -57,6 +89,15 @@ export default function AddMaterialRequestScreen() {
   const { data: existingRequest, loading: requestLoading } = useMaterialRequest(reqId);
 
   const totalValue = items.reduce((s, i) => s + i.totalCost, 0);
+
+  const materialApproverChoices = useMemo(() => {
+    if (!org) return [];
+    return members.filter((m) =>
+      roleCan(resolveOrgMemberRole(m.uid, org), 'material.request.approve'),
+    );
+  }, [members, org]);
+
+  const needsMaterialApproval = !!role && !materialAutoApprovesOnCreate(role);
 
   useEffect(() => {
     if (!isEditMode || !existingRequest || prefilledRef.current) return;
@@ -122,23 +163,48 @@ export default function AddMaterialRequestScreen() {
   // ── Submit ──
   async function onSubmit() {
     if (!user || !orgId || !projectId || items.length === 0) return;
+    if (!isEditMode && !role) {
+      Alert.alert('Role unavailable', 'Your studio role could not be loaded. Try again.');
+      return;
+    }
     setSubmitting(true);
     try {
       if (isEditMode && reqId) {
-        await updateMaterialRequest({
-          requestId: reqId,
-          title,
-          items: items.map(({ _key, ...rest }) => rest),
-        });
+        if (isResubmitting && existingRequest?.status === 'rejected') {
+          // Creator is pushing a previously-rejected request back into the
+          // approval queue. The writer flips status to 'pending' and clears
+          // the rejection note; the trigger sees the rejected→pending
+          // transition and re-fires the approver push.
+          await resubmitRejectedRequest({
+            requestId: reqId,
+            title,
+            items: items.map(({ _key, ...rest }) => rest),
+            editedBy: user.uid,
+          });
+        } else {
+          await updateMaterialRequest({
+            requestId: reqId,
+            title,
+            items: items.map(({ _key, ...rest }) => rest),
+            editedBy: user.uid,
+          });
+        }
       } else {
-        await createMaterialRequest({
+        const newId = await createMaterialRequest({
           orgId,
           projectId,
           title,
           items: items.map(({ _key, ...rest }) => rest),
           createdBy: user.uid,
+          creatorRole: role!,
+          designatedApproverUids:
+            designatedApproverUids.length > 0 ? designatedApproverUids : undefined,
         });
+        await new Promise((r) => setTimeout(r, 150));
+        router.replace(`/(app)/projects/${projectId}/material-request/${newId}` as never);
+        return;
       }
+      await new Promise((r) => setTimeout(r, 150));
       router.back();
     } catch (err) {
       Alert.alert('Error', (err as Error).message);
@@ -157,7 +223,11 @@ export default function AddMaterialRequestScreen() {
           <Ionicons name="close" size={22} color={color.text} />
         </Pressable>
         <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-          {isEditMode ? 'Edit Material Request' : 'New Material Request'}
+          {isResubmitting
+            ? 'Edit & Re-submit'
+            : isEditMode
+              ? 'Edit Material Request'
+              : 'New Material Request'}
         </Text>
         <View style={styles.navBtn} />
       </View>
@@ -171,6 +241,23 @@ export default function AddMaterialRequestScreen() {
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
         >
+          {isResubmitting && existingRequest?.rejectionNote ? (
+            <View style={styles.rejectionBanner}>
+              <Ionicons name="close-circle" size={18} color={color.danger} />
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text variant="metaStrong" color="danger">
+                  Previously rejected
+                </Text>
+                <Text variant="meta" color="text">
+                  {existingRequest.rejectionNote}
+                </Text>
+                <Text variant="caption" color="textMuted">
+                  Address the feedback above and submit again — approvers will be notified.
+                </Text>
+              </View>
+            </View>
+          ) : null}
+
           <View style={styles.summaryCard}>
             <View style={styles.summaryRow}>
               <Text variant="caption" color="textMuted">ITEMS ADDED</Text>
@@ -191,6 +278,41 @@ export default function AddMaterialRequestScreen() {
             value={title}
             onChangeText={setTitle}
           />
+
+          {!isEditMode && needsMaterialApproval && materialApproverChoices.length > 0 ? (
+            <View style={styles.approverSection}>
+              <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
+                NOTIFY APPROVERS (OPTIONAL)
+              </Text>
+              <Text variant="meta" color="textMuted" style={styles.approverHint}>
+                Any Manager, Admin, or Super Admin can approve. Selected members get a heads-up in
+                notifications.
+              </Text>
+              {materialApproverChoices.map((m) => {
+                const on = designatedApproverUids.includes(m.uid);
+                return (
+                  <Pressable
+                    key={m.uid}
+                    onPress={() =>
+                      setDesignatedApproverUids((prev) =>
+                        prev.includes(m.uid) ? prev.filter((u) => u !== m.uid) : [...prev, m.uid],
+                      )
+                    }
+                    style={[styles.approverRow, on && styles.approverRowOn]}
+                  >
+                    <Ionicons
+                      name={on ? 'checkbox' : 'square-outline'}
+                      size={22}
+                      color={on ? color.primary : color.textMuted}
+                    />
+                    <Text variant="metaStrong" color="text" style={{ flex: 1 }}>
+                      {m.displayName}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
 
           {/* Add buttons */}
           <Text variant="caption" color="textMuted" style={styles.sectionLabel}>ITEMS</Text>
@@ -287,7 +409,13 @@ export default function AddMaterialRequestScreen() {
         {/* Footer */}
         <View style={styles.footer}>
           <Button
-            label={`${isEditMode ? 'Update Request' : 'Submit Request'}${items.length > 0 ? ` (${items.length} items)` : ''}`}
+            label={`${
+              isEditMode
+                ? 'Update Request'
+                : needsMaterialApproval
+                  ? 'Submit for approval'
+                  : 'Submit request'
+            }${items.length > 0 ? ` (${items.length} items)` : ''}`}
             onPress={onSubmit}
             loading={submitting}
             disabled={items.length === 0 || (isEditMode && requestLoading)}
@@ -310,6 +438,11 @@ export default function AddMaterialRequestScreen() {
         userId={user?.uid ?? ''}
         onAdd={addManualItem}
         onClose={() => setShowManual(false)}
+      />
+
+      <SubmitProgressOverlay
+        visible={submitting}
+        intent="submitMaterialRequest"
       />
     </Screen>
   );
@@ -334,9 +467,28 @@ function LibraryPickerModal({
   const { data: items, loading } = useMaterialLibrary(orgId, search, activeCat);
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <Pressable style={styles.modalOverlay} onPress={onClose}><View /></Pressable>
-      <View style={styles.modalSheet}>
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent
+      presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+      onRequestClose={onClose}
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => {
+            Keyboard.dismiss();
+            onClose();
+          }}
+        >
+          <View />
+        </Pressable>
+        <View style={styles.modalSheet}>
         <View style={styles.modalHandle} />
         <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
           Material Library
@@ -350,7 +502,8 @@ function LibraryPickerModal({
             value={search}
             onChangeText={setSearch}
             style={styles.modalSearchInput}
-            autoFocus
+            autoFocus={Platform.OS !== 'ios'}
+            returnKeyType="search"
           />
         </View>
 
@@ -384,6 +537,8 @@ function LibraryPickerModal({
         <FlatList
           data={items}
           keyExtractor={(i) => i.id}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           renderItem={({ item }) => {
             const catConfig = getCategoryConfig(item.category ?? 'other');
             return (
@@ -416,7 +571,8 @@ function LibraryPickerModal({
             </View>
           }
         />
-      </View>
+        </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -671,6 +827,23 @@ const styles = StyleSheet.create({
   navTitle: { flex: 1, textAlign: 'center' },
   scroll: { paddingHorizontal: screenInset, paddingTop: space.md, paddingBottom: space.xxl },
   sectionLabel: { marginTop: space.md, marginBottom: space.xs },
+  approverSection: { marginBottom: space.sm },
+  approverHint: { marginBottom: space.sm, lineHeight: 20 },
+  approverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.xs,
+    marginBottom: space.xs,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
+  },
+  approverRowOn: {
+    borderColor: color.primary,
+    backgroundColor: color.primarySoft,
+  },
 
   addRow: { flexDirection: 'row', gap: space.sm, marginBottom: space.md },
   addBtn: {
@@ -680,10 +853,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: space.xs,
     paddingVertical: space.sm,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bgGrouped,
+  },
+
+  rejectionBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.sm,
+    backgroundColor: color.dangerSoft,
+    borderWidth: 1,
+    borderColor: color.danger,
+    borderRadius: 10,
+    padding: space.sm,
+    marginBottom: space.sm,
   },
 
   summaryCard: {
@@ -709,7 +894,7 @@ const styles = StyleSheet.create({
 
   itemCard: {
     backgroundColor: color.surface,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: color.borderStrong,
     padding: space.sm,
@@ -733,7 +918,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.surface,
-    borderRadius: 0,
+    borderRadius: 8,
   },
 
   footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.bgGrouped, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.borderStrong },
@@ -744,7 +929,13 @@ const styles = StyleSheet.create({
   modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: color.border, alignSelf: 'center', marginBottom: space.sm },
   modalTitle: { textAlign: 'center', marginBottom: space.sm },
   modalSearch: { flexDirection: 'row', alignItems: 'center', gap: space.xs, marginHorizontal: screenInset, marginBottom: space.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: radius.sm, backgroundColor: color.bgGrouped, borderWidth: 1, borderColor: color.border },
-  modalSearchInput: { flex: 1, fontSize: 15, color: color.text, paddingVertical: Platform.OS === 'ios' ? space.xs : 0 },
+  modalSearchInput: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 20,
+    color: color.text,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+  },
   modalList: { paddingHorizontal: screenInset, maxHeight: 400 },
   modalEmpty: { paddingVertical: space.xl, alignItems: 'center' },
 

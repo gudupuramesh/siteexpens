@@ -1,29 +1,76 @@
 /**
- * Sign-in screen. The user enters their phone number and taps "Send code".
- * On success we navigate to the verify screen.
+ * Sign-in screen — InteriorOS aesthetic.
  *
- * Phone OTP is delivered by `@react-native-firebase/auth`, which handles
- * Play Integrity (Android) / silent APNs (iOS) internally. A custom dev
- * client (not Expo Go) is required.
+ * Layout (top to bottom):
+ *   - Hero: SquareMonogram + serif Wordmark + uppercase tagline
+ *     (left-aligned, hangs in the upper-left like a magazine masthead)
+ *   - GlassCard wrapping the form:
+ *       - "SIGN IN TO CONTINUE" small caps
+ *       - Phone field with India-flag country chip + 10-digit phone-pad
+ *       - Helper "We'll send a 6-digit OTP to verify it's you."
+ *       - "Send OTP" primary button
+ *       - Terms & Privacy disclaimer (now inside the card)
+ *   - HYDERABAD · 2026 stamp footer (provided by AuthChrome)
+ *
+ * Logic preserved from the previous version:
+ *   - Same MSG91 + Firebase custom-token flow via `sendOtp`
+ *   - Same `nationalDigitsIndia` digit-strip handling for paste-with-91
+ *   - Same dev-bypass via `EXPO_PUBLIC_DEV_LOGIN_PHONE` (in `phoneAuth.ts`)
+ *   - Same error states + 10-digit validation
+ *
+ * The displayed phone is now formatted "98765 43210" (5+5 with a
+ * space) for readability — the underlying state still stores the
+ * raw 10 digits, and we submit `+91XXXXXXXXXX` unchanged.
  */
 import { router } from 'expo-router';
 import { useState } from 'react';
-import {
-  KeyboardAvoidingView,
-  Platform,
-  StyleSheet,
-  View,
-} from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import Svg, { Circle, Rect } from 'react-native-svg';
 
 import { sendOtp } from '@/src/features/auth/phoneAuth';
 import { setPendingConfirmation } from '@/src/features/auth/pendingConfirmation';
 import { Button } from '@/src/ui/Button';
-import { Screen } from '@/src/ui/Screen';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
-import { space } from '@/src/theme';
+import { AuthChrome } from '@/src/ui/brand/AuthChrome';
+import { GlassCard } from '@/src/ui/brand/GlassCard';
+import { SquareMonogram } from '@/src/ui/brand/SquareMonogram';
+import { Wordmark } from '@/src/ui/brand/Wordmark';
+import { color, space } from '@/src/theme';
 
 const COUNTRY_CODE = '+91';
+
+/** User may type/paste `91XXXXXXXXXX` while the field already shows
+ *  `+91`. Strip repeated `91` prefixes until we have 10 digits. */
+function nationalDigitsIndia(rawDigits: string): string {
+  let d = rawDigits.replace(/\D/g, '');
+  while (d.length > 10 && d.startsWith('91')) {
+    d = d.slice(2);
+  }
+  return d;
+}
+
+/** Render 10 digits as "98765 43210" — empty-safe (returns the
+ *  partial string if fewer than 10 digits have been typed). */
+function formatNationalIN(digits: string): string {
+  const d = digits.slice(0, 10);
+  if (d.length <= 5) return d;
+  return `${d.slice(0, 5)} ${d.slice(5)}`;
+}
+
+/** Tiny inline India flag for the country-code chip — three
+ *  horizontal bands + a hollow chakra disc in the centre. Drawn at
+ *  20×14 to sit cleanly next to "+91" without dominating. */
+function IndiaFlag() {
+  return (
+    <Svg width={20} height={14} viewBox="0 0 20 14">
+      <Rect width={20} height={4.67} fill="#FF9933" />
+      <Rect y={4.67} width={20} height={4.67} fill="#FFFFFF" />
+      <Rect y={9.33} width={20} height={4.67} fill="#138808" />
+      <Circle cx={10} cy={7} r={1.6} fill="none" stroke="#000080" strokeWidth={0.5} />
+    </Svg>
+  );
+}
 
 export default function SignInScreen() {
   const [phone, setPhone] = useState('');
@@ -31,15 +78,16 @@ export default function SignInScreen() {
   const [error, setError] = useState<string | undefined>();
 
   const digits = phone.replace(/\D/g, '');
-  const canSubmit = digits.length >= 10 && !submitting;
+  const national10 = nationalDigitsIndia(digits);
+  const canSubmit = national10.length === 10 && !submitting;
 
   async function handleSendOtp() {
     setError(undefined);
-    if (digits.length < 10) {
+    if (national10.length !== 10) {
       setError('Enter a 10-digit mobile number');
       return;
     }
-    const e164 = `${COUNTRY_CODE}${digits}`;
+    const e164 = `${COUNTRY_CODE}${national10}`;
 
     setSubmitting(true);
     try {
@@ -54,74 +102,99 @@ export default function SignInScreen() {
   }
 
   return (
-    <Screen bg="plain">
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <View style={styles.body}>
-          <Text variant="largeTitle" color="text">
-            Sign in
-          </Text>
-          <Text variant="body" color="textMuted" style={styles.subtitle}>
-            We&apos;ll text you a 6-digit code to verify your number.
-          </Text>
-
-          <View style={styles.field}>
-            <TextField
-              label="Mobile number"
-              leading={COUNTRY_CODE}
-              value={phone}
-              onChangeText={(t) => {
-                setPhone(t);
-                if (error) setError(undefined);
-              }}
-              placeholder="98765 43210"
-              keyboardType="phone-pad"
-              autoComplete="tel"
-              autoCorrect={false}
-              maxLength={12}
-              editable={!submitting}
-              error={error}
-              returnKeyType="done"
-              onSubmitEditing={handleSendOtp}
-            />
-          </View>
-
-          <Button
-            label="Send code"
-            onPress={handleSendOtp}
-            loading={submitting}
-            disabled={!canSubmit}
-          />
+    <AuthChrome
+      hero={
+        <View style={styles.heroStack}>
+          <SquareMonogram size={48} style={styles.monogram} />
+          <Wordmark size="lg" font="serif" align="left" />
         </View>
+      }
+    >
+      <GlassCard>
+        <Text variant="meta" color="textFaint" style={styles.sectionLabel}>
+          SIGN IN TO CONTINUE
+        </Text>
 
-        <View style={styles.footer}>
-          <Text variant="caption" color="textFaint" align="center">
-            By continuing you agree to our Terms &amp; Privacy Policy.
-          </Text>
-        </View>
-      </KeyboardAvoidingView>
-    </Screen>
+        <TextField
+          leading={
+            <View style={styles.flagRow}>
+              <IndiaFlag />
+              <Text style={styles.countryCodeText}>{COUNTRY_CODE}</Text>
+            </View>
+          }
+          value={formatNationalIN(national10)}
+          onChangeText={(t) => {
+            // Strip non-digits + any leading "91" the user pasted.
+            // Cap at 10 digits — formatting is purely cosmetic, the
+            // underlying state stays as raw digits.
+            let d = t.replace(/\D/g, '');
+            while (d.length > 10 && d.startsWith('91')) d = d.slice(2);
+            d = d.slice(0, 10);
+            setPhone(d);
+            if (error) setError(undefined);
+          }}
+          placeholder="98765 43210"
+          keyboardType="phone-pad"
+          autoComplete="tel"
+          autoCorrect={false}
+          maxLength={11 /* 5 + space + 5 */}
+          editable={!submitting}
+          error={error}
+          returnKeyType="done"
+          onSubmitEditing={handleSendOtp}
+          surface
+          strongBorder
+        />
+        <Text variant="meta" color="textMuted" style={styles.helper}>
+          We'll send a 6-digit OTP to verify it's you.
+        </Text>
+
+        <Button
+          label="Send OTP"
+          onPress={handleSendOtp}
+          loading={submitting}
+          disabled={!canSubmit}
+          style={styles.cta}
+        />
+
+        <Text variant="caption" color="textFaint" align="center" style={styles.terms}>
+          By continuing you agree to our Terms &amp; Privacy Policy.
+        </Text>
+      </GlassCard>
+    </AuthChrome>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: {
-    flex: 1,
+  heroStack: {
+    alignItems: 'flex-start',
   },
-  body: {
-    flex: 1,
-    justifyContent: 'center',
+  monogram: {
+    marginBottom: space.md,
   },
-  subtitle: {
+  sectionLabel: {
+    letterSpacing: 1,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    marginBottom: space.md,
+  },
+  flagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  countryCodeText: {
+    color: color.text,
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  helper: {
+    marginTop: space.sm,
+  },
+  cta: {
     marginTop: space.md,
-    marginBottom: space.xxl,
   },
-  field: {
-    marginBottom: space.xl,
-  },
-  footer: {
-    paddingBottom: space.lg,
+  terms: {
+    marginTop: space.md,
   },
 });

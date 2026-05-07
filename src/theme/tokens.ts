@@ -35,6 +35,11 @@ export const color = {
   primarySoft: '#E8EFFE',      // accent.soft
   onPrimary: '#FFFFFF',
 
+  // Lavender accents — for the interior-scene illustration tones,
+  // the country-code chip background, and the OTP filled-state fill.
+  lavender: '#A6A8DC',         // footer accent + scene mid-tone
+  lavenderWash: '#F8F6FB',     // chip bg + OTP filled fill
+
   // Semantic
   success: '#0F9D58',
   successSoft: '#E3F5EB',
@@ -76,6 +81,7 @@ export const radius = {
   sm: 8,
   md: 10, // standard — cards, inputs, buttons
   lg: 12,
+  lg2: 14,
   xl: 16,
   pill: 9999,
 } as const;

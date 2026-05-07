@@ -5,12 +5,12 @@
  * we don't have to wire a nested router; everything is local state and
  * fully self-contained inside `src/features/toolkit/`.
  */
-import { useState, type ComponentType } from 'react';
+import { useState, type ComponentProps, type ComponentType } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import type { ComponentProps } from 'react';
 
 import { Text } from '@/src/ui/Text';
+import { OrgSwitcherChip } from '@/src/ui/OrgSwitcherChip';
 import { color, fontFamily, radius, space } from '@/src/theme';
 
 import { UnitConverter } from './modules/UnitConverter';
@@ -175,7 +175,14 @@ export function ToolkitHome() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.hero}>
-          <Text style={styles.heroEyebrow}>SITEEXPENS · TOOLKIT</Text>
+          {/* Eyebrow + chip share a row so the studio name reads on
+              the right at the same level as the section label on
+              the left — matches the competitor pattern + reduces
+              the empty-space-at-top complaint. */}
+          <View style={styles.eyebrowRow}>
+            <Text style={styles.heroEyebrow}>SITEEXPENS · TOOLKIT</Text>
+            <OrgSwitcherChip />
+          </View>
           <Text variant="largeTitle">On-site Toolkit</Text>
           <Text variant="meta" color="textMuted" style={styles.heroSub}>
             Quick utility calculators for designers in the field —
@@ -253,12 +260,20 @@ const styles = StyleSheet.create({
     paddingBottom: space.md,
     gap: 4,
   },
+  eyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.sm,
+    marginBottom: 2,
+  },
   heroEyebrow: {
     fontFamily: fontFamily.mono,
     fontSize: 10,
     fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.4,
+    flexShrink: 1,
   },
   heroSub: { marginTop: 2 },
 

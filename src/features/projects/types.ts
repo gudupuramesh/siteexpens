@@ -9,7 +9,7 @@
  * picker / manual progress / team size). All new fields are optional so
  * existing Firestore docs continue to load without migration.
  */
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
 export type ProjectStatus = 'active' | 'on_hold' | 'completed' | 'archived';
 
@@ -90,14 +90,24 @@ export type Project = {
   siteAddress: string;
   /** Project value in whole rupees (₹). */
   value: number;
-  /** Local device URI for Phase 1. Will be replaced by an R2 URL once
-   *  the presigned-upload Cloud Function lands. */
+  /** Public Cloudflare R2 URL for the cover photo (or null if none).
+   *  Older docs may still hold a `file://` URI from the pre-R2 era —
+   *  those will appear broken until re-uploaded. */
   photoUri: string | null;
+  /** R2 object key for the cover photo — kept alongside `photoUri`
+   *  so the replace-flow can delete the old object from the bucket
+   *  without listing the whole prefix. Optional for back-compat with
+   *  pre-R2 docs that have no key on file. */
+  photoR2Key?: string | null;
   status: ProjectStatus;
   ownerId: string;
   memberIds: string[];
   /** UIDs who can approve material requests (in addition to ownerId). */
   approverIds?: string[];
+  /** UIDs of users with the Client role scoped to this project. They have
+   *  read-only access to a curated subset of the project (Overview, DPR,
+   *  Designs, Laminates, Tasks status). They are not in `memberIds`. */
+  clientUids?: string[];
   createdAt: FirebaseFirestoreTypes.Timestamp | null;
 
   // ── InteriorOS metadata (all optional) ─────────────────────────

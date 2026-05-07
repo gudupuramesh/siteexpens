@@ -34,6 +34,7 @@ import {
 } from '@/src/features/whiteboard/whiteboard';
 import { useWhiteboards } from '@/src/features/whiteboard/useWhiteboard';
 import { WhiteboardEditor } from '@/src/features/whiteboard/WhiteboardEditor';
+import { sanitizeSvgXml } from '@/src/features/whiteboard/sanitizeSvg';
 
 function relTime(d: Date): string {
   const ms = Date.now() - d.getTime();
@@ -250,11 +251,15 @@ function BoardCard({
       style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }]}
     >
       {/* Thumbnail — saved SVG snapshot from Excalidraw, falls back to
-          a placeholder when the board is empty or missing a snapshot. */}
+          a placeholder when the board is empty or missing a snapshot.
+          Sanitised before render: Excalidraw output commonly contains
+          anonymous `<mask>` / `<clipPath>` elements (no `id`) which
+          crash react-native-svg's iOS renderer. The sanitiser
+          synthesises ids for those and drops `<foreignObject>`. */}
       <View style={styles.thumb}>
         {board.thumbnailSvg ? (
           <SvgXml
-            xml={board.thumbnailSvg}
+            xml={sanitizeSvgXml(board.thumbnailSvg)}
             width="100%"
             height="100%"
           />
@@ -315,6 +320,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     backgroundColor: color.primary,
+    borderRadius: 8,
   },
   newBtnText: {
     fontFamily: fontFamily.sans,
@@ -334,6 +340,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.surface,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
+    borderRadius: 10,
     overflow: 'hidden',
     shadowColor: '#0F172A',
     shadowOpacity: 0.04,

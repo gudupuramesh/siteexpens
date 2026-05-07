@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About Us — InteriorOS</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root{
+    --blue-deep:oklch(38% 0.18 265);
+    --blue-primary:oklch(48% 0.2 265);
+    --blue-mid:oklch(58% 0.16 265);
+    --lavender:oklch(72% 0.1 275);
+    --lavender-light:oklch(92% 0.04 275);
+    --lavender-wash:oklch(97% 0.015 275);
+    --white:#fff;
+    --off-white:#fafbfd;
+    --fg:oklch(18% 0.02 265);
+    --muted:oklch(50% 0.02 265);
+    --border:oklch(90% 0.015 270);
+
+    --font-display:'Iowan Old Style','Charter','Palatino Linotype',Georgia,serif;
+    --font-body:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+
+    --max-w:1200px;
+    --section-py:100px;
+  }
+
+  html{scroll-behavior:smooth}
+  body{font-family:var(--font-body);color:var(--fg);background:var(--white);-webkit-font-smoothing:antialiased;line-height:1.6}
+
+  /* ── Nav ── */
+  .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,0.88);backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border)}
+  .nav-inner{max-width:var(--max-w);margin:0 auto;padding:0 32px;height:64px;display:flex;align-items:center;justify-content:space-between}
+  .nav-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--fg)}
+  .nav-logo{width:36px;height:36px;border-radius:10px;background:var(--blue-primary);display:flex;align-items:center;justify-content:center;color:white;font-family:var(--font-display);font-size:15px;font-weight:700;letter-spacing:-0.02em}
+  .nav-name{font-family:var(--font-display);font-size:18px;font-weight:700;letter-spacing:-0.03em}
+  .nav-links{display:flex;align-items:center;gap:32px;list-style:none}
+  .nav-links a{font-size:14px;font-weight:500;color:var(--muted);text-decoration:none;transition:color 0.2s}
+  .nav-links a:hover{color:var(--fg)}
+  .nav-cta{padding:10px 22px;border-radius:10px;background:var(--blue-primary);color:white !important;font-weight:600;transition:background 0.2s}
+  .nav-cta:hover{background:var(--blue-deep) !important}
+
+  /* ── Buttons ── */
+  .btn-primary{padding:14px 32px;border-radius:12px;background:var(--blue-primary);color:white;font-size:16px;font-weight:600;font-family:var(--font-body);text-decoration:none;border:none;cursor:pointer;transition:background 0.2s, transform 0.1s;display:inline-flex;align-items:center;gap:8px}
+  .btn-primary:hover{background:var(--blue-deep)}
+  .btn-primary:active{transform:scale(0.98)}
+
+  /* ── Section helpers ── */
+  .section-eyebrow{font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--blue-mid);margin-bottom:12px}
+  .section-headline{font-family:var(--font-display);font-size:clamp(28px, 3.5vw, 40px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:16px;max-width:600px}
+
+  /* ── Hero ── */
+  .hero{padding:160px 32px 100px;text-align:center;background:linear-gradient(180deg, var(--lavender-wash) 0%, var(--white) 100%);position:relative;overflow:hidden}
+  .hero-inner{max-width:780px;margin:0 auto}
+  .hero h1{font-family:var(--font-display);font-size:clamp(36px, 5vw, 56px);font-weight:700;letter-spacing:-0.04em;line-height:1.1;color:var(--fg);margin-bottom:24px}
+  .hero h1 .accent{color:var(--blue-primary)}
+  .hero-sub{font-size:18px;color:var(--muted);max-width:600px;margin:0 auto;line-height:1.7}
+
+  /* ── Our Story ── */
+  .story{padding:var(--section-py) 32px}
+  .story-inner{max-width:var(--max-w);margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:80px;align-items:center}
+  .story-text h2{font-family:var(--font-display);font-size:clamp(28px, 3vw, 36px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:20px}
+  .story-text p{font-size:16px;color:var(--muted);line-height:1.7;margin-bottom:16px}
+  .story-visual{display:flex;justify-content:center;align-items:center}
+  .story-card{background:var(--off-white);border:1px solid var(--border);border-radius:20px;padding:40px 32px;text-align:center;max-width:380px;width:100%}
+  .story-card-icon{width:64px;height:64px;border-radius:16px;background:var(--lavender-light);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;color:var(--blue-primary)}
+  .story-card h3{font-family:var(--font-display);font-size:22px;font-weight:700;letter-spacing:-0.02em;margin-bottom:8px}
+  .story-card p{font-size:14px;color:var(--muted);line-height:1.6}
+
+  /* ── Mission ── */
+  .mission{padding:var(--section-py) 32px;background:var(--off-white)}
+  .mission-inner{max-width:780px;margin:0 auto;text-align:center}
+  .mission-inner h2{font-family:var(--font-display);font-size:clamp(28px, 3.5vw, 40px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:20px}
+  .mission-inner p{font-size:18px;color:var(--muted);line-height:1.7;max-width:640px;margin:0 auto}
+
+  /* ── Stats ── */
+  .stats-strip{padding:72px 32px;background:linear-gradient(135deg, var(--blue-deep) 0%, var(--blue-primary) 100%);color:white}
+  .stats-inner{max-width:var(--max-w);margin:0 auto;display:flex;justify-content:center;gap:80px;flex-wrap:wrap}
+  .stat{text-align:center}
+  .stat-num{font-family:var(--font-display);font-size:clamp(36px, 4vw, 48px);font-weight:700;letter-spacing:-0.03em;line-height:1;margin-bottom:6px}
+  .stat-label{font-size:14px;font-weight:500;opacity:0.8;line-height:1.4}
+
+  /* ── What We Believe In ── */
+  .beliefs{padding:var(--section-py) 32px}
+  .beliefs-inner{max-width:var(--max-w);margin:0 auto;text-align:center}
+  .beliefs-inner h2{font-family:var(--font-display);font-size:clamp(28px, 3.5vw, 40px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:48px}
+  .beliefs-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:28px;text-align:left}
+  .belief-card{background:var(--off-white);border:1px solid var(--border);border-radius:16px;padding:32px 28px;transition:box-shadow 0.2s}
+  .belief-card:hover{box-shadow:0 4px 20px oklch(50% 0.04 265 / 0.08)}
+  .belief-icon{width:48px;height:48px;border-radius:12px;background:var(--lavender-light);display:flex;align-items:center;justify-content:center;margin-bottom:18px;color:var(--blue-primary)}
+  .belief-card h3{font-size:18px;font-weight:700;letter-spacing:-0.01em;margin-bottom:10px}
+  .belief-card p{font-size:14px;color:var(--muted);line-height:1.65}
+
+  /* ── Hyderabad ── */
+  .location{padding:var(--section-py) 32px;background:var(--lavender-wash)}
+  .location-inner{max-width:780px;margin:0 auto;text-align:center}
+  .location-inner h2{font-family:var(--font-display);font-size:clamp(28px, 3.5vw, 40px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:20px}
+  .location-inner p{font-size:16px;color:var(--muted);line-height:1.7;max-width:600px;margin:0 auto}
+  .location-badge{display:inline-flex;align-items:center;gap:8px;padding:8px 20px;border-radius:24px;background:var(--lavender-light);color:var(--blue-primary);font-size:14px;font-weight:600;margin-top:28px}
+
+  /* ── CTA ── */
+  .cta-section{padding:80px 32px;text-align:center;background:linear-gradient(180deg, var(--white) 0%, var(--lavender-wash) 100%)}
+  .cta-inner{max-width:640px;margin:0 auto}
+  .cta-section h2{font-family:var(--font-display);font-size:clamp(28px, 3.5vw, 40px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:16px}
+  .cta-section p{font-size:16px;color:var(--muted);margin-bottom:32px;line-height:1.6}
+
+  /* ── Footer ── */
+  .footer{padding:60px 32px 40px;background:var(--off-white);border-top:1px solid var(--border)}
+  .footer-inner{max-width:var(--max-w);margin:0 auto;display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:40px}
+  .footer-brand p{font-size:14px;line-height:1.6;max-width:280px;color:var(--muted);margin-top:12px}
+  .footer h4{font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+  .footer ul{list-style:none;display:flex;flex-direction:column;gap:10px}
+  .footer ul a{color:var(--muted);text-decoration:none;font-size:14px;transition:color 0.2s}
+  .footer ul a:hover{color:var(--fg)}
+  .footer-bottom{max-width:var(--max-w);margin:40px auto 0;padding-top:24px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted)}
+
+  /* ── Responsive ── */
+  @media (max-width:768px){
+    .nav-links{display:none}
+    .hero h1{font-size:32px}
+    .story-inner{grid-template-columns:1fr;gap:40px}
+    .beliefs-grid{grid-template-columns:1fr}
+    .stats-inner{gap:40px}
+    .footer-inner{grid-template-columns:1fr 1fr}
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Nav ── -->
+<nav class="nav"><div class="nav-inner">
+  <a href="interioros-landing-2.html" class="nav-brand"><div class="nav-logo">iO</div><span class="nav-name">InteriorOS</span></a>
+  <ul class="nav-links">
+    <li><a href="interioros-landing-2.html#features">Features</a></li>
+    <li><a href="interioros-landing-2.html#solutions">Solutions</a></li>
+    <li><a href="interioros-landing-2.html#testimonials">Testimonials</a></li>
+    <li><a href="interioros-landing-2.html#pricing">Pricing</a></li>
+    <li><a href="#" class="nav-cta">Get Started Free</a></li>
+  </ul>
+</div></nav>
+
+<!-- ── 1. Hero ── -->
+<section class="hero"><div class="hero-inner">
+  <h1>Built by <span class="accent">designers</span>, for designers</h1>
+  <p class="hero-sub">InteriorOS was born from a simple truth: running an interior design studio in India shouldn't require juggling five apps. We started as designers ourselves, and we built the tool we always wished existed.</p>
+</div></section>
+
+<!-- ── 2. Our Story ── -->
+<section class="story"><div class="story-inner">
+  <div class="story-text">
+    <div class="section-eyebrow">Our Story</div>
+    <h2>From WhatsApp chaos to clarity</h2>
+    <p>InteriorOS was born from the frustration of running an interior design studio in India. Like every studio owner, we lived in WhatsApp groups — chasing supervisors for daily updates, losing material photos in endless scrolls, and reconciling project costs across Excel sheets and Tally entries at month-end.</p>
+    <p>We'd lose track of vendor payments, miss client follow-ups, and discover budget overruns only when the damage was done. Every project felt like controlled chaos. We knew there had to be a better way.</p>
+    <p>So in Hyderabad, we sat down and built InteriorOS — a single platform where site operations, project finance, team management, and client communication all live together. Built by people who understand the difference between a DPR and a daily standup. Built for Indian studios, by an Indian team.</p>
+  </div>
+  <div class="story-visual">
+    <div class="story-card">
+      <div class="story-card-icon">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none"><path d="M14 3L4 8v12l10 5 10-5V8L14 3z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M4 8l10 5 10-5M14 13v12" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </div>
+      <h3>Founded in Hyderabad</h3>
+      <p>Built by a team that has lived the chaos of managing interior projects across Indian cities — and decided to fix it for everyone.</p>
+    </div>
+  </div>
+</div></section>
+
+<!-- ── 3. Our Mission ── -->
+<section class="mission"><div class="mission-inner">
+  <div class="section-eyebrow">Our Mission</div>
+  <h2>Give every interior design studio in India the tools to run projects profitably — without the chaos</h2>
+  <p>We believe studio owners should spend their time designing beautiful spaces, not firefighting WhatsApp groups, wrestling spreadsheets, or chasing payments. InteriorOS replaces the duct-tape stack of disconnected tools with one integrated platform built for how interior design studios actually work.</p>
+</div></section>
+
+<!-- ── 4. Stats Strip ── -->
+<section class="stats-strip"><div class="stats-inner">
+  <div class="stat">
+    <div class="stat-num">500+</div>
+    <div class="stat-label">Studios</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num">2000+</div>
+    <div class="stat-label">Projects Managed</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num">15+</div>
+    <div class="stat-label">Cities</div>
+  </div>
+  <div class="stat">
+    <div class="stat-num">&#8377;100Cr+</div>
+    <div class="stat-label">Tracked</div>
+  </div>
+</div></section>
+
+<!-- ── 5. What We Believe In ── -->
+<section class="beliefs"><div class="beliefs-inner">
+  <div class="section-eyebrow">Our Values</div>
+  <h2>What we believe in</h2>
+  <div class="beliefs-grid">
+    <div class="belief-card">
+      <div class="belief-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M8 12l3 3 5-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <h3>Simplicity</h3>
+      <p>If your site supervisor can use WhatsApp, they can use InteriorOS. We obsess over making powerful features feel effortless. No training manuals, no onboarding calls — just open the app and go.</p>
+    </div>
+    <div class="belief-card">
+      <div class="belief-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M12 2l3 6h6l-5 4 2 6-6-4-6 4 2-6-5-4h6z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+      </div>
+      <h3>Designer-first</h3>
+      <p>We don't build for generic "project managers." We build for interior designers who think in laminates, site visits, and vendor balances. Every feature is shaped by how studios actually work — not how software companies think they should.</p>
+    </div>
+    <div class="belief-card">
+      <div class="belief-icon">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><rect x="3" y="6" width="18" height="13" rx="2" stroke="currentColor" stroke-width="2"/><path d="M3 10h18" stroke="currentColor" stroke-width="1.5"/><path d="M7 15h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </div>
+      <h3>Transparency</h3>
+      <p>Every rupee visible. Every expense tracked. Every payment recorded. We believe studio owners deserve complete financial clarity across all their projects — in real time, not at month-end.</p>
+    </div>
+  </div>
+</div></section>
+
+<!-- ── 6. Based in Hyderabad ── -->
+<section class="location"><div class="location-inner">
+  <div class="section-eyebrow">Where We Are</div>
+  <h2>Proudly built in Hyderabad</h2>
+  <p>InteriorOS is made in India, for Indian studios. We understand the nuances of how interior design businesses run here — from vendor negotiations in local markets to GST invoicing, from labour attendance on dusty sites to client meetings in Jubilee Hills living rooms. We are building from the heart of India's design community.</p>
+  <div class="location-badge">
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M9 1C5.7 1 3 3.7 3 7c0 4.5 6 10 6 10s6-5.5 6-10c0-3.3-2.7-6-6-6z" stroke="currentColor" stroke-width="1.5"/><circle cx="9" cy="7" r="2" stroke="currentColor" stroke-width="1.5"/></svg>
+    Hyderabad, India
+  </div>
+</div></section>
+
+<!-- ── 7. CTA ── -->
+<section class="cta-section"><div class="cta-inner">
+  <h2>Join 500+ studios already on InteriorOS</h2>
+  <p>Start free. No credit card required. Set up your studio in under 5 minutes.</p>
+  <a href="#" class="btn-primary">Start Free Trial <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
+</div></section>
+
+<!-- ── Footer ── -->
+<footer class="footer"><div class="footer-inner">
+  <div class="footer-brand"><div class="nav-logo">iO</div><p>InteriorOS is project management software built specifically for interior design studios in India. Replace WhatsApp, Excel, and Tally with one connected platform.</p></div>
+  <div><h4>Product</h4><ul><li><a href="interioros-landing-2.html#features">Features</a></li><li><a href="interioros-landing-2.html#pricing">Pricing</a></li><li><a href="help-center.html">Help Center</a></li></ul></div>
+  <div><h4>Company</h4><ul><li><a href="about.html">About</a></li><li><a href="contact.html">Contact</a></li><li><a href="interioros-landing-2.html#pricing">Pricing</a></li></ul></div>
+  <div><h4>Legal</h4><ul><li><a href="privacy-policy.html">Privacy Policy</a></li><li><a href="terms.html">Terms of Service</a></li><li><a href="contact.html">Contact Us</a></li></ul></div>
+</div><div class="footer-bottom"><span>&copy; 2026 InteriorOS. All rights reserved.</span><span>Made with care in Hyderabad</span></div></footer>
+
+</body>
+</html>

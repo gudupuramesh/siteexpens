@@ -1,29 +1,44 @@
 {
   "expo": {
-    "name": "SiteExpens",
+    "name": "Interior OS",
     "slug": "siteexpens",
-    "version": "0.1.0",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "siteexpens",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "privacy": "public",
+    "privacyPolicy": "https://siteexpens.com/privacy",
+    "termsOfService": "https://siteexpens.com/terms",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.siteexpens.app",
-      "googleServicesFile": "./GoogleService-Info.plist"
+      "buildNumber": "11",
+      "googleServicesFile": "./GoogleService-Info.plist",
+      "appleTeamId": "QWW8YD6KZV",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.siteexpens.app",
+      "versionCode": 11,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#ffffff",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "softwareKeyboardLayoutMode": "resize",
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.READ_CONTACTS",
+        "android.permission.WRITE_CONTACTS",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -31,15 +46,6 @@
     },
     "plugins": [
       "expo-router",
-      "@react-native-firebase/app",
-      [
-        "expo-build-properties",
-        {
-          "ios": {
-            "useFrameworks": "static"
-          }
-        }
-      ],
       [
         "expo-splash-screen",
         {
@@ -48,28 +54,48 @@
           "resizeMode": "contain",
           "backgroundColor": "#ffffff",
           "dark": {
-            "backgroundColor": "#000000"
+            "backgroundColor": "#ffffff"
           }
         }
       ],
       [
         "expo-contacts",
         {
-          "contactsPermission": "SiteExpens needs access to your contacts to quickly add parties."
+          "contactsPermission": "Interior OS reads your contacts only when you tap the 'Pick from contacts' button while adding a client, vendor, or team member, so you don't have to retype their name and phone number. Contacts are processed locally on your device. We do not upload your full contact list, do not share contacts with any third party, and do not use them for advertising or analytics."
         }
       ],
       "@react-native-community/datetimepicker",
       [
         "expo-image-picker",
         {
-          "photosPermission": "SiteExpens needs access to your photos to attach a cover image to a project.",
-          "cameraPermission": "SiteExpens needs camera access to take project site photos."
+          "photosPermission": "Interior OS accesses your photo library only when you tap an attach-image button to add a project cover, design file, daily progress report photo, transaction receipt, or material reference. The selected photos are uploaded to your private project storage and visible only to your studio's team members. We do not scan your photo library, do not share photos with any third party, and do not use them for advertising or analytics.",
+          "cameraPermission": "Interior OS uses the camera only when you tap a camera-icon button inside the app to capture site progress photos, transaction bill receipts, design references, or staff attendance check-ins. Captured photos are uploaded to your private project storage and visible only to your studio's team members. We do not record video or audio in the background, do not share photos with any third party, and do not use them for advertising or analytics."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "sounds": [],
+          "enableBackgroundRemoteNotifications": false
         }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "0b6957ff-5559-44d4-a4c9-42f4d2f3d825"
+      },
+      "router": {}
+    },
+    "owner": "gudupuramesh",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/0b6957ff-5559-44d4-a4c9-42f4d2f3d825"
     }
   }
 }

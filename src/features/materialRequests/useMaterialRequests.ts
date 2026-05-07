@@ -14,6 +14,9 @@ export type UseMaterialRequestsResult = {
 export function useMaterialRequests(
   projectId: string | undefined,
   status?: MaterialRequestStatus,
+  /** Bumping this number forces the snapshot listener to drop and
+   *  resubscribe — wire to `useFirestoreRefresh().refreshKey`. */
+  refreshKey = 0,
 ): UseMaterialRequestsResult {
   const [data, setData] = useState<MaterialRequest[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,10 +56,10 @@ export function useMaterialRequests(
       },
     );
     return unsub;
-  }, [projectId, status]);
+  }, [projectId, status, refreshKey]);
 
   return { data, loading };
 }
 
 // Need this import for the query type
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';

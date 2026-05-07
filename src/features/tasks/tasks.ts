@@ -1,4 +1,4 @@
-import firestore from '@react-native-firebase/firestore';
+import { firestore } from '@/src/lib/firebase';
 import { db } from '@/src/lib/firebase';
 import type { TaskCategory, TaskPriority, TaskStatus } from './types';
 
@@ -104,13 +104,15 @@ export async function addTaskUpdate(taskId: string, input: AddTaskUpdateInput): 
   const pct = Math.max(0, Math.min(100, Math.round(input.progress)));
 
   const ref = db.collection('tasks').doc(taskId).collection('updates').doc();
+  // Client timestamp so day-range queries in Site/DPR match immediately;
+  // serverTimestamp can be pending locally and miss `createdAt` filters.
   await ref.set({
     authorId: input.authorId,
     authorName: input.authorName,
     progress: pct,
     text: input.text,
     photoUris: input.photoUris,
-    createdAt: firestore.FieldValue.serverTimestamp(),
+    createdAt: firestore.Timestamp.now(),
   });
 
   // Roll up to task

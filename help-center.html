@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Help Center — InteriorOS</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root{
+    --blue-deep:oklch(38% 0.18 265);
+    --blue-primary:oklch(48% 0.2 265);
+    --blue-mid:oklch(58% 0.16 265);
+    --lavender:oklch(72% 0.1 275);
+    --lavender-light:oklch(92% 0.04 275);
+    --lavender-wash:oklch(97% 0.015 275);
+    --white:#fff;
+    --off-white:#fafbfd;
+    --fg:oklch(18% 0.02 265);
+    --muted:oklch(50% 0.02 265);
+    --border:oklch(90% 0.015 270);
+    --green:oklch(52% 0.14 150);
+    --green-bg:oklch(94% 0.04 150);
+    --amber:oklch(65% 0.15 70);
+
+    --font-display:'Iowan Old Style','Charter','Palatino Linotype',Georgia,serif;
+    --font-body:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+
+    --max-w:1200px;
+    --section-py:80px;
+  }
+
+  html{scroll-behavior:smooth}
+  body{font-family:var(--font-body);color:var(--fg);background:var(--white);-webkit-font-smoothing:antialiased;line-height:1.6}
+
+  /* ── Nav ── */
+  .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,0.88);backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border)}
+  .nav-inner{max-width:var(--max-w);margin:0 auto;padding:0 32px;height:64px;display:flex;align-items:center;justify-content:space-between}
+  .nav-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--fg)}
+  .nav-logo{width:36px;height:36px;border-radius:10px;background:var(--blue-primary);display:flex;align-items:center;justify-content:center;color:white;font-family:var(--font-display);font-size:15px;font-weight:700;letter-spacing:-0.02em}
+  .nav-name{font-family:var(--font-display);font-size:18px;font-weight:700;letter-spacing:-0.03em}
+  .nav-links{display:flex;align-items:center;gap:32px;list-style:none}
+  .nav-links a{font-size:14px;font-weight:500;color:var(--muted);text-decoration:none;transition:color 0.2s}
+  .nav-links a:hover{color:var(--fg)}
+  .nav-cta{padding:10px 22px;border-radius:10px;background:var(--blue-primary);color:white !important;font-weight:600;transition:background 0.2s}
+  .nav-cta:hover{background:var(--blue-deep) !important}
+
+  /* ── Hero ── */
+  .hero{padding:140px 32px 80px;text-align:center;background:linear-gradient(180deg, var(--lavender-wash) 0%, var(--white) 100%);position:relative}
+  .hero-inner{max-width:720px;margin:0 auto}
+  .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:20px;background:var(--lavender-light);color:var(--blue-primary);font-size:13px;font-weight:600;letter-spacing:0.02em;margin-bottom:24px}
+  .hero-badge svg{width:14px;height:14px}
+  .hero h1{font-family:var(--font-display);font-size:clamp(32px, 4.5vw, 48px);font-weight:700;letter-spacing:-0.04em;line-height:1.1;color:var(--fg);margin-bottom:16px}
+  .hero-sub{font-size:17px;color:var(--muted);max-width:520px;margin:0 auto 36px;line-height:1.65}
+  .search-wrap{position:relative;max-width:560px;margin:0 auto}
+  .search-wrap svg{position:absolute;left:20px;top:50%;transform:translateY(-50%);width:20px;height:20px;color:var(--muted);pointer-events:none}
+  .search-input{width:100%;padding:16px 24px 16px 52px;border-radius:14px;border:1.5px solid var(--border);background:var(--white);font-size:16px;font-family:var(--font-body);color:var(--fg);outline:none;transition:border-color 0.2s, box-shadow 0.2s;box-shadow:0 4px 20px oklch(50% 0.04 265 / 0.06)}
+  .search-input::placeholder{color:oklch(65% 0.02 265)}
+  .search-input:focus{border-color:var(--blue-mid);box-shadow:0 4px 20px oklch(50% 0.08 265 / 0.1)}
+
+  /* ── Section shared ── */
+  .section-eyebrow{font-size:12px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:var(--blue-mid);margin-bottom:12px}
+  .section-headline{font-family:var(--font-display);font-size:clamp(24px, 3vw, 32px);font-weight:700;letter-spacing:-0.03em;line-height:1.15;margin-bottom:16px}
+
+  /* ── Categories ── */
+  .categories{padding:var(--section-py) 32px}
+  .categories-inner{max-width:var(--max-w);margin:0 auto}
+  .categories .section-headline{text-align:center;max-width:600px;margin-left:auto;margin-right:auto;margin-bottom:48px}
+  .categories .section-eyebrow{text-align:center}
+  .cat-grid{display:grid;grid-template-columns:repeat(3, 1fr);gap:24px}
+  .cat-card{background:var(--white);border:1px solid var(--border);border-radius:16px;padding:28px 24px;transition:border-color 0.25s, box-shadow 0.25s;cursor:pointer;text-decoration:none;color:inherit;display:block}
+  .cat-card:hover{border-color:var(--blue-mid);box-shadow:0 4px 16px oklch(50% 0.04 265 / 0.08)}
+  .cat-icon{width:48px;height:48px;border-radius:12px;background:var(--lavender-light);display:flex;align-items:center;justify-content:center;margin-bottom:16px;color:var(--blue-primary)}
+  .cat-icon svg{width:24px;height:24px}
+  .cat-card h3{font-size:17px;font-weight:700;letter-spacing:-0.01em;margin-bottom:8px}
+  .cat-card p{font-size:14px;color:var(--muted);line-height:1.6}
+
+  /* ── Popular Articles ── */
+  .articles{padding:var(--section-py) 32px;background:var(--off-white)}
+  .articles-inner{max-width:800px;margin:0 auto}
+  .articles .section-headline{text-align:center;max-width:600px;margin-left:auto;margin-right:auto;margin-bottom:48px}
+  .articles .section-eyebrow{text-align:center}
+  .article-list{display:flex;flex-direction:column;gap:0}
+  .article-row{display:flex;align-items:center;gap:16px;padding:18px 20px;background:var(--white);border:1px solid var(--border);border-bottom:none;text-decoration:none;color:inherit;transition:background 0.15s}
+  .article-row:first-child{border-radius:14px 14px 0 0}
+  .article-row:last-child{border-bottom:1px solid var(--border);border-radius:0 0 14px 14px}
+  .article-row:hover{background:var(--lavender-wash)}
+  .article-info{flex:1;min-width:0}
+  .article-title{font-size:15px;font-weight:600;letter-spacing:-0.01em;margin-bottom:2px}
+  .article-tag{display:inline-block;padding:2px 10px;border-radius:6px;font-size:11px;font-weight:600;letter-spacing:0.02em;background:var(--lavender-light);color:var(--blue-primary)}
+  .article-arrow{width:32px;height:32px;border-radius:8px;background:var(--off-white);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--muted);transition:background 0.2s, color 0.2s}
+  .article-row:hover .article-arrow{background:var(--lavender-light);color:var(--blue-primary)}
+  .article-arrow svg{width:16px;height:16px}
+
+  /* ── Still Need Help ── */
+  .contact-help{padding:var(--section-py) 32px}
+  .contact-help-inner{max-width:640px;margin:0 auto}
+  .contact-card{background:var(--white);border:1px solid var(--border);border-radius:20px;padding:48px 40px;text-align:center;box-shadow:0 4px 24px oklch(50% 0.04 265 / 0.06)}
+  .contact-card h2{font-family:var(--font-display);font-size:clamp(24px, 3vw, 30px);font-weight:700;letter-spacing:-0.03em;margin-bottom:12px}
+  .contact-card>p{font-size:15px;color:var(--muted);line-height:1.6;margin-bottom:32px;max-width:420px;margin-left:auto;margin-right:auto}
+  .contact-methods{display:flex;gap:24px;justify-content:center;flex-wrap:wrap}
+  .contact-method{display:flex;align-items:center;gap:12px;padding:14px 24px;border-radius:12px;background:var(--off-white);border:1px solid var(--border);text-decoration:none;color:var(--fg);transition:border-color 0.2s}
+  .contact-method:hover{border-color:var(--blue-mid)}
+  .contact-method-icon{width:40px;height:40px;border-radius:10px;background:var(--lavender-light);display:flex;align-items:center;justify-content:center;color:var(--blue-primary);flex-shrink:0}
+  .contact-method-icon svg{width:20px;height:20px}
+  .contact-method-text{text-align:left}
+  .contact-method-label{font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--muted);margin-bottom:1px}
+  .contact-method-value{font-size:14px;font-weight:600;color:var(--fg)}
+
+  /* ── Footer ── */
+  .footer{padding:60px 32px 40px;background:var(--off-white);border-top:1px solid var(--border)}
+  .footer-inner{max-width:var(--max-w);margin:0 auto;display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:40px}
+  .footer-brand p{font-size:14px;line-height:1.6;max-width:280px;color:var(--muted);margin-top:12px}
+  .footer h4{font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+  .footer ul{list-style:none;display:flex;flex-direction:column;gap:10px}
+  .footer ul a{color:var(--muted);text-decoration:none;font-size:14px;transition:color 0.2s}
+  .footer ul a:hover{color:var(--fg)}
+  .footer-bottom{max-width:var(--max-w);margin:40px auto 0;padding-top:24px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted)}
+
+  /* ── Responsive ── */
+  @media (max-width:768px){
+    .nav-links{display:none}
+    .cat-grid{grid-template-columns:1fr}
+    .contact-methods{flex-direction:column;align-items:center}
+    .footer-inner{grid-template-columns:1fr 1fr}
+  }
+  @media (min-width:769px) and (max-width:1024px){
+    .cat-grid{grid-template-columns:repeat(2, 1fr)}
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Nav ── -->
+<nav class="nav"><div class="nav-inner">
+  <a href="interioros-landing-2.html" class="nav-brand"><div class="nav-logo">iO</div><span class="nav-name">InteriorOS</span></a>
+  <ul class="nav-links"><li><a href="interioros-landing-2.html#features">Features</a></li><li><a href="interioros-landing-2.html#solutions">Solutions</a></li><li><a href="interioros-landing-2.html#testimonials">Testimonials</a></li><li><a href="interioros-landing-2.html#pricing">Pricing</a></li><li><a href="interioros-landing-2.html#contact" class="nav-cta">Get Started Free</a></li></ul>
+</div></nav>
+
+<!-- ── Hero ── -->
+<section class="hero"><div class="hero-inner">
+  <div class="hero-badge"><svg viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="6" stroke="currentColor" stroke-width="1.4"/><path d="M7 4v3h3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>Help Center</div>
+  <h1>How can we help?</h1>
+  <p class="hero-sub">Search our knowledge base or browse categories below to find answers to your questions.</p>
+  <div class="search-wrap">
+    <svg viewBox="0 0 20 20" fill="none"><circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.8"/><path d="M12.5 12.5L17 17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    <input type="text" class="search-input" placeholder="Search for articles, topics, or questions...">
+  </div>
+</div></section>
+
+<!-- ── Categories ── -->
+<section class="categories"><div class="categories-inner">
+  <div class="section-eyebrow">Browse Topics</div>
+  <h2 class="section-headline">Find answers by category</h2>
+  <div class="cat-grid">
+
+    <!-- Getting Started -->
+    <a href="#" class="cat-card">
+      <div class="cat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div>
+      <h3>Getting Started</h3>
+      <p>Account setup, creating your first project, inviting team members, and navigating the dashboard.</p>
+    </a>
+
+    <!-- Projects & Timeline -->
+    <a href="#" class="cat-card">
+      <div class="cat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div>
+      <h3>Projects &amp; Timeline</h3>
+      <p>Creating projects, setting milestones, daily progress reports (DPR), tasks, and timeline tracking.</p>
+    </a>
+
+    <!-- Financials -->
+    <a href="#" class="cat-card">
+      <div class="cat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div>
+      <h3>Financials</h3>
+      <p>Tracking payments in and out, project ledger, managing expenses, and exporting PDF reports.</p>
+    </a>
+
+    <!-- Designer Tools -->
+    <a href="#" class="cat-card">
+      <div class="cat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg></div>
+      <h3>Designer Tools</h3>
+      <p>Laminate library, whiteboard, materials catalogue, vendor management, and design selections.</p>
+    </a>
+
+    <!-- Team & Access -->
+    <a href="#" class="cat-card">
+      <div class="cat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+      <h3>Team &amp; Access</h3>
+      <p>Adding members, assigning roles, supervisor access, multi-organisation support, and permissions.</p>
+    </a>
+
+    <!-- CRM & Leads -->
+    <a href="#" class="cat-card">
+      <div class="cat-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
+      <h3>CRM &amp; Leads</h3>
+      <p>Lead pipeline, creating quotations, generating invoices, follow-up reminders, and client management.</p>
+    </a>
+
+  </div>
+</div></section>
+
+<!-- ── Popular Articles ── -->
+<section class="articles"><div class="articles-inner">
+  <div class="section-eyebrow">Popular Articles</div>
+  <h2 class="section-headline">Most-read by our community</h2>
+  <div class="article-list">
+
+    <a href="#" class="article-row">
+      <div class="article-info">
+        <div class="article-title">How to create your first project</div>
+        <span class="article-tag">Getting Started</span>
+      </div>
+      <div class="article-arrow"><svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    </a>
+
+    <a href="#" class="article-row">
+      <div class="article-info">
+        <div class="article-title">Setting up daily progress reports (DPR)</div>
+        <span class="article-tag">Projects</span>
+      </div>
+      <div class="article-arrow"><svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    </a>
+
+    <a href="#" class="article-row">
+      <div class="article-info">
+        <div class="article-title">Tracking payments in &amp; out per project</div>
+        <span class="article-tag">Financials</span>
+      </div>
+      <div class="article-arrow"><svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    </a>
+
+    <a href="#" class="article-row">
+      <div class="article-info">
+        <div class="article-title">Using the laminate library</div>
+        <span class="article-tag">Designer Tools</span>
+      </div>
+      <div class="article-arrow"><svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    </a>
+
+    <a href="#" class="article-row">
+      <div class="article-info">
+        <div class="article-title">Adding supervisors to your team</div>
+        <span class="article-tag">Team</span>
+      </div>
+      <div class="article-arrow"><svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    </a>
+
+    <a href="#" class="article-row">
+      <div class="article-info">
+        <div class="article-title">Generating quotations for clients</div>
+        <span class="article-tag">CRM</span>
+      </div>
+      <div class="article-arrow"><svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    </a>
+
+  </div>
+</div></section>
+
+<!-- ── Still Need Help ── -->
+<section class="contact-help"><div class="contact-help-inner">
+  <div class="contact-card">
+    <h2>Still need help?</h2>
+    <p>Our support team is available Monday through Saturday, 9 AM to 7 PM IST. We typically respond within 2 hours.</p>
+    <div class="contact-methods">
+      <a href="mailto:support@interioros.app" class="contact-method">
+        <div class="contact-method-icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="16" height="12" rx="2"/><polyline points="2 4 10 11 18 4"/></svg></div>
+        <div class="contact-method-text">
+          <div class="contact-method-label">Email Us</div>
+          <div class="contact-method-value">support@interioros.app</div>
+        </div>
+      </a>
+      <a href="tel:+919100000000" class="contact-method">
+        <div class="contact-method-icon"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M17.2 13.8a2 2 0 0 1-2.1.5l-2.5-.8a2 2 0 0 1-1.2-1.1l-.5-1.2a10.1 10.1 0 0 1-3.1-3.1l-1.2-.5a2 2 0 0 1-1.1-1.2l-.8-2.5a2 2 0 0 1 .5-2.1L6.8 1a1 1 0 0 1 1.3 0l2.4 2a1 1 0 0 1 .3 1.1l-.7 2.1a1 1 0 0 0 .2 1l2.2 2.2a1 1 0 0 0 1 .2l2.1-.7a1 1 0 0 1 1.1.3l2 2.4a1 1 0 0 1 0 1.3l-1.5 1.5z"/></svg></div>
+        <div class="contact-method-text">
+          <div class="contact-method-label">Call Us</div>
+          <div class="contact-method-value">+91 91000 00000</div>
+        </div>
+      </a>
+    </div>
+  </div>
+</div></section>
+
+<!-- ── Footer ── -->
+<footer class="footer"><div class="footer-inner">
+  <div class="footer-brand"><div class="nav-logo">iO</div><p>InteriorOS is project management software built specifically for interior design studios in India. Replace WhatsApp, Excel, and Tally with one connected platform.</p></div>
+  <div><h4>Product</h4><ul><li><a href="interioros-landing-2.html#features">Project Management</a></li><li><a href="interioros-landing-2.html#features">Financial Tracking</a></li><li><a href="interioros-landing-2.html#features">Designer Tools</a></li><li><a href="interioros-landing-2.html#features">CRM &amp; Pipeline</a></li></ul></div>
+  <div><h4>Company</h4><ul><li><a href="about.html">About</a></li><li><a href="interioros-landing-2.html#pricing">Pricing</a></li><li><a href="contact.html">Contact</a></li></ul></div>
+  <div><h4>Legal</h4><ul><li><a href="privacy-policy.html">Privacy Policy</a></li><li><a href="terms.html">Terms of Service</a></li><li><a href="help-center.html">Help Center</a></li></ul></div>
+</div><div class="footer-bottom"><span>&copy; 2026 InteriorOS. All rights reserved.</span><span>Made with care in Hyderabad</span></div></footer>
+
+</body>
+</html>

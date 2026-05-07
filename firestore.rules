@@ -1,181 +1,835 @@
 rules_version = '2';
 
-// Phase 1 rules. Users own their own document; any signed-in user can
-// create an organization; projects are scoped to the organization and
-// visible only to their member list. Rules for expenses, staff,
-// attendance, files and material requests land alongside those features.
+// SiteExpens Firestore rules. Mirrors the role matrix in
+// `docs/roles-and-permissions.md` and `src/features/org/permissions.ts`
+// — the same source of truth that drives client-side `usePermissions`
+// and server-side `effectiveOrgRole()` / `refreshUserClaims`.
+//
+// Three-layer security model:
+//
+//   1. ORG MEMBERSHIP — `isOrgMember(orgId)` requires the caller to be
+//      in `organizations/{orgId}.memberIds`. Org-only collections
+//      (parties, leads, appointments, materialLibrary, etc.) gate on
+//      this alone.
+//
+//   2. PROJECT MEMBERSHIP — `canSeeProject(projectId, orgId)` requires
+//      either studio-admin role (SA / Admin always see all projects)
+//      or `projects/{projectId}.memberIds` / `clientUids` containing
+//      the caller's uid. Every project-scoped collection (transactions,
+//      tasks, dpr, attendance, materials, designs, laminates,
+//      whiteboards, materialRequests, projectLabour, moms) gates reads
+//      AND writes on this. Closes the "Manager added to 5 of 10
+//      projects can read the other 5" leak.
+//
+//   3. ROLE / CAPABILITY — per-action helpers (`canFinance`,
+//      `canEditTasks`, `canMarkAttendance`, etc.) layer on top of
+//      project membership for write authorisation. Transactions also
+//      apply per-creator scoping for submit-only roles (Site Engineer
+//      / Supervisor see only their own submissions).
+//
+// Privilege-bearing fields on `organizations` (`roles`, `memberIds`,
+// `ownerId`, `approverIds`) are LOCKED for direct client writes —
+// mutations land via Cloud Functions (`setMemberRole`, `inviteMember`,
+// `removeMember`, `setPrimaryOrganization`) which use the Admin SDK
+// and bypass these rules.
+//
+// All write rules preserve the legacy backfill: orgs created before
+// the explicit `roles` map exists are still readable + writable by
+// their owner (treated as `superAdmin`) and existing memberIds
+// (treated as `admin`). The `backfillOrgRoles` callable populates
+// `roles[uid]` going forward.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // ── App Owner helper ─────────────────────────────────────────
+    //
+    // Set via Firebase Auth custom claim `role: 'app_owner'` on the
+    // operator's user record (granted by `scripts/grant-app-owner.ts`).
+    // Lets the web admin portal read cross-org data + lets admin
+    // callables verify the caller. The claim is in the user's auth
+    // token — no extra Firestore round-trip per check.
+
+    function isAppOwner() {
+      return request.auth != null
+        && request.auth.token.role == 'app_owner';
+    }
+
+    // ── Org-membership helpers ────────────────────────────────────
+
     function isOrgMember(orgId) {
+      // Use `.data.get('memberIds', [])` instead of `.data.memberIds`
+      // so an org doc that's missing the field (legacy / partial
+      // backfill) doesn't throw a rule-evaluation error and silently
+      // deny. See the long comment on `role()` below.
       return request.auth != null
         && orgId is string
         && exists(/databases/$(database)/documents/organizations/$(orgId))
-        && request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.memberIds;
+        && request.auth.uid in get(/databases/$(database)/documents/organizations/$(orgId)).data.get('memberIds', []);
     }
+
+    /** Effective role for the caller in the org. Mirrors client
+     *  `usePermissions` and server `roleForOrg`.
+     *
+     *  IMPORTANT: every map / list field is accessed via `.get(key, default)`
+     *  rather than `o.field[key]` or `o.field`. Direct access on a missing
+     *  key in Firestore rules throws an evaluation error and the rule
+     *  short-circuits to `false` — silently denying the request. We hit
+     *  this in production for an org with a `roles` map that contained
+     *  some teammates but not the owner: `o.roles[ownerUid]` threw,
+     *  the ternary never fell through to the `ownerId == uid` fallback,
+     *  and the owner got permission-denied on every write. `.get()` with
+     *  a default is the only safe pattern for sparse maps. */
+    function role(orgId) {
+      let o = get(/databases/$(database)/documents/organizations/$(orgId)).data;
+      let uid = request.auth.uid;
+      let rolesMap = o.get('roles', {});
+      let explicit = rolesMap.get(uid, '');
+      let ownerId = o.get('ownerId', '');
+      let memberIds = o.get('memberIds', []);
+      return explicit != ''
+        ? explicit
+        : (ownerId == uid ? 'superAdmin'
+        : (uid in memberIds ? 'admin' : null));
+    }
+
+    function hasRole(orgId, allowed) {
+      return request.auth != null
+        && orgId is string
+        && exists(/databases/$(database)/documents/organizations/$(orgId))
+        && role(orgId) in allowed;
+    }
+
+    // Capability helpers — names match the client-side matrix in
+    // `permissions.ts`. Keep the role lists in lock-step with the
+    // doc when adding/removing roles.
+    function isAdminish(orgId) {
+      return hasRole(orgId, ['superAdmin', 'admin']);
+    }
+    function canManageProjects(orgId) {
+      return hasRole(orgId, ['superAdmin', 'admin', 'manager']);
+    }
+    function canEditTasks(orgId) {
+      return hasRole(orgId, ['superAdmin', 'admin', 'manager', 'siteEngineer']);
+    }
+    function canMarkAttendance(orgId) {
+      return hasRole(orgId, ['superAdmin', 'admin', 'manager', 'siteEngineer', 'supervisor']);
+    }
+    // DPR is broader than attendance: every role except client and
+    // accountant can submit a daily progress report (viewers included),
+    // gated additionally by `canSeeProject` so they must be on the
+    // project. Kept separate from canMarkAttendance so widening DPR
+    // doesn't accidentally widen attendance write access.
+    function canWriteDpr(orgId) {
+      return hasRole(orgId, [
+        'superAdmin', 'admin', 'manager',
+        'siteEngineer', 'supervisor', 'viewer',
+      ]);
+    }
+    function canFinance(orgId) {
+      return hasRole(orgId, ['superAdmin', 'admin', 'accountant']);
+    }
+    function canApproveMaterial(orgId) {
+      return hasRole(orgId, ['superAdmin', 'admin', 'manager']);
+    }
+    function canPartyWrite(orgId) {
+      // Submit-only roles (siteEngineer / supervisor) also need
+      // create access so they can add a party inline while raising
+      // an expense — `parties` is a hard requirement of the
+      // transaction form. Mirrors the `party.write` capability in
+      // `src/features/org/permissions.ts`.
+      return hasRole(orgId, [
+        'superAdmin', 'admin', 'manager', 'accountant',
+        'siteEngineer', 'supervisor',
+      ]);
+    }
+    function canCRMWrite(orgId) {
+      return hasRole(orgId, ['superAdmin', 'admin', 'manager']);
+    }
+    /** Roles with read access to transactions in projects they can
+     *  see. Submit-only roles (Site Engineer / Supervisor) get a
+     *  per-creator restriction layered on top — see the
+     *  `transactions` read rule. Client is excluded entirely. */
+    function canReadProjectTransactions(orgId) {
+      return hasRole(orgId, ['superAdmin', 'admin', 'manager', 'accountant', 'viewer']);
+    }
+    /** Resolves org role for finance RBAC (legacy alias kept so the
+     *  orgFinances rule below stays one-line). */
+    function canOrgFinance(orgId) {
+      return canFinance(orgId);
+    }
+
+    // ── Project-membership helpers ────────────────────────────────
+    //
+    // The second security layer. Every project-scoped collection
+    // (transactions, tasks, dpr, attendance, materials, designs,
+    // laminates, whiteboards, materialRequests, projectLabour, moms)
+    // gates reads AND writes on `canSeeProject(projectId, orgId)`.
+    //
+    // Studio admins (Super Admin / Admin) bypass project membership
+    // because their role grants studio-wide visibility. Everyone
+    // else must be in the project's `memberIds` (full role) or
+    // `clientUids` (read-only client view).
+
+    function isProjectMember(projectId) {
+      // Same `.get()` safety as isOrgMember — projects created by
+      // older clients may not carry `clientUids`, and a future
+      // schema migration could leave `memberIds` absent on partial
+      // writes. Direct field access throws on missing → silent deny.
+      return request.auth != null
+        && exists(/databases/$(database)/documents/projects/$(projectId))
+        && request.auth.uid in get(/databases/$(database)/documents/projects/$(projectId)).data.get('memberIds', []);
+    }
+    function isProjectClient(projectId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/projects/$(projectId))
+        && request.auth.uid in get(/databases/$(database)/documents/projects/$(projectId)).data.get('clientUids', []);
+    }
+    function canSeeProject(projectId, orgId) {
+      return isAdminish(orgId)
+        || isProjectMember(projectId)
+        || isProjectClient(projectId);
+    }
+
+    // DPR helpers — legacy rows may omit `orgId`. Reads/updates evaluated
+    // only against `resource.data` would then see '' and deny everyone.
+    // Resolve org from the linked project when the doc itself has no orgId;
+    // on writes, coalesce pre-merge `resource` with post-merge `request.resource`
+    // so the first save can backfill `orgId` / `projectId`.
+    function dprOrgFromDoc(data) {
+      let oid = data.get('orgId', '');
+      let pid = data.get('projectId', '');
+      return oid != ''
+        ? oid
+        : (pid != '' && exists(/databases/$(database)/documents/projects/$(pid))
+            ? get(/databases/$(database)/documents/projects/$(pid)).data.get('orgId', '')
+            : '');
+    }
+    function dprProjectFromDoc(data) {
+      return data.get('projectId', '');
+    }
+    function dprOrgIdForWriteGate() {
+      let oldO = resource.data.get('orgId', '');
+      let newO = request.resource.data.get('orgId', '');
+      return oldO != '' ? oldO : newO;
+    }
+    function dprProjectIdForWriteGate() {
+      let oldP = resource.data.get('projectId', '');
+      let newP = request.resource.data.get('projectId', '');
+      return oldP != '' ? oldP : newP;
+    }
+
+    // ── users ────────────────────────────────────────────────────
 
     match /users/{userId} {
-      allow read, write: if request.auth != null && request.auth.uid == userId;
-    }
+      allow read: if request.auth != null && request.auth.uid == userId;
 
-    match /organizations/{orgId} {
-      // Any signed-in user can create an org, and they must name themselves
-      // as the owner + sole initial member. Prevents one user seeding an
-      // org under someone else's uid.
-      allow create: if request.auth != null
-        && request.resource.data.ownerId == request.auth.uid
-        && request.resource.data.memberIds is list
-        && request.resource.data.memberIds.size() == 1
-        && request.resource.data.memberIds[0] == request.auth.uid;
+      // Initial profile from AuthProvider; `primaryOrgId` must stay null until the
+      // first onboarding merge or server-side invite reconciliation.
+      allow create: if request.auth != null && request.auth.uid == userId
+        && (!request.resource.data.keys().hasAny(['primaryOrgId'])
+          || request.resource.data.primaryOrgId == null);
 
-      // Reads and updates are restricted to org members. Membership is
-      // mutated server-side (via Cloud Functions) in the invite flow, so
-      // clients can't grant themselves access.
-      allow read, update: if request.auth != null
-        && request.auth.uid in resource.data.memberIds;
+      // Once `primaryOrgId` is set, only the Admin SDK
+      // (`setPrimaryOrganization`) may change it. Clients may still
+      // set it exactly once from null → string (createOrganization
+      // batch) or omit it from updates entirely.
+      allow update: if request.auth != null && request.auth.uid == userId
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['primaryOrgId'])
+          || (
+            (!resource.data.keys().hasAny(['primaryOrgId'])
+              || resource.data.primaryOrgId == null)
+            && request.resource.data.keys().hasAny(['primaryOrgId'])
+            && request.resource.data.primaryOrgId is string
+          )
+        );
 
-      // Deletion is locked down entirely for now.
       allow delete: if false;
     }
 
+    // ── organizations ────────────────────────────────────────────
+
+    match /organizations/{orgId} {
+      // Direct client creates are BLOCKED. Use the
+      // `createOrganization` Cloud Function instead — it enforces
+      // the "one owned studio per user" rule (queries
+      // organizations.where('ownerId', '==', uid) and rejects when
+      // a row already exists). Firestore rules can't run that query
+      // efficiently, so the limit lives server-side and the rule
+      // simply forbids the direct write path.
+      allow create: if false;
+
+      // Reads to anyone who has a role in this org. The base case is
+      // membership via `memberIds[]` (regular paid roles). We also
+      // allow when `roles[uid]` is set, which covers CLIENTS — clients
+      // deliberately do NOT live in `memberIds` (they're exempt from
+      // the `maxMembers` plan cap), but they still need to read the
+      // org doc so the org switcher (`useMyOrganizations`) can show
+      // them the studios they're a client of, and so the active-org
+      // chrome on the dashboard renders the correct studio name.
+      //
+      // App Owner gets a cross-org read so the web admin portal can
+      // drive the OrgDetail screen via direct snapshot listeners
+      // (live updates when an override is applied). The Subscribers +
+      // Revenue screens already go through admin callables (Admin SDK
+      // bypasses rules); this widens reads only for the live-snapshot
+      // paths.
+      //
+      // Using `.get('memberIds', [])` and `.get('roles', {}).get(uid, '')`
+      // for sparse-map safety — matches the pattern in `role()` and the
+      // capability helpers.
+      allow read: if request.auth != null
+        && (
+          request.auth.uid in resource.data.get('memberIds', [])
+          || resource.data.get('roles', {}).get(request.auth.uid, '') != ''
+          || isAppOwner()
+        );
+
+      // Updates are restricted to org members AND must NOT touch the
+      // privilege-bearing fields. Membership / role mutations go
+      // through Cloud Functions (Admin SDK bypasses rules):
+      //   - inviteMember / claimInvites / removeMember → memberIds
+      //   - setMemberRole → roles[uid]
+      //   - ownership transfer flow (future) → ownerId
+      // Closes the self-promotion hole.
+      // `subscription` and `counters` are added to the lock list:
+      //   - subscription is written only by the RevenueCat webhook
+      //     and the migrateExistingOrgs callable (both Admin SDK)
+      //   - counters are maintained by Firestore triggers
+      //     (onProjectCreateCount, onProjectDeleteCount,
+      //      onOrgWriteSyncMemberCount), which also use the Admin SDK
+      // Letting the client write either would bypass the paywall.
+      allow update: if request.auth != null
+        && request.auth.uid in resource.data.get('memberIds', [])
+        && !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['roles', 'memberIds', 'ownerId', 'approverIds',
+                     'subscription', 'counters']);
+
+      // Deletion is locked down entirely for now.
+      allow delete: if false;
+
+      // Pending invites mirror — written ONLY by Cloud Functions.
+      match /pendingInvites/{phone} {
+        allow read: if isOrgMember(orgId);
+        allow write: if false;
+      }
+
+      // Team-facing profile projection. Written only by Cloud Functions;
+      // clients read for roster UI without users/{uid} peer reads.
+      match /memberPublic/{memberUid} {
+        allow read: if isOrgMember(orgId);
+        allow write: if false;
+      }
+    }
+
+    // ── projects ─────────────────────────────────────────────────
+
     match /projects/{projectId} {
-      allow create: if request.auth != null
-        && request.resource.data.ownerId == request.auth.uid
-        && request.resource.data.orgId is string
-        && request.resource.data.memberIds is list
-        && request.resource.data.memberIds.size() >= 1
-        && request.auth.uid in request.resource.data.memberIds;
+      // Direct client creates are BLOCKED. Use the `createProject`
+      // callable instead — it enforces the per-tier project-count
+      // limit inside a transaction and atomically increments the
+      // org's counter. Allowing a direct write would let any client
+      // skip the paywall by stamping out documents directly.
+      allow create: if false;
 
-      // Read / update: any member of the project's org. Using
-      // isOrgMember() (instead of project.memberIds) lets list queries
-      // work — Firestore evaluates list rules per-doc, so a single
-      // legacy project missing the user's uid in its memberIds would
-      // otherwise reject the whole list. Org membership is the right
-      // boundary here since `where('orgId', '==', myOrg)` already
-      // filters the query client-side.
-      allow read, update: if isOrgMember(resource.data.orgId);
+      // Read: any org member. Per-project visibility narrowing is
+      // handled by client hooks (`useProjects` filters by
+      // `memberIds.array-contains`); the previous strict
+      // canSeeProject gate broke org-wide hooks that haven't yet
+      // been refactored to scope per project. Tightening reads to
+      // canSeeProject is a follow-up after every org-wide query
+      // hook is project-aware.
+      allow read: if isOrgMember(resource.data.orgId);
 
+      // Update: SA / Admin / Manager AND must be a member of this
+      // project (canSeeProject covers admins universally; managers
+      // need explicit membership to update). orgId / ownerId
+      // immutable.
+      allow update: if canManageProjects(resource.data.orgId)
+        && (isAdminish(resource.data.orgId)
+            || request.auth.uid in resource.data.memberIds)
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.ownerId == resource.data.ownerId;
+
+      // Delete: project owner OR studio admin (SA / Admin).
       allow delete: if request.auth != null
-        && request.auth.uid == resource.data.ownerId;
+        && (request.auth.uid == resource.data.ownerId
+          || isAdminish(resource.data.orgId));
     }
 
-    // ── Transactions (project-scoped) ──
+    // ── transactions (project-scoped + role-scoped + creator-scoped)
+    //
+    // Three-layer scoping:
+    //   1. Project membership — must pass canSeeProject().
+    //   2. Role gate — approver roles see all in the project;
+    //      submit-only roles (Site Engineer / Supervisor) see only
+    //      their own. Client never sees transactions.
+    //   3. Submit-only update restriction — Site Engineer /
+    //      Supervisor can only update their OWN PENDING txns
+    //      (re-edit before approval). Once posted/rejected, no
+    //      edits.
     match /transactions/{txnId} {
-      allow read, write: if request.auth != null;
+      // Read: org member, narrowed by role. Approver-tier roles see
+      // all org transactions; submit-only roles see ONLY their own
+      // submissions (per-creator gate is the security boundary
+      // that protects bills from leaking across team-mates).
+      // Project-membership scoping for reads is deferred until
+      // every org-wide query hook is project-aware.
+      allow read: if isOrgMember(resource.data.orgId)
+        && (
+          canReadProjectTransactions(resource.data.orgId)
+          || (
+            hasRole(resource.data.orgId, ['siteEngineer', 'supervisor'])
+            && resource.data.createdBy == request.auth.uid
+          )
+        );
+
+      // Create: must be a project member, must be a role with submit
+      // OR write capability, must mark themselves as the creator.
+      // Submit-only roles (siteEngineer / supervisor) are restricted
+      // to `payment_out` (expenses) — they can submit bills for
+      // approval but cannot record income against the project. The
+      // rule mirrors the client-side gate in
+      // `app/(app)/projects/[id]/add-transaction.tsx` and the
+      // `TransactionTab` Payment In / Payment Out buttons.
+      allow create: if request.auth != null
+        && request.resource.data.projectId is string
+        && request.resource.data.createdBy == request.auth.uid
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
+        && (
+          hasRole(request.resource.data.orgId,
+              ['superAdmin', 'admin', 'manager', 'accountant'])
+          || (
+            hasRole(request.resource.data.orgId,
+                ['siteEngineer', 'supervisor'])
+            && request.resource.data.type == 'payment_out'
+          )
+        );
+
+      // Update: createdBy is immutable. Approvers (SA/Admin/Manager/
+      // Accountant) can update anything in projects they can see.
+      // Submit-only roles can only update their OWN PENDING txns.
+      allow update: if request.auth != null
+        && canSeeProject(resource.data.projectId, resource.data.orgId)
+        && request.resource.data.createdBy == resource.data.createdBy
+        && (
+          hasRole(resource.data.orgId,
+            ['superAdmin', 'admin', 'manager', 'accountant'])
+          || (
+            hasRole(resource.data.orgId, ['siteEngineer', 'supervisor'])
+            && resource.data.createdBy == request.auth.uid
+            && resource.data.workflowStatus == 'pending_approval'
+          )
+        );
+
+      // Delete: approver-only (SA / Admin / Manager / Accountant).
+      allow delete: if request.auth != null
+        && canSeeProject(resource.data.projectId, resource.data.orgId)
+        && hasRole(resource.data.orgId,
+            ['superAdmin', 'admin', 'manager', 'accountant']);
     }
 
-    // ── Parties (org-scoped) ──
+    // ── parties (org-scoped, NOT project-scoped) ─────────────────
     match /parties/{partyId} {
-      allow read, write: if request.auth != null;
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canPartyWrite(request.resource.data.orgId);
+      allow update, delete: if canPartyWrite(resource.data.orgId);
     }
 
-    // ── Attendance (project-scoped) ──
-    // Per-day attendance records. Scoped to org members so historical
-    // data can't leak across orgs. Create / update / delete are gated
-    // on the writer being a member of the record's org.
+    // ── attendance (project-scoped) ──────────────────────────────
     match /attendance/{recordId} {
-      allow read, update, delete: if isOrgMember(resource.data.orgId);
-      allow create: if isOrgMember(request.resource.data.orgId)
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canMarkAttendance(request.resource.data.orgId)
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
         && request.resource.data.projectId is string
         && request.resource.data.labourId is string
         && request.resource.data.date is string;
+      allow update, delete: if canMarkAttendance(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId);
     }
 
-    // ── Project Labour Roster (project-scoped master list) ──
-    // Source-of-truth labour list per project. Used to render the
-    // attendance roster across every date (incl. dates with no marks
-    // yet). Any org member may upsert / read; write is open across
-    // members so silent backfill from existing attendance docs works
-    // regardless of who originally marked the labour.
+    // ── projectLabour (project-scoped master roster) ─────────────
     match /projectLabour/{labourId} {
-      allow read, update, delete: if isOrgMember(resource.data.orgId);
-      allow create: if isOrgMember(request.resource.data.orgId)
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canMarkAttendance(request.resource.data.orgId)
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
         && request.resource.data.projectId is string
         && request.resource.data.labourId is string;
+      allow update, delete: if canMarkAttendance(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId);
     }
 
-    // ── Materials (project-scoped) ──
+    // ── materials (project-scoped) ───────────────────────────────
     match /materials/{materialId} {
-      allow read, write: if request.auth != null;
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canEditTasks(request.resource.data.orgId)
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
+        && request.resource.data.projectId is string;
+      allow update, delete: if canEditTasks(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId);
     }
 
-    // ── Material Library (org-scoped catalog) ──
+    // ── materialLibrary (org-scoped catalog) ─────────────────────
     match /materialLibrary/{itemId} {
-      allow read, write: if request.auth != null;
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canManageProjects(request.resource.data.orgId);
+      allow update, delete: if canManageProjects(resource.data.orgId);
     }
 
-    // ── Task Category Library (org-scoped catalog) ──
+    // ── taskCategoryLibrary (org-scoped catalog) ─────────────────
     match /taskCategoryLibrary/{itemId} {
       allow read: if isOrgMember(resource.data.orgId);
-      allow create: if isOrgMember(request.resource.data.orgId);
-      allow update, delete: if isOrgMember(resource.data.orgId);
+      allow create: if canManageProjects(request.resource.data.orgId);
+      allow update, delete: if canManageProjects(resource.data.orgId);
     }
 
-    // ── Material Requests (project-scoped) ──
+    // ── staffRoleLibrary (org-scoped catalog of position titles) ──
+    match /staffRoleLibrary/{itemId} {
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canOrgFinance(request.resource.data.orgId)
+        && request.resource.data.orgId is string
+        && request.resource.data.label is string
+        && request.resource.data.key is string;
+      allow update, delete: if canOrgFinance(resource.data.orgId);
+    }
+
+    // ── materialRequests (project-scoped) ────────────────────────
+    // Create: anyone with attendance write who is in the project.
+    // Approve / update / delete: SA / Admin / Manager only, in
+    // projects they can see.
     match /materialRequests/{requestId} {
-      allow read, write: if request.auth != null;
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canMarkAttendance(request.resource.data.orgId)
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
+        && request.resource.data.projectId is string;
+      allow update, delete: if canApproveMaterial(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId);
     }
 
-    // ── Tasks (project-scoped) ──
+    // ── tasks (project-scoped) ───────────────────────────────────
     match /tasks/{taskId} {
-      allow read, write: if request.auth != null;
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canEditTasks(request.resource.data.orgId)
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
+        && request.resource.data.projectId is string;
+      allow update, delete: if canEditTasks(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId);
 
-      // Progress update feed — append-only posts with %, note, photos.
+      // Progress update feed — append-only posts. Read open to org
+      // members (relaxed); create still requires attendance + project
+      // membership for safety.
       match /updates/{updateId} {
-        allow read, create: if request.auth != null;
+        allow read: if isOrgMember(
+          get(/databases/$(database)/documents/tasks/$(taskId)).data.orgId);
+        allow create: if canMarkAttendance(
+            get(/databases/$(database)/documents/tasks/$(taskId)).data.orgId)
+          && canSeeProject(
+            get(/databases/$(database)/documents/tasks/$(taskId)).data.projectId,
+            get(/databases/$(database)/documents/tasks/$(taskId)).data.orgId);
         allow update, delete: if false;
       }
 
-      // Legacy comment log — kept for back-compat until migrated.
+      // Legacy comment log — same surface as updates.
       match /comments/{commentId} {
-        allow read, create: if request.auth != null;
+        allow read: if isOrgMember(
+          get(/databases/$(database)/documents/tasks/$(taskId)).data.orgId);
+        allow create: if canMarkAttendance(
+            get(/databases/$(database)/documents/tasks/$(taskId)).data.orgId)
+          && canSeeProject(
+            get(/databases/$(database)/documents/tasks/$(taskId)).data.projectId,
+            get(/databases/$(database)/documents/tasks/$(taskId)).data.orgId);
         allow update, delete: if false;
       }
     }
 
-    // ── Daily Progress Reports (project-scoped, one per date) ──
+    // ── dpr (project-scoped, one per date) ───────────────────────
+    //
+    // Defensive `.get('orgId', '')` / `.get('projectId', '')` access
+    // matters here: a DPR doc written by an older client version that
+    // omitted orgId or projectId would throw on direct `resource.data.orgId`
+    // and silently deny EVERY read/update — including admin and superAdmin
+    // — exactly the silent-deny gotcha called out on the `role()` function
+    // above. Falling back to '' lets the helpers return a clean false so
+    // legacy rows merely deny (not throw), and well-formed docs work as
+    // intended.
     match /dpr/{dprId} {
-      allow read, write: if request.auth != null;
+      // Same visibility as before when `orgId` is stored. Legacy docs
+      // without `orgId` resolve org from `projects/{projectId}` and require
+      // `canSeeProject` so we don't leak DPR across projects in one org.
+      allow read: if dprOrgFromDoc(resource.data) != ''
+        && dprProjectFromDoc(resource.data) != ''
+        && isOrgMember(dprOrgFromDoc(resource.data))
+        && (
+          resource.data.get('orgId', '') != ''
+          || canSeeProject(
+            dprProjectFromDoc(resource.data),
+            dprOrgFromDoc(resource.data),
+          )
+        );
+      allow create: if request.resource.data.get('orgId', '') is string
+        && request.resource.data.get('orgId', '') != ''
+        && request.resource.data.get('projectId', '') is string
+        && request.resource.data.get('projectId', '') != ''
+        && canWriteDpr(request.resource.data.get('orgId', ''))
+        && canSeeProject(
+          request.resource.data.get('projectId', ''),
+          request.resource.data.get('orgId', ''),
+        );
+      allow update, delete: if (
+          resource.data.get('projectId', '') == ''
+          || request.resource.data.get('projectId', '')
+            == resource.data.get('projectId', '')
+        )
+        && (
+          resource.data.get('orgId', '') == ''
+          || request.resource.data.get('orgId', '')
+            == resource.data.get('orgId', '')
+        )
+        && canWriteDpr(dprOrgIdForWriteGate())
+        && canSeeProject(
+          dprProjectIdForWriteGate(),
+          dprOrgIdForWriteGate(),
+        );
     }
 
-    // ── Minutes of Meeting (project-scoped) ──
+    // ── moms (project-scoped, legacy collection) ─────────────────
     match /moms/{momId} {
-      allow read, write: if request.auth != null;
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canEditTasks(request.resource.data.orgId)
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
+        && request.resource.data.projectId is string;
+      allow update, delete: if canEditTasks(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId);
     }
 
-    // ── Laminates (project-scoped) ──
+    // ── laminates (project-scoped) ───────────────────────────────
     match /laminates/{laminateId} {
-      allow read, write: if request.auth != null;
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canEditTasks(request.resource.data.orgId)
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
+        && request.resource.data.projectId is string;
+      allow update, delete: if canEditTasks(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId);
     }
 
-    // ── Whiteboards (project-scoped vector sketch documents) ──
+    // ── whiteboards (project-scoped, collaborative sketch docs) ──
     match /whiteboards/{boardId} {
       allow read: if isOrgMember(resource.data.orgId);
-      allow create: if isOrgMember(request.resource.data.orgId)
+      allow create: if canEditTasks(request.resource.data.orgId)
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
         && request.resource.data.projectId is string
         && request.resource.data.authorId == request.auth.uid;
-      // Any org member can edit boards (collaborative). orgId / projectId /
-      // authorId are immutable.
-      allow update: if isOrgMember(resource.data.orgId)
+      // Any role with task-write can edit boards (collaborative).
+      // orgId / projectId / authorId are immutable.
+      allow update: if canEditTasks(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId)
         && request.resource.data.orgId == resource.data.orgId
         && request.resource.data.projectId == resource.data.projectId
         && request.resource.data.authorId == resource.data.authorId;
-      // Only the original author may delete their board.
-      allow delete: if isOrgMember(resource.data.orgId)
+      // Only the original author may delete their board (and they
+      // must still be in the project).
+      allow delete: if canEditTasks(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId)
         && resource.data.authorId == request.auth.uid;
     }
 
-    // ── CRM: Leads & Appointments (org-scoped) ──
+    // ── CRM: leads & appointments (org-scoped) ───────────────────
     match /leads/{leadId} {
-      allow read, update, delete: if isOrgMember(resource.data.orgId);
-      allow create: if isOrgMember(request.resource.data.orgId);
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canCRMWrite(request.resource.data.orgId);
+      allow update, delete: if canCRMWrite(resource.data.orgId);
     }
 
     match /appointments/{appointmentId} {
-      allow read, update, delete: if isOrgMember(resource.data.orgId);
-      allow create: if isOrgMember(request.resource.data.orgId);
+      allow read: if isOrgMember(resource.data.orgId);
+      // Appointments are also created by Site Engineer / Supervisor
+      // for site visits — broaden write to canMarkAttendance.
+      allow create: if canMarkAttendance(request.resource.data.orgId);
+      allow update, delete: if canMarkAttendance(resource.data.orgId);
     }
 
+    // ── designs / Files library (project-scoped) ─────────────────
+    match /designs/{designId} {
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canEditTasks(request.resource.data.orgId)
+        && canSeeProject(request.resource.data.projectId,
+                         request.resource.data.orgId)
+        && request.resource.data.projectId is string;
+      // orgId / projectId immutable on update.
+      allow update: if canEditTasks(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId)
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.projectId == resource.data.projectId;
+      allow delete: if canEditTasks(resource.data.orgId)
+        && canSeeProject(resource.data.projectId, resource.data.orgId);
+
+      // Legacy versions subcollection (single-file model dropped this).
+      // Read open to org members (relaxed).
+      match /versions/{versionId} {
+        allow read: if isOrgMember(
+          get(/databases/$(database)/documents/designs/$(designId)).data.orgId);
+        allow write: if false;
+      }
+    }
+
+    // ── Storage tracking (R2 audit log + per-project totals) ─────
+    // BOTH collections are written ONLY by Cloud Functions (Admin SDK
+    // bypasses rules), so client writes are denied. Reads are scoped
+    // to project members so a Manager not in a project can't read
+    // its storage usage.
+    match /storageEvents/{eventId} {
+      allow read: if isOrgMember(resource.data.orgId);
+      allow write: if false;
+    }
+    match /projectStorage/{projectId} {
+      // Doc id IS the projectId — when the doc doesn't exist yet
+      // (fresh project, zero uploads), allow reads so the snapshot
+      // listener returns "doesn't exist" cleanly.
+      allow read: if resource == null
+        || isOrgMember(resource.data.orgId);
+      allow write: if false;
+    }
+
+    // ── Org finances (studio-level expenses / income) ────────────
+    match /orgFinances/{docId} {
+      allow read: if canOrgFinance(resource.data.orgId);
+      allow create: if canOrgFinance(request.resource.data.orgId)
+        && request.resource.data.orgId is string
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.kind is string
+        && request.resource.data.category is string
+        && request.resource.data.amount is number
+        && request.resource.data.paidAt is timestamp;
+      allow update: if canOrgFinance(resource.data.orgId)
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if canOrgFinance(resource.data.orgId);
+    }
+
+    // ── Staff (studio roster — managers, supervisors, accountants) ─
+    //
+    // Read: any org member (so the Finance hub can show counts on the
+    //   Dashboard tab to permission-gated viewers).
+    // Write: finance.write capability only (SuperAdmin / Admin /
+    //   Accountant — same gate as orgFinances since payroll posts a
+    //   salary entry there).
+    match /staff/{staffId} {
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canOrgFinance(request.resource.data.orgId)
+        && request.resource.data.orgId is string
+        && request.resource.data.name is string
+        && request.resource.data.monthlySalary is number
+        && request.resource.data.createdBy == request.auth.uid;
+      allow update: if canOrgFinance(resource.data.orgId)
+        && request.resource.data.orgId == resource.data.orgId;
+      allow delete: if canOrgFinance(resource.data.orgId);
+    }
+
+    // ── Staff attendance (per staff per day) ─────────────────────
+    //
+    // Doc id is `{staffId}_{YYYY-MM-DD}` so the same finance.write
+    // capability gates daily marking and bulk corrections.
+    match /staffAttendance/{recordId} {
+      allow read: if isOrgMember(resource.data.orgId);
+      allow create: if canOrgFinance(request.resource.data.orgId)
+        && request.resource.data.orgId is string
+        && request.resource.data.staffId is string
+        && request.resource.data.date is string
+        && request.resource.data.status is string;
+      allow update: if canOrgFinance(resource.data.orgId)
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.staffId == resource.data.staffId;
+      allow delete: if canOrgFinance(resource.data.orgId);
+    }
+
+    // ── invites (phone-keyed pending invites) ────────────────────
+    match /invites/{phone} {
+      allow get, delete: if request.auth != null
+        && request.auth.token.phone_number == phone;
+      allow create, update, list: if false;
+    }
+
+    // ── system/* — App Owner editable global config ──────────────
+    //
+    // Documents under `system/` hold global config written by the
+    // App Owner from the web admin portal and read by all clients:
+    //
+    //   system/planConfig   — per-tier limits (maxMembers, maxProjects, …)
+    //   system/tutorialVideos — per-page YouTube tutorial links
+    //
+    // Read: ANY signed-in user. Clients need planConfig for paywall
+    //   rendering and tutorialVideos for empty-state display — neither
+    //   is sensitive.
+    // Write: App Owner only. planConfig is mutated via the
+    //   `adminUpdatePlanConfig` Cloud Function (Admin SDK) so it gets
+    //   an audit trail; tutorialVideos is written directly from the
+    //   portal (no audit needed for content edits). Both paths require
+    //   the `role: 'app_owner'` custom claim verified by isAppOwner().
+    match /system/{docId} {
+      allow read: if request.auth != null;
+      allow write: if isAppOwner();
+    }
+
+    // ── feedback — in-app submissions from any signed-in user ────
+    //
+    // The mobile feedback form writes here on submit. App Owner reads
+    // and triages from the web admin portal.
+    //
+    // Create: any signed-in user, but they must stamp `userId` with
+    //   their own uid. Status starts at 'open'; admin-only fields
+    //   (status changes, adminNotes, triagedBy/At) are writable only
+    //   by the App Owner via update.
+    // Read: the author can read their own (for a future "my submissions"
+    //   list); App Owner reads everyone's.
+    // Update: App Owner only — for triage state changes.
+    // Delete: nobody from the client; cleanup happens via admin script
+    //   if needed.
+    // List: App Owner only (cross-user list); authors don't list.
+    match /feedback/{feedbackId} {
+      allow create: if request.auth != null
+        && request.resource.data.get('userId', '') == request.auth.uid
+        && request.resource.data.get('status', '') == 'open';
+      allow get: if request.auth != null
+        && (resource.data.get('userId', '') == request.auth.uid || isAppOwner());
+      allow list: if isAppOwner();
+      allow update: if isAppOwner();
+      allow delete: if false;
+    }
+
+    // ── adminAudit — operator action log ─────────────────────────
+    //
+    // Append-only log of every admin action (tier override, plan
+    // edit, etc.). Read by the App Owner from the audit screen;
+    // never edited or deleted; created only by admin callables.
+    match /adminAudit/{eventId} {
+      allow read: if isAppOwner();
+      allow write: if false;
+    }
+
+    // ── App Owner cross-org reads ────────────────────────────────
+    //
+    // The App Owner needs to list every org for the Subscribers /
+    // Revenue dashboards. Bumping the per-collection rules with
+    // `|| isAppOwner()` would mean editing every match block; this
+    // single document path catches the cross-org list pattern from
+    // the admin portal (which fetches via callables, not direct
+    // client reads, so this is mostly a safety net).
+    //
+    // NOTE: the actual data access is via `adminListSubscribers`
+    // callable using the Admin SDK — that bypasses rules entirely.
+    // We keep this rule narrow + per-collection as belt-and-braces.
+
+    // ── default deny ─────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
     }

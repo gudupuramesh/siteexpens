@@ -6,7 +6,12 @@
  * Defaults: variant="body", color="text". `numberOfLines` is forwarded so
  * dense list rows can truncate cleanly.
  */
-import { Text as RNText, type TextProps as RNTextProps, type TextStyle } from 'react-native';
+import {
+  Text as RNText,
+  type StyleProp,
+  type TextProps as RNTextProps,
+  type TextStyle,
+} from 'react-native';
 
 import { color as colorTokens, type, type ColorToken, type TypeVariant } from '@/src/theme';
 
@@ -16,7 +21,11 @@ export type TextProps = Omit<RNTextProps, 'style'> & {
   align?: TextStyle['textAlign'];
   /** Use tabular numerals — for amounts/dates that should align in columns. */
   tabular?: boolean;
-  style?: TextStyle | TextStyle[];
+  /** Standard React Native style prop — accepts arrays, falsy values
+   *  (`false | null | undefined`), and nesting. Matches the pattern
+   *  used by `Pressable`/`View` in the rest of the app so call-sites
+   *  can use `[styles.foo, active && styles.bar]` without TS noise. */
+  style?: StyleProp<TextStyle>;
 };
 
 export function Text({

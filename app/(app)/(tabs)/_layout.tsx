@@ -1,25 +1,35 @@
 /**
  * Bottom tab bar layout for the primary app navigation.
  *
- * 5 tabs: Projects (dashboard), Parties, CRM, Toolkit, Chats. Side
- * drawer (hamburger from Projects tab) holds org-level settings — not
- * in this layout.
+ * 5 tab routes (Projects, Overview, CRM, Toolkit, More) — but the
+ * VISIBLE set is per-role. `useVisibleBottomTabs()` returns the keys
+ * the current role can see, derived from the matrix in
+ * `docs/roles-and-permissions.md`. Each `<Tabs.Screen>` stays
+ * mounted (so deep-link routes still resolve), but the tab bar
+ * item is hidden via `tabBarItemStyle.display: 'none'` for any
+ * route the role can't see.
+ *
+ * Why hide-via-display instead of removing the `<Tabs.Screen>`
+ * entirely: Expo Router infers route names from the file system
+ * AND the Tabs.Screen list — removing one mid-render confuses the
+ * router and triggers a "Couldn't navigate" warning if a
+ * navigation event fires for that route. `display: none` is the
+ * Expo Router-recommended idiom for role/feature-flag tab hiding.
  */
 import { Tabs } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 
+import { useVisibleBottomTabs, type BottomTabKey } from '@/src/features/org/useVisibleTabs';
 import { Text } from '@/src/ui/Text';
 import { color, shadow } from '@/src/theme';
 
-type IconKey = 'projects' | 'parties' | 'crm' | 'toolkit' | 'chats';
+type IconKey = 'projects' | 'overview' | 'crm' | 'toolkit' | 'chats';
 
 function TabGlyph({ k, active }: { k: IconKey; active: boolean }) {
-  // Minimal glyphs drawn with text characters until we wire icons. Stays
-  // outline-only per design system, primary when active, textMuted idle.
   const c = active ? color.primary : color.textFaint;
   const map: Record<IconKey, string> = {
     projects: '⌂',
-    parties: '◉',
+    overview: '▤',
     crm: '✦',
     toolkit: '⚙',
     chats: '⋯',
@@ -33,11 +43,27 @@ function TabGlyph({ k, active }: { k: IconKey; active: boolean }) {
   );
 }
 
+/** Build a per-tab style override that collapses the tab item when
+ *  the role can't see it. */
+function hideIfNotIn(visible: ReadonlySet<BottomTabKey>, key: BottomTabKey) {
+  return visible.has(key) ? undefined : { display: 'none' as const };
+}
+
 export default function TabsLayout() {
+  const visible = useVisibleBottomTabs();
+
   return (
     <Tabs
       screenOptions={{
         headerShown: false,
+        // `fade` cross-dissolve. The light-grey ghost rectangles that
+        // used to appear behind Overview's cards on Projects→Overview
+        // weren't caused by this animation — they were the Android
+        // `elevation` shadow on those cards painting one frame before
+        // the white card body filled in over it (Android-only; iOS
+        // doesn't render elevation). Fix landed in overview.tsx by
+        // removing the elevation; animation can stay smooth.
+        animation: 'fade',
         tabBarActiveTintColor: color.primary,
         tabBarInactiveTintColor: color.textFaint,
         tabBarStyle: styles.bar,
@@ -50,13 +76,15 @@ export default function TabsLayout() {
         options={{
           title: 'Projects',
           tabBarIcon: ({ focused }) => <TabGlyph k="projects" active={focused} />,
+          tabBarItemStyle: hideIfNotIn(visible, 'index') ?? styles.item,
         }}
       />
       <Tabs.Screen
-        name="parties"
+        name="overview"
         options={{
-          title: 'Parties',
-          tabBarIcon: ({ focused }) => <TabGlyph k="parties" active={focused} />,
+          title: 'Overview',
+          tabBarIcon: ({ focused }) => <TabGlyph k="overview" active={focused} />,
+          tabBarItemStyle: hideIfNotIn(visible, 'overview') ?? styles.item,
         }}
       />
       <Tabs.Screen
@@ -64,6 +92,7 @@ export default function TabsLayout() {
         options={{
           title: 'CRM',
           tabBarIcon: ({ focused }) => <TabGlyph k="crm" active={focused} />,
+          tabBarItemStyle: hideIfNotIn(visible, 'crm') ?? styles.item,
         }}
       />
       <Tabs.Screen
@@ -71,6 +100,7 @@ export default function TabsLayout() {
         options={{
           title: 'Toolkit',
           tabBarIcon: ({ focused }) => <TabGlyph k="toolkit" active={focused} />,
+          tabBarItemStyle: hideIfNotIn(visible, 'toolkit') ?? styles.item,
         }}
       />
       <Tabs.Screen
@@ -78,6 +108,7 @@ export default function TabsLayout() {
         options={{
           title: 'More',
           tabBarIcon: ({ focused }) => <TabGlyph k="chats" active={focused} />,
+          tabBarItemStyle: hideIfNotIn(visible, 'chats') ?? styles.item,
         }}
       />
     </Tabs>

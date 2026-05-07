@@ -560,12 +560,18 @@ const styles = StyleSheet.create({
     marginBottom: space.xs,
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.bg,
     borderWidth: 1,
     borderColor: color.borderStrong,
   },
-  searchInput: { flex: 1, fontSize: 15, color: color.text, paddingVertical: Platform.OS === 'ios' ? space.xs : 0 },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 20,
+    color: color.text,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+  },
 
   catFilterRow: {
     gap: space.xs,
@@ -580,7 +586,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     minHeight: 40,
     justifyContent: 'center',
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -602,14 +608,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     marginHorizontal: screenInset,
     marginBottom: 8,
   },
   rowIcon: {
     width: 32,
     height: 32,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     alignItems: 'center',
@@ -632,7 +638,7 @@ const styles = StyleSheet.create({
   },
   addBtn: {
     height: 44,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.primary,
     borderWidth: 1,
     borderColor: color.primary,
@@ -668,16 +674,16 @@ const styles = StyleSheet.create({
   sectionLabel: { marginTop: space.sm, marginBottom: space.xs },
 
   catGrid: { gap: space.xs },
-  catOption: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
+  catOption: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.sm, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
 
   fieldChipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-  fieldChip: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
+  fieldChip: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.sm, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
   fieldChipActive: { backgroundColor: color.primary, borderColor: color.primary },
 
   rowFields: { flexDirection: 'row', gap: space.sm },
   halfField: { flex: 1 },
 
   unitGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-  unitChip: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
+  unitChip: { paddingHorizontal: space.md, paddingVertical: space.xs, borderRadius: radius.sm, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
   unitChipActive: { backgroundColor: color.primary, borderColor: color.primary },
 });

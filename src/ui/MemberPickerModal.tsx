@@ -22,11 +22,17 @@ export function MemberPickerModal({ visible, projectId, onPick, onClose, allowUn
   const [search, setSearch] = useState('');
   const { members, loading } = useProjectMembers(projectId);
 
+  /** Project clients are not assignable as internal task owners. */
+  const staffOnly = useMemo(
+    () => members.filter((m) => !m.isProjectClient),
+    [members],
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return members;
-    return members.filter((m) => m.displayName.toLowerCase().includes(q));
-  }, [members, search]);
+    if (!q) return staffOnly;
+    return staffOnly.filter((m) => m.displayName.toLowerCase().includes(q));
+  }, [staffOnly, search]);
 
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
@@ -130,7 +136,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.border,
   },
-  searchInput: { flex: 1, fontSize: 15, color: color.text, paddingVertical: Platform.OS === 'ios' ? space.xs : 0 },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 20,
+    color: color.text,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+  },
   list: { paddingHorizontal: screenInset, maxHeight: 420 },
   row: {
     flexDirection: 'row',

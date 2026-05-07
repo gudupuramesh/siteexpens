@@ -1,4 +1,6 @@
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
+
+import type { RoleKey } from '@/src/features/org/types';
 
 export type MaterialRequestStatus = 'draft' | 'pending' | 'approved' | 'rejected';
 
@@ -39,4 +41,29 @@ export type MaterialRequest = {
   approvedBy?: string;
   approvedAt?: FirebaseFirestoreTypes.Timestamp | null;
   rejectionNote?: string;
+  /** UID of the user who rejected this request (mirrors `approvedBy`). */
+  rejectedBy?: string;
+  /** Server timestamp written when `rejectRequest()` runs. Used by the
+   *  notifications bell to anchor rejected events in the Recent section. */
+  rejectedAt?: FirebaseFirestoreTypes.Timestamp | null;
+  /** True when Admin/Super Admin/Manager created and request skipped approval. */
+  autoApproved?: boolean;
+  /** Optional notify targets (informational); any Manager+ may still approve. */
+  designatedApproverUids?: string[];
+  /** Creator role snapshot at create time. */
+  createdByRole?: RoleKey;
+  /** Last edit timestamp — used to surface a "Last edited by X" footnote on
+   *  the detail screen. Set by both creator-edits and approver-edits. */
+  editedAt?: FirebaseFirestoreTypes.Timestamp | null;
+  editedBy?: string;
+  /** Server timestamp written when ANY item's `deliveryStatus` is changed
+   *  via `updateItemDeliveryStatus()`. Distinct from `editedAt` (which
+   *  tracks title/items edits) so the bell can surface delivery events
+   *  without conflating them with content edits. */
+  lastDeliveryUpdateAt?: FirebaseFirestoreTypes.Timestamp | null;
+  lastDeliveryUpdateBy?: string;
 };
+
+export function getDeliveryStatusLabel(s: DeliveryStatus): string {
+  return DELIVERY_STATUSES.find((x) => x.key === s)?.label ?? s;
+}

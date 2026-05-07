@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
 import { db } from '@/src/lib/firebase';
 
@@ -13,6 +13,9 @@ export type UseTasksResult = {
 export function useTasks(
   projectId: string | undefined,
   statusFilter?: string,
+  /** Bumping this number forces the snapshot listener to drop and
+   *  resubscribe — wire to `useFirestoreRefresh().refreshKey`. */
+  refreshKey = 0,
 ): UseTasksResult {
   const [data, setData] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
@@ -53,7 +56,7 @@ export function useTasks(
       },
     );
     return unsub;
-  }, [projectId, statusFilter]);
+  }, [projectId, statusFilter, refreshKey]);
 
   return { data, loading };
 }

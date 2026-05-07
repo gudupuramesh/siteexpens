@@ -35,6 +35,7 @@ import {
 import { useLeads } from '@/src/features/crm/useLeads';
 import { AlertSheet } from '@/src/ui/io';
 import { Text } from '@/src/ui/Text';
+import { TutorialEmptyState } from '@/src/ui/TutorialEmptyState';
 import { color, radius, screenInset, shadow, space } from '@/src/theme';
 import { fontFamily } from '@/src/theme/tokens';
 
@@ -427,19 +428,24 @@ export function LeadsTab({ orgId }: Props) {
           </Text>
         </View>
       ) : filtered.length === 0 ? (
-        <View style={styles.empty}>
-          <Ionicons name="people-outline" size={32} color={color.textFaint} />
-          <Text variant="body" color="textMuted" align="center" style={styles.sub}>
-            {filter === 'all'
-              ? 'Add leads from walk-ins, Instagram, referrals and more.'
-              : 'No leads in this stage yet.'}
-          </Text>
-          <Pressable onPress={() => router.push('/(app)/crm/add-lead' as never)}>
-            <Text variant="metaStrong" color="primary">
-              Add your first lead
-            </Text>
-          </Pressable>
-        </View>
+        <TutorialEmptyState
+          pageKey="crm_leads"
+          fallback={
+            <View style={styles.empty}>
+              <Ionicons name="people-outline" size={32} color={color.textFaint} />
+              <Text variant="body" color="textMuted" align="center" style={styles.sub}>
+                {filter === 'all'
+                  ? 'Add leads from walk-ins, Instagram, referrals and more.'
+                  : 'No leads in this stage yet.'}
+              </Text>
+              <Pressable onPress={() => router.push('/(app)/crm/add-lead' as never)}>
+                <Text variant="metaStrong" color="primary">
+                  Add your first lead
+                </Text>
+              </Pressable>
+            </View>
+          }
+        />
       ) : (
         <FlatList
           data={filtered}
@@ -544,7 +550,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     height: 28,
     paddingHorizontal: 12,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
     backgroundColor: color.surface,
@@ -605,7 +611,7 @@ const styles = StyleSheet.create({
   avatar: {
     width: 40,
     height: 40,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.border,
     alignItems: 'center',
@@ -706,7 +712,7 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 28,
     height: 28,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
     alignItems: 'center',

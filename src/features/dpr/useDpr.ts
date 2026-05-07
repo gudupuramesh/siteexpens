@@ -42,6 +42,7 @@ export function useDpr(
         },
         (err) => {
           console.warn('[useDpr] snapshot error:', err);
+          setData(null);
           setLoading(false);
         },
       );

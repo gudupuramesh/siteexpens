@@ -13,34 +13,41 @@
  *   useTransactions(id)  → spent (payment_out total) + category split
  *   useTasks(id)         → average task progress for "% complete"
  */
-import { useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text as RNText,
+  TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { Spinner } from '@/src/ui/Spinner';
 
 import { useProject } from '@/src/features/projects/useProject';
+import { useMaterialRequests } from '@/src/features/materialRequests/useMaterialRequests';
 import { useTransactions } from '@/src/features/transactions/useTransactions';
 import { useTasks } from '@/src/features/tasks/useTasks';
+import { useProjectStorage, prettyBytes } from '@/src/features/projects/useProjectStorage';
 import {
   TRANSACTION_CATEGORIES,
+  isTransactionCountedInTotals,
+  normalizeTransactionType,
 } from '@/src/features/transactions/types';
-import { normalizeTransactionType } from '@/src/features/transactions/types';
-import { updateProject } from '@/src/features/projects/projects';
+import { deleteProject, updateProject } from '@/src/features/projects/projects';
 import {
   PROJECT_STATUS_OPTIONS,
   PROJECT_TYPOLOGIES,
   type ProjectStatus,
 } from '@/src/features/projects/types';
+import { formatInr } from '@/src/lib/format';
 import { color, fontFamily } from '@/src/theme/tokens';
 import { PrimaryButton, SelectModal, Slider } from '@/src/ui/io';
 
@@ -74,19 +81,35 @@ function categoryLabel(key: string): string {
 export function OverviewTab() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: project, loading } = useProject(id);
-  const { data: transactions } = useTransactions(id);
+  const {
+    data: transactions,
+    pendingPaymentOutTotal,
+    pendingApprovalCount,
+  } = useTransactions(id);
+  const { data: pendingMaterials } = useMaterialRequests(id, 'pending');
   const { data: tasks } = useTasks(id);
+  const storage = useProjectStorage(id);
   const [statusPickerOpen, setStatusPickerOpen] = useState(false);
   const [progressEditorOpen, setProgressEditorOpen] = useState(false);
   const [progressDraft, setProgressDraft] = useState(0);
   const [savingStatus, setSavingStatus] = useState(false);
   const [savingProgress, setSavingProgress] = useState(false);
 
+  // Delete-project flow state. Two-step UX: native Alert first (cheap
+  // accidental-tap defense) → if the user confirms, show a modal that
+  // requires them to type the exact project name to enable the delete
+  // button. Mirrors the pattern used by GitHub / Vercel / Supabase
+  // for irreversible destructive actions.
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteNameDraft, setDeleteNameDraft] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
   // Spent + by-category breakdown — only payment_out
   const { spent, byCategory } = useMemo(() => {
     let s = 0;
     const cat: Record<string, number> = {};
     for (const t of transactions) {
+      if (!isTransactionCountedInTotals(t)) continue;
       const kind = normalizeTransactionType(t.type);
       if (kind === 'payment_out') {
         s += t.amount;
@@ -147,6 +170,52 @@ export function OverviewTab() {
     setProgressEditorOpen(true);
   };
 
+  // ── Delete project ──────────────────────────────────────────────
+  // Step 1: native Alert. If the user taps "Delete…" we open the typed
+  // confirmation modal (step 2) where they must type the exact name.
+  const handleDeletePress = () => {
+    if (!project) return;
+    Alert.alert(
+      'Delete this project?',
+      `"${project.name}" will be removed for everyone. Tasks, transactions, attendance, files and other data attached to it will be hidden permanently.\n\nThis cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete…',
+          style: 'destructive',
+          onPress: () => {
+            setDeleteNameDraft('');
+            setDeleteModalOpen(true);
+          },
+        },
+      ],
+    );
+  };
+
+  // Step 2: actually delete. Caller has typed the name; double-check
+  // the draft + project still match in case of stale state.
+  //
+  // Server side (deleteProjectCascade Cloud Function) wipes R2 + every
+  // Firestore doc tied to this project — no orphans. We just await
+  // the result, then pop two screens (overview screen → project detail
+  // → projects list).
+  const handleConfirmedDelete = async () => {
+    if (!project || !id) return;
+    if (deleteNameDraft.trim() !== project.name.trim()) return;
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await deleteProject(id);
+      setDeleteModalOpen(false);
+      router.back();
+      router.back();
+    } catch (err) {
+      Alert.alert('Could not delete project', (err as Error).message);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const handleSaveProgress = async () => {
     if (!id || savingProgress) return;
     try {
@@ -183,13 +252,38 @@ export function OverviewTab() {
               {formatInrCompact(spent)}
             </RNText>
           </View>
-          <View style={styles.kpiCell}>
+          <View style={[styles.kpiCell, styles.kpiCellBorder]}>
             <RNText style={styles.kpiLabel}>LEFT</RNText>
             <RNText style={[styles.kpiValue, { color: color.primary }]}>
               {formatInrCompact(left)}
             </RNText>
           </View>
+          {/* Storage usage — fed by useProjectStorage from the
+              `projectStorage/{id}` Firestore doc maintained server-side
+              by the recordStorageEvent / r2DeleteObject Cloud Functions. */}
+          <View style={styles.kpiCell}>
+            <RNText style={styles.kpiLabel}>STORAGE</RNText>
+            <RNText style={styles.kpiValue}>
+              {prettyBytes(storage.totalBytes)}
+            </RNText>
+            <RNText style={styles.kpiSubLabel}>
+              {storage.fileCount} file{storage.fileCount === 1 ? '' : 's'}
+            </RNText>
+          </View>
         </View>
+        {(pendingMaterials.length > 0 || pendingApprovalCount > 0) && (
+          <RNText style={styles.kpiPendingNote}>
+            Pending approvals:
+            {pendingMaterials.length > 0 ? ` ${pendingMaterials.length} material request(s)` : ''}
+            {pendingApprovalCount > 0
+              ? `${pendingMaterials.length > 0 ? ';' : ''} ${pendingApprovalCount} transaction(s)${
+                  pendingPaymentOutTotal > 0
+                    ? ` (${formatInrCompact(Math.round(pendingPaymentOutTotal))} out not in spent)`
+                    : ''
+                }`
+              : ''}
+          </RNText>
+        )}
 
         {/* Progress bar */}
         <Pressable
@@ -227,10 +321,76 @@ export function OverviewTab() {
 
       </View>
 
-      {/* PROJECT INFO */}
+      {/* PROJECT DETAILS — every field collected at create time, plus
+          an Edit pencil that opens the full edit form. Status remains
+          inline-editable (tap → SelectModal) since it's the most-
+          changed field; everything else routes through edit-project. */}
       <View style={styles.group}>
-        <RNText style={styles.groupHeader}>PROJECT INFO</RNText>
+        <View style={styles.groupHeaderRow}>
+          <RNText style={styles.groupHeader}>PROJECT DETAILS</RNText>
+          <Pressable
+            onPress={() =>
+              router.push(`/(app)/projects/${id}/edit-project` as never)
+            }
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.groupHeaderAction,
+              pressed && { opacity: 0.6 },
+            ]}
+            accessibilityLabel="Edit project details"
+          >
+            <Ionicons name="create-outline" size={14} color={color.primary} />
+            <RNText style={styles.groupHeaderActionText}>EDIT</RNText>
+          </Pressable>
+        </View>
+
+        {/* Cover photo — shown only when the project has one. Tappable
+            in the future for a fullscreen view; for now a static hero. */}
+        {project.photoUri ? (
+          <View style={styles.coverWrap}>
+            <Image
+              source={{ uri: project.photoUri }}
+              style={styles.coverImg}
+              resizeMode="cover"
+            />
+          </View>
+        ) : null}
+
         <View style={styles.groupBody}>
+          <View style={styles.infoRow}>
+            <RNText style={styles.infoTitle}>Name</RNText>
+            <RNText style={styles.infoMeta} numberOfLines={2}>
+              {project.name}
+            </RNText>
+            <View style={styles.infoDivider} />
+          </View>
+
+          {project.client ? (
+            <View style={styles.infoRow}>
+              <RNText style={styles.infoTitle}>Client</RNText>
+              <RNText style={styles.infoMeta} numberOfLines={1}>
+                {project.client}
+              </RNText>
+              <View style={styles.infoDivider} />
+            </View>
+          ) : null}
+
+          <View style={styles.infoRow}>
+            <RNText style={styles.infoTitle}>Location</RNText>
+            <RNText style={styles.infoMeta} numberOfLines={1}>
+              {project.location || '—'}
+            </RNText>
+            <View style={styles.infoDivider} />
+          </View>
+
+          <View style={styles.infoRow}>
+            <RNText style={styles.infoTitle}>Site address</RNText>
+            <RNText style={styles.infoMeta} numberOfLines={3}>
+              {project.siteAddress || '—'}
+            </RNText>
+            <View style={styles.infoDivider} />
+          </View>
+
           {project.typology ? (
             <View style={styles.infoRow}>
               <RNText style={styles.infoTitle}>Type</RNText>
@@ -258,6 +418,12 @@ export function OverviewTab() {
             <View style={styles.infoDivider} />
           </View>
 
+          <View style={styles.infoRow}>
+            <RNText style={styles.infoTitle}>Value</RNText>
+            <RNText style={styles.infoMeta}>{formatInr(project.value)}</RNText>
+            <View style={styles.infoDivider} />
+          </View>
+
           <Pressable
             onPress={() => setStatusPickerOpen(true)}
             style={({ pressed }) => [styles.infoRow, pressed && { opacity: 0.82 }]}
@@ -273,20 +439,12 @@ export function OverviewTab() {
             <View style={styles.infoDivider} />
           </Pressable>
 
-          {project.team !== undefined ? (
-            <View style={styles.infoRow}>
-              <RNText style={styles.infoTitle}>Team size</RNText>
-              <RNText style={styles.infoMeta}>
-                {project.team} {project.team === 1 ? 'person' : 'people'}
-              </RNText>
-              <View style={styles.infoDivider} />
-            </View>
-          ) : null}
-
           <View style={[styles.infoRow, styles.infoRowLast]}>
-            <RNText style={styles.infoTitle}>Location</RNText>
-            <RNText style={styles.infoMeta} numberOfLines={1}>
-              {project.location || project.siteAddress || '—'}
+            <RNText style={styles.infoTitle}>Team size</RNText>
+            <RNText style={styles.infoMeta}>
+              {project.team !== undefined && project.team > 0
+                ? `${project.team} ${project.team === 1 ? 'person' : 'people'}`
+                : '—'}
             </RNText>
           </View>
         </View>
@@ -350,6 +508,30 @@ export function OverviewTab() {
         </View>
       )}
 
+      {/* DANGER ZONE — delete project. Two-step confirmation: native
+          Alert → modal with required name typing. */}
+      <View style={styles.group}>
+        <RNText style={styles.groupHeader}>DANGER ZONE</RNText>
+        <View style={styles.groupBody}>
+          <Pressable
+            onPress={handleDeletePress}
+            style={({ pressed }) => [
+              styles.infoRow,
+              styles.infoRowLast,
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Ionicons name="trash-outline" size={18} color={color.danger} />
+            <RNText style={[styles.infoTitle, { color: color.danger, marginLeft: 4 }]}>
+              Delete project
+            </RNText>
+            <RNText style={[styles.infoMeta, { color: color.textFaint }]} numberOfLines={1}>
+              Permanent
+            </RNText>
+          </Pressable>
+        </View>
+      </View>
+
       <View style={{ height: 32 }} />
 
       <SelectModal<ProjectStatus>
@@ -385,6 +567,76 @@ export function OverviewTab() {
           />
         </View>
       </Modal>
+
+      {/* Type-the-name confirmation modal — second of two delete
+          gates. The Delete button only enables when the typed string
+          matches the project name exactly (trim-tolerant). */}
+      <Modal
+        visible={deleteModalOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => (deleting ? null : setDeleteModalOpen(false))}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => (deleting ? null : setDeleteModalOpen(false))}
+        >
+          <View />
+        </Pressable>
+        <View style={styles.modalSheet}>
+          <View style={styles.modalHandle} />
+          <RNText style={[styles.modalTitle, { color: color.danger }]}>
+            Confirm project deletion
+          </RNText>
+          <RNText style={styles.deleteHelp}>
+            To confirm, type the project name exactly as shown:
+          </RNText>
+          <RNText style={styles.deleteNameQuote} numberOfLines={2}>
+            {project.name}
+          </RNText>
+          <TextInput
+            value={deleteNameDraft}
+            onChangeText={setDeleteNameDraft}
+            placeholder="Type project name"
+            placeholderTextColor={color.textFaint}
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.deleteInput}
+            editable={!deleting}
+          />
+          <View style={styles.deleteBtnRow}>
+            <Pressable
+              onPress={() => (deleting ? null : setDeleteModalOpen(false))}
+              disabled={deleting}
+              style={({ pressed }) => [
+                styles.deleteCancelBtn,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <RNText style={styles.deleteCancelText}>Cancel</RNText>
+            </Pressable>
+            <Pressable
+              onPress={handleConfirmedDelete}
+              disabled={
+                deleting ||
+                deleteNameDraft.trim() !== project.name.trim()
+              }
+              style={({ pressed }) => [
+                styles.deleteConfirmBtn,
+                (deleting ||
+                  deleteNameDraft.trim() !== project.name.trim()) && {
+                  opacity: 0.5,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <RNText style={styles.deleteConfirmText}>
+                {deleting ? 'Deleting…' : 'Delete project'}
+              </RNText>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -407,6 +659,14 @@ const styles = StyleSheet.create({
   kpiWrap: {
     paddingHorizontal: 16,
     marginBottom: 22,
+  },
+  kpiPendingNote: {
+    marginTop: 8,
+    fontFamily: fontFamily.mono,
+    fontSize: 10,
+    color: color.textMuted,
+    letterSpacing: 0.3,
+    lineHeight: 15,
   },
   kpiStrip: {
     flexDirection: 'row',
@@ -436,6 +696,15 @@ const styles = StyleSheet.create({
     marginTop: 2,
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.3,
+  },
+  // Sub-label under a KPI value — used by the Storage cell to show
+  // "N files" beneath the byte total.
+  kpiSubLabel: {
+    fontFamily: fontFamily.mono,
+    fontSize: 9,
+    color: color.textFaint,
+    letterSpacing: 1,
+    marginTop: 2,
   },
 
   // Progress
@@ -496,6 +765,43 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     paddingHorizontal: 16,
     paddingBottom: 8,
+  },
+  // Section header that hosts an inline action (e.g. EDIT next to
+  // PROJECT DETAILS). Header text shrinks-to-fit; action sits at the
+  // right edge.
+  groupHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    paddingRight: 16,
+    paddingBottom: 8,
+  },
+  groupHeaderAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  groupHeaderActionText: {
+    fontFamily: fontFamily.mono,
+    fontSize: 10,
+    fontWeight: '700',
+    color: color.primary,
+    letterSpacing: 1.2,
+  },
+
+  // Cover photo hero — full-bleed strip above the details rows.
+  coverWrap: {
+    marginHorizontal: 0,
+    backgroundColor: color.surface,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: color.border,
+    aspectRatio: 16 / 9,
+    overflow: 'hidden',
+  },
+  coverImg: {
+    width: '100%',
+    height: '100%',
   },
   groupBody: {
     backgroundColor: color.bgGrouped,
@@ -646,5 +952,72 @@ const styles = StyleSheet.create({
   },
   modalSaveBtn: {
     marginTop: 10,
+  },
+
+  // Delete-confirmation modal — type-the-name gate.
+  deleteHelp: {
+    marginTop: 10,
+    fontFamily: fontFamily.sans,
+    fontSize: 13,
+    color: color.textMuted,
+    lineHeight: 18,
+  },
+  deleteNameQuote: {
+    marginTop: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontFamily: fontFamily.mono,
+    fontSize: 13,
+    fontWeight: '700',
+    color: color.text,
+    backgroundColor: color.surfaceAlt,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
+    letterSpacing: 0.2,
+  },
+  deleteInput: {
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    backgroundColor: color.bg,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    fontFamily: fontFamily.sans,
+    fontSize: 15,
+    color: color.text,
+  },
+  deleteBtnRow: {
+    marginTop: 14,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  deleteCancelBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: color.bg,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+  },
+  deleteCancelText: {
+    fontFamily: fontFamily.sans,
+    fontSize: 14,
+    fontWeight: '600',
+    color: color.text,
+  },
+  deleteConfirmBtn: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: color.danger,
+  },
+  deleteConfirmText: {
+    fontFamily: fontFamily.sans,
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#fff',
+    letterSpacing: 0.2,
   },
 });

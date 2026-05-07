@@ -1,13 +1,17 @@
 import { useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 
 import { useTasks } from '@/src/features/tasks/useTasks';
+import { useProjectTabRefreshKey } from '@/src/features/projects/ProjectTabRefreshContext';
+import { useFirestoreRefresh } from '@/src/lib/useFirestoreRefresh';
 import { DEFAULT_TASK_CATEGORIES, type Task } from '@/src/features/tasks/types';
 import { useProject } from '@/src/features/projects/useProject';
 import { TaskReportModal } from '@/src/features/projects/TaskReportModal';
+import { Can } from '@/src/ui/Can';
 import { Text } from '@/src/ui/Text';
+import { TutorialEmptyState } from '@/src/ui/TutorialEmptyState';
 import { color, screenInset, space } from '@/src/theme';
 
 function getTaskDate(task: Task): Date | null {
@@ -29,7 +33,9 @@ function getCategoryLabel(key: string | undefined): string {
 
 export function TaskTab() {
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
-  const { data, loading } = useTasks(projectId);
+  const focusRefresh = useProjectTabRefreshKey();
+  const { refreshing, refresh, refreshKey } = useFirestoreRefresh();
+  const { data, loading } = useTasks(projectId, undefined, refreshKey + focusRefresh);
   const { data: project } = useProject(projectId);
   const [reportOpen, setReportOpen] = useState(false);
 
@@ -137,15 +143,17 @@ export function TaskTab() {
               Report
             </Text>
           </Pressable>
-          <Pressable
-            onPress={() => router.push(`/(app)/projects/${projectId}/add-task` as never)}
-            style={({ pressed }) => [styles.addChip, pressed && { opacity: 0.86 }]}
-          >
-            <Ionicons name="add" size={13} color={color.onPrimary} />
-            <Text variant="metaStrong" style={{ color: color.onPrimary }}>
-              Add
-            </Text>
-          </Pressable>
+          <Can capability="task.write">
+            <Pressable
+              onPress={() => router.push(`/(app)/projects/${projectId}/add-task` as never)}
+              style={({ pressed }) => [styles.addChip, pressed && { opacity: 0.86 }]}
+            >
+              <Ionicons name="add" size={13} color={color.onPrimary} />
+              <Text variant="metaStrong" style={{ color: color.onPrimary }}>
+                Add
+              </Text>
+            </Pressable>
+          </Can>
         </View>
       </View>
 
@@ -161,13 +169,18 @@ export function TaskTab() {
           <Text variant="meta" color="textMuted">Loading…</Text>
         </View>
       ) : sorted.length === 0 ? (
-        <View style={styles.empty}>
-          <Ionicons name="time-outline" size={28} color={color.textFaint} />
-          <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>No timeline entries</Text>
-          <Text variant="meta" color="textMuted" align="center">
-            Add a timeline item to track project progress.
-          </Text>
-        </View>
+        <TutorialEmptyState
+          pageKey="tasks"
+          fallback={
+            <View style={styles.empty}>
+              <Ionicons name="time-outline" size={28} color={color.textFaint} />
+              <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>No timeline entries</Text>
+              <Text variant="meta" color="textMuted" align="center">
+                Add a timeline item to track project progress.
+              </Text>
+            </View>
+          }
+        />
       ) : (
         <FlatList
           data={sorted}
@@ -175,6 +188,9 @@ export function TaskTab() {
           renderItem={renderItem}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={refresh} />
+          }
         />
       )}
     </View>
@@ -293,7 +309,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
-    borderRadius: 0,
+    borderRadius: 6,
     paddingHorizontal: 6,
     paddingVertical: 1,
   },

@@ -3,20 +3,21 @@
   "compilerOptions": {
     "strict": true,
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./*"],
+      "@msg91comm/sendotp-react-native": ["./types/msg91.d.ts"]
     }
   },
   "include": [
     "**/*.ts",
     "**/*.tsx",
     ".expo/types/**/*.ts",
-    "expo-env.d.ts"
+    "expo-env.d.ts",
+    "types/**/*.d.ts"
   ],
   "exclude": [
     "node_modules",
-    "interior os ui",
-    "interior-os backend"
+    "functions",
+    "studio",
+    "interior os ui"
   ]
 }

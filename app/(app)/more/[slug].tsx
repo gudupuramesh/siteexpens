@@ -53,7 +53,7 @@ const styles = StyleSheet.create({
     height: 36,
     borderWidth: 1,
     borderColor: color.borderStrong,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: color.bg,
@@ -64,7 +64,7 @@ const styles = StyleSheet.create({
   card: {
     borderWidth: 1,
     borderColor: color.borderStrong,
-    borderRadius: radius.none,
+    borderRadius: radius.md,
     backgroundColor: color.bg,
     padding: space.md,
   },

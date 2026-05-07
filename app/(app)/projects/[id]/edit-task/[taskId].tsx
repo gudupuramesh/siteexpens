@@ -3,8 +3,8 @@
  * definition (title/description/status/priority/dates/assignee/reference photos).
  * Progress % is NOT edited here — members post a TaskUpdate for that instead.
  */
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
 import { useEffect, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import {
@@ -24,13 +24,22 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { deleteTask, updateTask } from '@/src/features/tasks/tasks';
+import { guessImageMimeType, recordStorageEvent } from '@/src/lib/r2Upload';
+import {
+  commitStagedFiles,
+  makeStagedFile,
+  type StagedFile,
+} from '@/src/lib/commitStagedFiles';
+import { deleteR2Object } from '@/src/lib/r2Delete';
 import { createTaskCategory } from '@/src/features/tasks/taskCategories';
 import { useTask } from '@/src/features/tasks/useTasks';
 import { useTaskCategories } from '@/src/features/tasks/useTaskCategories';
 import { type TaskCategory, type TaskPriority, type TaskStatus } from '@/src/features/tasks/types';
 import { Button } from '@/src/ui/Button';
+import { DatePickerModal } from '@/src/ui/DatePickerModal';
 import { PartyPickerModal } from '@/src/ui/PartyPickerModal';
 import { Screen } from '@/src/ui/Screen';
+import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
 import { formatDate } from '@/src/lib/format';
@@ -43,6 +52,7 @@ const STATUS_OPTIONS: Array<{ key: TaskStatus; label: string }> = [
 ];
 
 export default function EditTaskScreen() {
+  useGuardedRoute({ capability: 'task.write' });
   const { id: projectId, taskId } = useLocalSearchParams<{ id: string; taskId: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -60,7 +70,12 @@ export default function EditTaskScreen() {
   const [showEndDate, setShowEndDate] = useState(false);
   const [assignedTo, setAssignedTo] = useState('');
   const [assignedToName, setAssignedToName] = useState('');
-  const [photoUris, setPhotoUris] = useState<string[]>([]);
+  // Photos: existing URLs from the task doc + newly-staged local
+  // files. Existing URLs are kept as-is (we don't re-upload them).
+  // Staged files upload during Save.
+  const [existingPhotos, setExistingPhotos] = useState<string[]>([]);
+  const [staged, setStaged] = useState<StagedFile[]>([]);
+  const [savePhase, setSavePhase] = useState<string>();
   const [showPartyPicker, setShowPartyPicker] = useState(false);
   const [showCategorySheet, setShowCategorySheet] = useState(false);
   const [newCategory, setNewCategory] = useState('');
@@ -81,7 +96,7 @@ export default function EditTaskScreen() {
     setEndDate(task.endDate ? task.endDate.toDate() : null);
     setAssignedTo(task.assignedTo);
     setAssignedToName(task.assignedToName);
-    setPhotoUris(task.photoUris ?? []);
+    setExistingPhotos(task.photoUris ?? []);
     setHydrated(true);
   }, [task, hydrated]);
 
@@ -110,21 +125,70 @@ export default function EditTaskScreen() {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
-      quality: 0.7,
+      quality: 0.85,
     });
-    if (!res.canceled) {
-      setPhotoUris((prev) => [...prev, ...res.assets.map((a) => a.uri)]);
-    }
+    if (res.canceled) return;
+    // Stage locally — upload during Save.
+    const newEntries = res.assets.map((a) =>
+      makeStagedFile({
+        localUri: a.uri,
+        contentType: a.mimeType || guessImageMimeType(a.uri),
+      }),
+    );
+    setStaged((prev) => [...prev, ...newEntries]);
   };
 
+  function removeExistingPhoto(url: string) {
+    setExistingPhotos((prev) => prev.filter((u) => u !== url));
+  }
+  function removeStagedPhoto(id: string) {
+    setStaged((prev) => prev.filter((p) => p.id !== id));
+  }
+
   const onSave = async () => {
-    if (!task) return;
+    if (!task || !projectId) return;
     if (!title.trim()) {
       Alert.alert('Title required');
       return;
     }
     setSaving(true);
     try {
+      // Step 1 — upload any newly-staged photos.
+      let newUploadedUrls: string[] = [];
+      let failedCount = 0;
+      let uploadedKeys: { key: string; sizeBytes: number; contentType: string }[] = [];
+      if (staged.length > 0) {
+        setSavePhase(`Uploading 0 of ${staged.length}…`);
+        const { uploaded, failed } = await commitStagedFiles({
+          files: staged,
+          kind: 'task_photo',
+          refId: task.id,
+          projectId,
+          compress: 'balanced',
+          onProgress: (done, total) => {
+            setSavePhase(`Uploading ${done} of ${total}…`);
+          },
+        });
+        newUploadedUrls = uploaded.map((u) => u.publicUrl);
+        uploadedKeys = uploaded.map((u) => ({
+          key: u.key,
+          sizeBytes: u.sizeBytes,
+          contentType: u.contentType,
+        }));
+        failedCount = failed.length;
+        if (uploaded.length === 0 && failed.length > 0) {
+          Alert.alert(
+            'Uploads failed',
+            `All ${failed.length} new photo(s) failed to upload. Tap Save again to retry.`,
+          );
+          setSavePhase(undefined);
+          setSaving(false);
+          return;
+        }
+      }
+
+      // Step 2 — combine kept-existing + newly-uploaded URLs.
+      setSavePhase('Saving task…');
       await updateTask(task.id, {
         title: title.trim(),
         description,
@@ -135,13 +199,26 @@ export default function EditTaskScreen() {
         endDate,
         assignedTo,
         assignedToName,
-        photoUris,
+        photoUris: [...existingPhotos, ...newUploadedUrls],
       });
+      // recordStorageEvent already fired inside commitStagedFiles
+      // (because we passed projectId), so nothing more to do here.
+
+      if (failedCount > 0) {
+        Alert.alert(
+          'Some uploads failed',
+          `${failedCount} of ${staged.length} new photo(s) failed. The task was saved with the rest.`,
+        );
+      }
+      // Wait briefly so the parent screen's onSnapshot listener catches
+      // the just-updated task before navigation completes.
+      await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
       Alert.alert('Error', (err as Error).message);
     } finally {
       setSaving(false);
+      setSavePhase(undefined);
     }
   };
 
@@ -155,6 +232,12 @@ export default function EditTaskScreen() {
         onPress: async () => {
           try {
             await deleteTask(task.id);
+            // We don't have R2 keys for existing task photos in the
+            // current schema (Task only stores URLs, not keys), so
+            // we can't precisely delete them here — a future orphan
+            // sweep handles those. Note: any newly-staged files in
+            // this session were never uploaded (upload-on-save), so
+            // there's nothing to clean up for them either.
             // Pop twice: out of edit screen and out of the detail screen.
             router.back();
             router.back();
@@ -292,41 +375,43 @@ export default function EditTaskScreen() {
           <View style={styles.dateRow}>
             <View style={styles.dateField}>
               <Text variant="caption" color="textMuted" style={styles.label}>START DATE</Text>
-              <Pressable onPress={() => setShowStartDate(true)} style={styles.dateBtn}>
+              <Pressable
+                onPress={() => {
+                  setShowEndDate(false);
+                  setShowStartDate(true);
+                }}
+                style={styles.dateBtn}
+              >
                 <Text variant="body" color="text">
                   {startDate ? formatDate(startDate) : 'Not set'}
                 </Text>
               </Pressable>
-              {showStartDate && (
-                <DateTimePicker
-                  value={startDate ?? new Date()}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(_, d) => {
-                    setShowStartDate(Platform.OS === 'ios');
-                    if (d) setStartDate(d);
-                  }}
-                />
-              )}
+              <DatePickerModal
+                visible={showStartDate}
+                value={startDate ?? new Date()}
+                onClose={() => setShowStartDate(false)}
+                onConfirm={(d) => setStartDate(d)}
+              />
             </View>
             <View style={styles.dateField}>
               <Text variant="caption" color="textMuted" style={styles.label}>END DATE</Text>
-              <Pressable onPress={() => setShowEndDate(true)} style={styles.dateBtn}>
+              <Pressable
+                onPress={() => {
+                  setShowStartDate(false);
+                  setShowEndDate(true);
+                }}
+                style={styles.dateBtn}
+              >
                 <Text variant="body" color="text">
                   {endDate ? formatDate(endDate) : 'Not set'}
                 </Text>
               </Pressable>
-              {showEndDate && (
-                <DateTimePicker
-                  value={endDate ?? new Date()}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(_, d) => {
-                    setShowEndDate(Platform.OS === 'ios');
-                    if (d) setEndDate(d);
-                  }}
-                />
-              )}
+              <DatePickerModal
+                visible={showEndDate}
+                value={endDate ?? new Date()}
+                onClose={() => setShowEndDate(false)}
+                onConfirm={(d) => setEndDate(d)}
+              />
             </View>
           </View>
 
@@ -340,14 +425,28 @@ export default function EditTaskScreen() {
             <Ionicons name="chevron-forward" size={18} color={color.textFaint} />
           </Pressable>
 
-          {/* Reference photos */}
+          {/* Reference photos — existing (R2 URLs) shown first, then
+              newly-staged local files. Both are removable. Upload of
+              the staged ones happens during Save. */}
           <Text variant="caption" color="textMuted" style={styles.label}>REFERENCE PHOTOS</Text>
           <View style={styles.photoRow}>
-            {photoUris.map((uri) => (
-              <View key={uri} style={styles.photoThumbWrap}>
-                <Image source={{ uri }} style={styles.photoThumb} />
+            {existingPhotos.map((url) => (
+              <View key={`exist-${url}`} style={styles.photoThumbWrap}>
+                <Image source={{ uri: url }} style={styles.photoThumb} />
                 <Pressable
-                  onPress={() => setPhotoUris((prev) => prev.filter((u) => u !== uri))}
+                  onPress={() => removeExistingPhoto(url)}
+                  style={styles.photoClose}
+                  hitSlop={6}
+                >
+                  <Ionicons name="close" size={14} color="#fff" />
+                </Pressable>
+              </View>
+            ))}
+            {staged.map((p) => (
+              <View key={p.id} style={styles.photoThumbWrap}>
+                <Image source={{ uri: p.localUri }} style={styles.photoThumb} />
+                <Pressable
+                  onPress={() => removeStagedPhoto(p.id)}
                   style={styles.photoClose}
                   hitSlop={6}
                 >
@@ -362,7 +461,11 @@ export default function EditTaskScreen() {
         </ScrollView>
 
         <View style={styles.footer}>
-          <Button label="Save Timeline" onPress={onSave} loading={saving} />
+          <Button
+            label={savePhase ?? 'Save Timeline'}
+            onPress={onSave}
+            loading={saving}
+          />
         </View>
       </KeyboardAvoidingView>
 
@@ -447,6 +550,12 @@ export default function EditTaskScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <SubmitProgressOverlay
+        visible={saving}
+        intent="updateTask"
+        phaseLabel={savePhase}
+      />
     </Screen>
   );
 }
@@ -486,7 +595,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -497,7 +606,7 @@ const styles = StyleSheet.create({
   dateBtn: {
     paddingVertical: space.sm,
     paddingHorizontal: space.sm,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -508,7 +617,7 @@ const styles = StyleSheet.create({
     gap: space.xs,
     paddingVertical: space.sm,
     paddingHorizontal: space.sm,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -518,7 +627,7 @@ const styles = StyleSheet.create({
   photoThumb: {
     width: 72,
     height: 72,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.surface,
     borderWidth: 1,
     borderColor: color.borderStrong,
@@ -534,10 +643,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Status overlay on each photo thumb during R2 upload (or error).
+  photoOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center', justifyContent: 'center',
+  },
   photoAdd: {
     width: 72,
     height: 72,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     alignItems: 'center',
@@ -577,7 +693,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     paddingHorizontal: space.sm,
     marginBottom: 8,
     flexDirection: 'row',
@@ -598,14 +714,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     paddingHorizontal: space.sm,
     color: color.text,
   },
   newCategoryBtn: {
     width: 72,
     minHeight: 42,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.primary,
     borderWidth: 1,
     borderColor: color.primary,

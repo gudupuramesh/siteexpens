@@ -1,16 +1,20 @@
 import { useState } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 
 import { useMaterialRequests } from '@/src/features/materialRequests/useMaterialRequests';
+import { useProjectTabRefreshKey } from '@/src/features/projects/ProjectTabRefreshContext';
+import { useFirestoreRefresh } from '@/src/lib/useFirestoreRefresh';
 import type { MaterialRequest, MaterialRequestStatus } from '@/src/features/materialRequests/types';
 import { useOrgMembers } from '@/src/features/org/useOrgMembers';
 import { useProject } from '@/src/features/projects/useProject';
 import { formatInr } from '@/src/lib/format';
+import { Can } from '@/src/ui/Can';
 import { Text } from '@/src/ui/Text';
 import { Separator } from '@/src/ui/Separator';
+import { TutorialEmptyState } from '@/src/ui/TutorialEmptyState';
 import { color, radius, screenInset, shadow, space } from '@/src/theme';
 
 const FILTERS: { key: string; label: string }[] = [
@@ -112,9 +116,12 @@ export function MaterialTab() {
   const { data: project } = useProject(projectId);
   const { members } = useOrgMembers(project?.orgId);
   const [filter, setFilter] = useState('');
+  const focusRefresh = useProjectTabRefreshKey();
+  const { refreshing, refresh, refreshKey } = useFirestoreRefresh();
   const { data, loading } = useMaterialRequests(
     projectId,
     (filter || undefined) as MaterialRequestStatus | undefined,
+    refreshKey + focusRefresh,
   );
   const requiredNowValue = data
     .filter((r) => r.status === 'pending')
@@ -174,15 +181,20 @@ export function MaterialTab() {
           <Text variant="meta" color="textMuted">Loading…</Text>
         </View>
       ) : data.length === 0 ? (
-        <View style={styles.empty}>
-          <Ionicons name="cube-outline" size={32} color={color.textFaint} />
-          <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
-            No material requests
-          </Text>
-          <Text variant="meta" color="textMuted" align="center" style={{ maxWidth: 280 }}>
-            Create a material request, get it approved, and share with your supplier.
-          </Text>
-        </View>
+        <TutorialEmptyState
+          pageKey="material_requests"
+          fallback={
+            <View style={styles.empty}>
+              <Ionicons name="cube-outline" size={32} color={color.textFaint} />
+              <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
+                No material requests
+              </Text>
+              <Text variant="meta" color="textMuted" align="center" style={{ maxWidth: 280 }}>
+                Create a material request, get it approved, and share with your supplier.
+              </Text>
+            </View>
+          }
+        />
       ) : (
         <FlatList
           data={data}
@@ -193,20 +205,25 @@ export function MaterialTab() {
           ItemSeparatorComponent={Separator}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={refresh} />
+          }
         />
       )}
 
-      {/* FAB */}
-      <Pressable
-        onPress={() => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          router.push(`/(app)/projects/${projectId}/add-material-request` as never);
-        }}
-        style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
-        accessibilityLabel="New material request"
-      >
-        <Ionicons name="add" size={24} color={color.onPrimary} />
-      </Pressable>
+      {/* FAB — anyone allowed to mark attendance can raise a request. */}
+      <Can capability="material.request.write">
+        <Pressable
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push(`/(app)/projects/${projectId}/add-material-request` as never);
+          }}
+          style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
+          accessibilityLabel="New material request"
+        >
+          <Ionicons name="add" size={24} color={color.onPrimary} />
+        </Pressable>
+      </Can>
     </View>
   );
 }
@@ -227,7 +244,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.sm,
     minHeight: 36,
     justifyContent: 'center',
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.surface,
@@ -240,7 +257,7 @@ const styles = StyleSheet.create({
     marginLeft: 'auto',
     width: 32,
     height: 32,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.surface,
@@ -256,6 +273,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.surface,
     paddingHorizontal: space.sm,
     paddingVertical: space.sm,
+    borderRadius: 10,
   },
   valueRow: {
     flexDirection: 'row',
@@ -276,7 +294,7 @@ const styles = StyleSheet.create({
     gap: space.sm,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
-    borderRadius: 0,
+    borderRadius: 10,
     marginHorizontal: screenInset,
     marginVertical: 4,
   },

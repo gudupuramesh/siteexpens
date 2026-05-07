@@ -3,6 +3,7 @@ import {
   FlatList,
   Modal,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   View,
@@ -12,8 +13,10 @@ import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 
 import { useAuth } from '@/src/features/auth/useAuth';
+import { usePermissions } from '@/src/features/org/usePermissions';
 import { useProject } from '@/src/features/projects/useProject';
 import { useTransactions } from '@/src/features/transactions/useTransactions';
+import { useFirestoreRefresh } from '@/src/lib/useFirestoreRefresh';
 import {
   TRANSACTION_CATEGORIES,
   PAYMENT_METHODS,
@@ -27,6 +30,7 @@ import {
 } from '@/src/features/transactions/types';
 import { formatInr, formatDate } from '@/src/lib/format';
 import { Text } from '@/src/ui/Text';
+import { TutorialEmptyState } from '@/src/ui/TutorialEmptyState';
 import { color, radius, screenInset, space } from '@/src/theme';
 
 // ── Filter types ──
@@ -66,8 +70,11 @@ const CAT_OPTIONS: { key: TransactionCategory | 'all'; label: string }[] = [
 export function TransactionTab() {
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
+  const { can } = usePermissions();
   const { data: project } = useProject(projectId);
-  const { data, loading, totals } = useTransactions(projectId);
+  const { refreshing, refresh, refreshKey } = useFirestoreRefresh();
+  const { data, loading, totals, pendingPaymentOutTotal, pendingApprovalCount } =
+    useTransactions(projectId, { refreshKey });
 
   const [showFilter, setShowFilter] = useState(false);
   const [filterTab, setFilterTab] = useState<FilterTab>('type');
@@ -138,7 +145,31 @@ export function TransactionTab() {
     const addedByOwner = !!project?.ownerId && item.createdBy === project.ownerId;
     const addedBySelf = !!user?.uid && item.createdBy === user.uid;
     const addedByLabel = addedByOwner ? 'Owner' : addedBySelf ? 'You' : 'Team';
-    const approvalLabel = addedByOwner ? 'Auto Approved' : 'Approved';
+    const isPendingFlow = item.workflowStatus === 'pending_approval';
+    const isRejectedFlow = item.workflowStatus === 'rejected';
+    const approvalLabel = isPendingFlow
+      ? 'Pending approval'
+      : isRejectedFlow
+        ? 'Rejected'
+        : addedByOwner
+          ? 'Auto Approved'
+          : 'Approved';
+    const approvalIcon = isPendingFlow
+      ? 'time-outline'
+      : isRejectedFlow
+        ? 'close-circle-outline'
+        : 'shield-checkmark-outline';
+    const approvalTone = isRejectedFlow ? color.danger : isPendingFlow ? color.warning : color.success;
+    const auditPillBg = isPendingFlow
+      ? color.warningSoft
+      : isRejectedFlow
+        ? color.dangerSoft
+        : color.successSoft;
+    const auditPillBorder = isPendingFlow
+      ? color.warning
+      : isRejectedFlow
+        ? color.danger
+        : color.success;
 
     return (
       <Pressable
@@ -153,9 +184,25 @@ export function TransactionTab() {
           />
         </View>
         <View style={styles.txnBody}>
-          <Text variant="rowTitle" color="text" numberOfLines={1}>
-            {item.description || item.partyName || (isIn ? 'Payment In' : 'Payment Out')}
-          </Text>
+          <View style={styles.titleRow}>
+            <Text variant="rowTitle" color="text" numberOfLines={2} style={styles.titleFlex}>
+              {item.description || item.partyName || (isIn ? 'Payment In' : 'Payment Out')}
+            </Text>
+            {isPendingFlow ? (
+              <View style={[styles.requestChip, styles.requestChipPending]}>
+                <Text variant="caption" style={styles.requestChipText}>
+                  REQUEST
+                </Text>
+              </View>
+            ) : null}
+            {isRejectedFlow ? (
+              <View style={[styles.requestChip, styles.requestChipRejected]}>
+                <Text variant="caption" style={styles.requestChipText}>
+                  REJECTED
+                </Text>
+              </View>
+            ) : null}
+          </View>
           <Text variant="meta" color="textMuted" numberOfLines={1} style={styles.subCompact}>
             {item.partyName ? `${item.partyName} · ${dateStr}` : dateStr}
           </Text>
@@ -163,9 +210,16 @@ export function TransactionTab() {
             {[catLabel, pmLabel, statusLabel].filter(Boolean).join(' · ')}
           </Text>
           <View style={styles.auditRow}>
-            <View style={styles.auditPill}>
-              <Ionicons name="shield-checkmark-outline" size={12} color={color.success} />
-              <Text variant="caption" style={styles.auditPillText}>{approvalLabel}</Text>
+            <View
+              style={[
+                styles.auditPill,
+                { backgroundColor: auditPillBg, borderColor: auditPillBorder },
+              ]}
+            >
+              <Ionicons name={approvalIcon} size={12} color={approvalTone} />
+              <Text variant="caption" style={[styles.auditPillText, { color: approvalTone }]}>
+                {approvalLabel}
+              </Text>
             </View>
             <Text variant="caption" color="textMuted">Added by {addedByLabel}</Text>
           </View>
@@ -216,6 +270,14 @@ export function TransactionTab() {
           </Text>
         </View>
       </View>
+      {pendingApprovalCount > 0 ? (
+        <Text variant="caption" color="textMuted" style={styles.pendingRibbon}>
+          {pendingApprovalCount} pending approval
+          {pendingPaymentOutTotal > 0
+            ? ` · ${formatInr(pendingPaymentOutTotal)} payment out not in totals`
+            : ''}
+        </Text>
+      ) : null}
 
       {/* Filter chip row */}
       <View style={styles.filterRow}>
@@ -251,17 +313,22 @@ export function TransactionTab() {
           <Text variant="meta" color="textMuted">Loading transactions…</Text>
         </View>
       ) : filtered.length === 0 ? (
-        <View style={styles.empty}>
-          <Ionicons name="receipt-outline" size={28} color={color.textFaint} />
-          <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
-            {hasActiveFilter ? 'No matching transactions' : 'No transactions yet'}
-          </Text>
-          <Text variant="meta" color="textMuted" align="center">
-            {hasActiveFilter
-              ? 'Try changing your filters.'
-              : 'Track all payments, expenses and invoices for this project.'}
-          </Text>
-        </View>
+        <TutorialEmptyState
+          pageKey="transactions"
+          fallback={
+            <View style={styles.empty}>
+              <Ionicons name="receipt-outline" size={28} color={color.textFaint} />
+              <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
+                {hasActiveFilter ? 'No matching transactions' : 'No transactions yet'}
+              </Text>
+              <Text variant="meta" color="textMuted" align="center">
+                {hasActiveFilter
+                  ? 'Try changing your filters.'
+                  : 'Track all payments, expenses and invoices for this project.'}
+              </Text>
+            </View>
+          }
+        />
       ) : (
         <FlatList
           data={filtered}
@@ -269,32 +336,53 @@ export function TransactionTab() {
           renderItem={renderItem}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={refresh} />
+          }
         />
       )}
 
-      {/* Bottom action buttons */}
-      <View style={styles.bottomBar}>
-        <Pressable
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.push(`/(app)/projects/${projectId}/add-transaction?type=payment_in` as never);
-          }}
-          style={({ pressed }) => [styles.bottomBtn, styles.bottomBtnIn, pressed && { opacity: 0.85 }]}
-        >
-          <Ionicons name="arrow-down-circle" size={20} color={color.success} />
-          <Text variant="metaStrong" style={{ color: color.success }}>Payment In</Text>
-        </Pressable>
-        <Pressable
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.push(`/(app)/projects/${projectId}/add-transaction?type=payment_out` as never);
-          }}
-          style={({ pressed }) => [styles.bottomBtn, styles.bottomBtnOut, pressed && { opacity: 0.85 }]}
-        >
-          <Ionicons name="arrow-up-circle" size={20} color={color.danger} />
-          <Text variant="metaStrong" style={{ color: color.danger }}>Payment Out</Text>
-        </Pressable>
-      </View>
+      {(() => {
+        // Submit-only roles (siteEngineer / supervisor) can record
+        // expenses for approval but cannot record income — there's
+        // no business case for a field user to add a `payment_in`,
+        // and the transactions create rule rejects it server-side.
+        // Hide the Payment In button entirely for those roles so
+        // they don't see a path that would just produce a
+        // permission-denied. Approver-tier roles (those with
+        // `transaction.write`) keep both options.
+        const canPostFull = can('transaction.write');
+        const canSubmit = can('transaction.submit');
+        if (!canPostFull && !canSubmit) return null;
+        return (
+          <View style={styles.bottomBar}>
+            {canPostFull ? (
+              <Pressable
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  router.push(`/(app)/projects/${projectId}/add-transaction?type=payment_in` as never);
+                }}
+                style={({ pressed }) => [styles.bottomBtn, styles.bottomBtnIn, pressed && { opacity: 0.85 }]}
+              >
+                <Ionicons name="arrow-down-circle" size={20} color={color.success} />
+                <Text variant="metaStrong" style={{ color: color.success }}>Payment In</Text>
+              </Pressable>
+            ) : null}
+            <Pressable
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                router.push(`/(app)/projects/${projectId}/add-transaction?type=payment_out` as never);
+              }}
+              style={({ pressed }) => [styles.bottomBtn, styles.bottomBtnOut, pressed && { opacity: 0.85 }]}
+            >
+              <Ionicons name="arrow-up-circle" size={20} color={color.danger} />
+              <Text variant="metaStrong" style={{ color: color.danger }}>
+                {canPostFull ? 'Payment Out' : 'Submit Expense'}
+              </Text>
+            </Pressable>
+          </View>
+        );
+      })()}
 
       {/* ── Filter Modal ── */}
       <Modal
@@ -388,12 +476,17 @@ const styles = StyleSheet.create({
     backgroundColor: color.bg,
     marginHorizontal: screenInset,
     marginTop: space.sm,
-    borderRadius: radius.none,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: color.separator,
     overflow: 'hidden',
     paddingVertical: 0,
     paddingHorizontal: 0,
+  },
+  pendingRibbon: {
+    marginHorizontal: screenInset,
+    marginTop: 6,
+    lineHeight: 16,
   },
   summaryCell: {
     flex: 1,
@@ -423,7 +516,7 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingHorizontal: space.sm,
     paddingVertical: 6,
-    borderRadius: radius.none,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: hasAlpha(color.primary, 0.4),
     backgroundColor: color.surface,
@@ -455,7 +548,7 @@ const styles = StyleSheet.create({
   txnIcon: {
     width: 30,
     height: 30,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: color.borderStrong,
     alignItems: 'center',
@@ -466,6 +559,37 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
     gap: 1,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.xs,
+    width: '100%',
+  },
+  titleFlex: {
+    flex: 1,
+    minWidth: 0,
+  },
+  requestChip: {
+    flexShrink: 0,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderRadius: 8,
+  },
+  requestChipPending: {
+    backgroundColor: color.warningSoft,
+    borderColor: color.warning,
+  },
+  requestChipRejected: {
+    backgroundColor: color.dangerSoft,
+    borderColor: color.danger,
+  },
+  requestChipText: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.8,
+    color: color.text,
   },
   txnTrailing: {
     alignItems: 'flex-end',
@@ -510,12 +634,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     paddingVertical: 1,
     borderWidth: 1,
-    borderColor: color.success,
-    borderRadius: radius.none,
-    backgroundColor: color.successSoft,
+    borderRadius: 8,
   },
   auditPillText: {
-    color: color.success,
     letterSpacing: 0.4,
   },
 
@@ -546,7 +667,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: space.xs,
     paddingVertical: space.sm,
-    borderRadius: radius.none,
+    borderRadius: 10,
     borderWidth: 1,
   },
   bottomBtnIn: {
@@ -629,7 +750,7 @@ const styles = StyleSheet.create({
   radio: {
     width: 18,
     height: 18,
-    borderRadius: 0,
+    borderRadius: 4,
     borderWidth: 1,
     borderColor: color.borderStrong,
     alignItems: 'center',
@@ -644,7 +765,7 @@ const styles = StyleSheet.create({
     marginHorizontal: screenInset,
     marginTop: space.sm,
     paddingVertical: space.sm,
-    borderRadius: radius.none,
+    borderRadius: 8,
     backgroundColor: color.primary,
     alignItems: 'center',
   },

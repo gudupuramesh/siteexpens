@@ -9,7 +9,7 @@
  * The previous "vector elements array" model is gone; Excalidraw owns
  * its own element schema.
  */
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
 export type Whiteboard = {
   id: string;

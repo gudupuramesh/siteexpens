@@ -9,6 +9,8 @@ import { Controller, useForm } from 'react-hook-form';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  InteractionManager,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -30,6 +32,7 @@ import {
   type PartyType,
 } from '@/src/features/parties/types';
 import { Button } from '@/src/ui/Button';
+import { DatePickerModal } from '@/src/ui/DatePickerModal';
 import { Screen } from '@/src/ui/Screen';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
@@ -84,6 +87,10 @@ export default function AddPartyScreen() {
   const [showAdditional, setShowAdditional] = useState(false);
   const [showBalance, setShowBalance] = useState(false);
   const [showBank, setShowBank] = useState(false);
+  // Visibility flag for the native date picker on the Date-of-Joining
+  // field. Free-text entry was letting users type things like
+  // "5000210" which then crashed Timestamp.fromDate on save.
+  const [showDojPicker, setShowDojPicker] = useState(false);
 
   const {
     control,
@@ -172,33 +179,71 @@ export default function AddPartyScreen() {
   // ── Contact picker ──
 
   const pickContact = useCallback(async () => {
-    const { status } = await Contacts.requestPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
-      return;
-    }
-    const result = await Contacts.presentContactPickerAsync();
-    if (result) {
+    Keyboard.dismiss();
+    try {
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
+        return;
+      }
+      // iOS: presenting CNContactPicker while a ScrollView/keyboard is active
+      // can freeze the UI. Let layout settle before the native modal.
+      await new Promise<void>((resolve) => {
+        InteractionManager.runAfterInteractions(() => {
+          setTimeout(resolve, 320);
+        });
+      });
+      const result = await Contacts.presentContactPickerAsync();
+      if (!result) return;
+
       const contactName =
         result.name ??
         [result.firstName, result.lastName].filter(Boolean).join(' ') ??
         '';
       if (contactName) setValue('name', contactName, { shouldValidate: true });
 
-      const phone =
-        result.phoneNumbers?.[0]?.number ??
-        result.phoneNumbers?.[0]?.digits ??
-        '';
+      const raw =
+        result.phoneNumbers?.find((p) => (p.number ?? p.digits ?? '').replace(/\D/g, '').length >= 10) ??
+        result.phoneNumbers?.[0];
+      const phone = raw?.number ?? raw?.digits ?? '';
       if (phone) {
         setValue('phone', phone.replace(/[^\d+]/g, ''), { shouldValidate: true });
       }
 
       const email = result.emails?.[0]?.email;
       if (email) setValue('email', email, { shouldValidate: true });
+    } catch (e) {
+      Alert.alert(
+        'Contacts',
+        e instanceof Error ? e.message : 'Could not open the contact picker.',
+      );
     }
   }, [setValue]);
 
   // ── Submit ──
+
+  /** Defensive parse — accepts only YYYY-MM-DD or any string `new Date`
+   *  can resolve to a real timestamp. Returns undefined on garbage,
+   *  empty, or any value that would otherwise crash
+   *  `Timestamp.fromDate()` at the Firestore boundary. */
+  function safeDate(input: string | undefined | null): Date | undefined {
+    if (!input) return undefined;
+    const d = new Date(input);
+    if (Number.isNaN(d.getTime())) return undefined;
+    return d;
+  }
+
+  /** Strip keys whose value is `undefined`. Firestore rejects writes
+   *  containing any `undefined` field with "Unsupported field value:
+   *  undefined" — and an entire bank-details map can be all-undefined
+   *  when the user opened the section but didn't fill anything in. */
+  function dropUndefined<T extends Record<string, unknown>>(o: T): Partial<T> {
+    const out: Partial<T> = {};
+    for (const k in o) {
+      if (o[k] !== undefined) out[k] = o[k];
+    }
+    return out;
+  }
 
   async function onSubmit(data: FormData) {
     if (!user || !orgId) return;
@@ -207,7 +252,11 @@ export default function AddPartyScreen() {
       const balance = data.openingBalance ? parseFloat(data.openingBalance) : undefined;
       const address =
         [data.address, data.city, data.state, data.pincode].filter(Boolean).join(', ') || undefined;
-      const bankDetails = {
+      // Build the bank-details map, then strip undefined keys before
+      // we send it to Firestore (which refuses to write `undefined`).
+      // If every field is empty the whole map collapses to undefined
+      // so the parent payload omits the bankDetails key entirely.
+      const bankDetailsRaw = {
         accountHolderName: data.accountHolderName || undefined,
         accountNumber: data.accountNumber || undefined,
         ifsc: data.ifsc || undefined,
@@ -216,40 +265,46 @@ export default function AddPartyScreen() {
         iban: data.iban || undefined,
         upiId: data.upiId || undefined,
       };
+      const bankDetailsClean = dropUndefined(bankDetailsRaw);
+      const bankDetails =
+        Object.keys(bankDetailsClean).length > 0 ? bankDetailsClean : undefined;
+
+      // Build the payload, then strip undefined keys at the top level.
+      // Firestore rejects ANY undefined value with "Unsupported field
+      // value: undefined" -- so this guard runs even on fields the
+      // schema marks optional.
+      const payload = dropUndefined({
+        name: data.name,
+        phone: data.phone,
+        partyType: data.partyType as PartyType,
+        email: data.email || undefined,
+        fatherName: data.fatherName || undefined,
+        dateOfJoining: safeDate(data.dateOfJoining),
+        address,
+        aadharNumber: data.aadharNumber || undefined,
+        panNumber: data.panNumber || undefined,
+        openingBalance: balance,
+        openingBalanceType: balance ? (data.openingBalanceType ?? 'to_pay') : undefined,
+        bankDetails,
+      });
 
       if (isEdit && partyId) {
-        await updateParty(partyId, {
-          name: data.name,
-          phone: data.phone,
-          partyType: data.partyType as PartyType,
-          email: data.email || undefined,
-          fatherName: data.fatherName || undefined,
-          dateOfJoining: data.dateOfJoining ? new Date(data.dateOfJoining) : undefined,
-          address,
-          aadharNumber: data.aadharNumber || undefined,
-          panNumber: data.panNumber || undefined,
-          openingBalance: balance,
-          openingBalanceType: balance ? (data.openingBalanceType ?? 'to_pay') : undefined,
-          bankDetails,
-        });
+        await updateParty(partyId, payload);
       } else {
         await createParty({
           orgId,
+          createdBy: user.uid,
+          ...payload,
+          // The two required fields below are already in payload but
+          // TypeScript can't see that through Partial<...>, so re-state
+          // them so createParty's stricter signature is happy.
           name: data.name,
           phone: data.phone,
           partyType: data.partyType as PartyType,
-          createdBy: user.uid,
-          email: data.email || undefined,
-          fatherName: data.fatherName || undefined,
-          dateOfJoining: data.dateOfJoining ? new Date(data.dateOfJoining) : undefined,
-          address,
-          aadharNumber: data.aadharNumber || undefined,
-          panNumber: data.panNumber || undefined,
-          openingBalance: balance,
-          openingBalanceType: balance ? (data.openingBalanceType ?? 'to_pay') : undefined,
-          bankDetails,
         });
       }
+      // Snapshot-propagation buffer (see add-transaction.tsx).
+      await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
       setSubmitError((err as Error).message);
@@ -275,11 +330,21 @@ export default function AddPartyScreen() {
 
       <KeyboardAvoidingView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        // On Android `undefined` left the keyboard floating over the
+        // bottom inputs (Bank Address, IBAN, UPI). 'padding' both
+        // platforms tells RN to grow the bottom inset so the focused
+        // input scrolls above the keyboard.
+        behavior="padding"
+        // Header on top is ~50pt; this lets the avoidance lift the
+        // content the right amount on Android.
+        keyboardVerticalOffset={Platform.OS === 'android' ? 24 : 0}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardDismissMode="on-drag"
+          // Allow tapping the date picker / dropdowns / save button
+          // without the first tap just dismissing the keyboard.
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
           {/* ── Pick from contacts ── */}
@@ -396,16 +461,73 @@ export default function AddPartyScreen() {
           <Controller
             control={control}
             name="dateOfJoining"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Date of Joining"
-                placeholder="DD/MM/YYYY"
-                keyboardType="numeric"
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-              />
-            )}
+            render={({ field: { onChange, value } }) => {
+              // Value is stored as ISO YYYY-MM-DD (set only via the
+              // picker, never free-typed) so save-time parsing always
+              // produces a valid Date.
+              const selected = value ? new Date(`${value}T00:00:00`) : null;
+              const display = selected
+                ? selected.toLocaleDateString('en-IN', {
+                    day: '2-digit',
+                    month: 'short',
+                    year: 'numeric',
+                  })
+                : 'Pick date';
+              return (
+                <View>
+                  <Text variant="caption" color="textMuted" style={styles.dateLabel}>
+                    DATE OF JOINING
+                  </Text>
+                  <Pressable
+                    onPress={() => setShowDojPicker(true)}
+                    style={({ pressed }) => [
+                      styles.dateBtn,
+                      pressed && { opacity: 0.7 },
+                    ]}
+                  >
+                    <Ionicons
+                      name="calendar-outline"
+                      size={16}
+                      color={color.textMuted}
+                    />
+                    <Text
+                      variant="body"
+                      color={selected ? 'text' : 'textFaint'}
+                      style={styles.dateBtnText}
+                    >
+                      {display}
+                    </Text>
+                    {selected ? (
+                      <Pressable
+                        onPress={(e) => {
+                          e.stopPropagation();
+                          onChange('');
+                        }}
+                        hitSlop={8}
+                      >
+                        <Ionicons
+                          name="close-circle"
+                          size={16}
+                          color={color.textFaint}
+                        />
+                      </Pressable>
+                    ) : null}
+                  </Pressable>
+                  <DatePickerModal
+                    visible={showDojPicker}
+                    value={selected ?? new Date()}
+                    maximumDate={new Date()}
+                    onClose={() => setShowDojPicker(false)}
+                    onConfirm={(picked) => {
+                      const yyyy = picked.getFullYear();
+                      const mm = String(picked.getMonth() + 1).padStart(2, '0');
+                      const dd = String(picked.getDate()).padStart(2, '0');
+                      onChange(`${yyyy}-${mm}-${dd}`);
+                    }}
+                  />
+                </View>
+              );
+            }}
           />
 
           {/* ── Address ── */}
@@ -564,7 +686,7 @@ export default function AddPartyScreen() {
           {showBalance && (
             <View style={styles.expandContent}>
               <Text variant="meta" color="textMuted" style={{ marginBottom: space.sm }}>
-                If this party already has a pending balance before using SiteExpens, enter it here.
+                If this party already has a pending balance before using Interior OS, enter it here.
               </Text>
 
               <Controller
@@ -789,18 +911,29 @@ export default function AddPartyScreen() {
         visible={showTypePicker}
         animationType="slide"
         transparent
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
         onRequestClose={() => setShowTypePicker(false)}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setShowTypePicker(false)}>
-          <View />
-        </Pressable>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-            Select Party Type
-          </Text>
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+          keyboardVerticalOffset={0}
+        >
+          <Pressable style={styles.modalOverlay} onPress={() => setShowTypePicker(false)}>
+            <View />
+          </Pressable>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
+              Select Party Type
+            </Text>
 
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.modalScroll}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              style={styles.modalScroll}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+            >
             {PARTY_TYPE_GROUPS.map((group) => (
               <View key={group.label} style={styles.typeGroup}>
                 <Text variant="caption" color="textMuted" style={styles.typeGroupLabel}>
@@ -848,8 +981,9 @@ export default function AddPartyScreen() {
                 })}
               </View>
             ))}
-          </ScrollView>
-        </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </Screen>
   );
@@ -880,7 +1014,10 @@ const styles = StyleSheet.create({
   scroll: {
     paddingHorizontal: screenInset,
     paddingTop: space.md,
-    paddingBottom: space.xxl,
+    // Tall bottom padding so the last inputs (Bank Address, IBAN, UPI
+    // ID) can scroll well clear of the on-screen keyboard. ~280 covers
+    // a stock Samsung Gboard plus the suggestion strip.
+    paddingBottom: 280,
   },
 
   // Contact picker
@@ -913,6 +1050,25 @@ const styles = StyleSheet.create({
     marginTop: space.sm,
     marginBottom: space.xs,
   },
+
+  // Date-of-Joining picker button (replaces the broken numeric TextField).
+  dateLabel: {
+    marginBottom: 4,
+    letterSpacing: 0.6,
+  },
+  dateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: space.sm,
+    paddingVertical: 10,
+    backgroundColor: color.bgGrouped,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    borderRadius: radius.sm,
+  },
+  dateBtnText: { flex: 1 },
 
   // Type selector
   typeSelector: {

@@ -1,0 +1,83 @@
+// Monoline icon set — all 1.25px stroke, 20px box by default.
+// Consistent "draftsman" style: square caps, right-angle joins where possible.
+
+const Icon = ({ name, size = 20, color = 'currentColor', strokeWidth = 1.25, style = {} }) => {
+  const s = { width: size, height: size, display: 'inline-block', verticalAlign: 'middle', flexShrink: 0, ...style };
+  const P = { fill: 'none', stroke: color, strokeWidth, strokeLinecap: 'square', strokeLinejoin: 'miter' };
+  const Pr = { ...P, strokeLinecap: 'round', strokeLinejoin: 'round' };
+
+  const paths = {
+    home:        <><path d="M3 10L12 3l9 7v10a1 1 0 01-1 1h-5v-7h-6v7H4a1 1 0 01-1-1V10z" {...P}/></>,
+    projects:    <><rect x="3.5" y="3.5" width="17" height="17" {...P}/><path d="M3.5 9h17M9 3.5v17" {...P}/></>,
+    ledger:      <><rect x="4" y="3.5" width="16" height="17" {...P}/><path d="M7.5 8h9M7.5 12h9M7.5 16h5" {...P}/></>,
+    more:        <><circle cx="5" cy="12" r="1.25" fill={color} stroke="none"/><circle cx="12" cy="12" r="1.25" fill={color} stroke="none"/><circle cx="19" cy="12" r="1.25" fill={color} stroke="none"/></>,
+    plus:        <><path d="M12 4v16M4 12h16" {...Pr}/></>,
+    bell:        <><path d="M6 17V11a6 6 0 0112 0v6l2 2H4l2-2z" {...P}/><path d="M10 20a2 2 0 004 0" {...P}/></>,
+    alert:       <><circle cx="12" cy="12" r="9" {...P}/><path d="M12 8v5M12 16v.5" {...Pr}/></>,
+    target:      <><circle cx="12" cy="12" r="8" {...P}/><circle cx="12" cy="12" r="4" {...P}/><circle cx="12" cy="12" r="1.2" fill={color} stroke="none"/></>,
+    sparkle:     <><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6z" {...P}/></>,
+    sortable:    <><path d="M8 9l4-4 4 4M8 15l4 4 4-4" {...Pr}/></>,
+    chev_r:      <><path d="M9 5l7 7-7 7" {...Pr}/></>,
+    chev_l:      <><path d="M15 5l-7 7 7 7" {...Pr}/></>,
+    chev_d:      <><path d="M5 9l7 7 7-7" {...Pr}/></>,
+    chev_u:      <><path d="M5 15l7-7 7 7" {...Pr}/></>,
+    search:      <><circle cx="11" cy="11" r="7" {...P}/><path d="M16.5 16.5L21 21" {...Pr}/></>,
+    close:       <><path d="M5 5l14 14M19 5L5 19" {...Pr}/></>,
+    check:       <><path d="M4 12l5 5L20 6" {...Pr}/></>,
+    filter:      <><path d="M3 5h18M6 12h12M10 19h4" {...Pr}/></>,
+    phone:       <><path d="M5 4h4l2 5-2.5 1.5a12 12 0 005 5L15 13l5 2v4a1 1 0 01-1 1A16 16 0 014 5a1 1 0 011-1z" {...P}/></>,
+    whatsapp:    <><path d="M4 20l1.2-3.8A8 8 0 1120 12a8 8 0 01-12.4 6.8L4 20z" {...P}/></>,
+    edit:        <><path d="M4 20h4l10-10-4-4L4 16v4z" {...P}/><path d="M14 6l4 4" {...P}/></>,
+    trash:       <><path d="M5 7h14M9 7V4h6v3M7 7v12a1 1 0 001 1h8a1 1 0 001-1V7" {...P}/></>,
+    camera:      <><path d="M3 8h4l2-2h6l2 2h4v11H3V8z" {...P}/><circle cx="12" cy="13" r="3.5" {...P}/></>,
+    image:       <><rect x="3.5" y="4.5" width="17" height="15" {...P}/><circle cx="9" cy="10" r="1.5" {...P}/><path d="M3.5 17l5-4 5 4 3-2 4 3" {...P}/></>,
+    calendar:    <><rect x="3.5" y="5.5" width="17" height="15" {...P}/><path d="M3.5 10h17M8 3v4M16 3v4" {...P}/></>,
+    clock:       <><circle cx="12" cy="12" r="8" {...P}/><path d="M12 7v5l3 2" {...Pr}/></>,
+    wallet:      <><rect x="3" y="6" width="18" height="14" {...P}/><path d="M3 10h18M17 14h2" {...P}/></>,
+    card:        <><rect x="3" y="6" width="18" height="12" {...P}/><path d="M3 10h18M7 15h4" {...P}/></>,
+    cash:        <><rect x="3" y="7" width="18" height="10" {...P}/><circle cx="12" cy="12" r="2.5" {...P}/></>,
+    user:        <><circle cx="12" cy="8" r="3.5" {...P}/><path d="M5 20a7 7 0 0114 0" {...P}/></>,
+    users:       <><circle cx="9" cy="9" r="3" {...P}/><path d="M3 19a6 6 0 0112 0" {...P}/><circle cx="17" cy="8" r="2.5" {...P}/><path d="M14 19a5 5 0 017-4.6" {...P}/></>,
+    building:    <><rect x="5" y="3.5" width="14" height="17" {...P}/><path d="M9 7h2M13 7h2M9 11h2M13 11h2M9 15h2M13 15h2" {...P}/></>,
+    tag:         <><path d="M3 3h8l10 10-8 8L3 11V3z" {...P}/><circle cx="7.5" cy="7.5" r="1.25" fill={color} stroke="none"/></>,
+    check_circle:<><circle cx="12" cy="12" r="8" {...P}/><path d="M8 12l3 3 5-6" {...Pr}/></>,
+    x_circle:    <><circle cx="12" cy="12" r="8" {...P}/><path d="M9 9l6 6M15 9l-6 6" {...Pr}/></>,
+    inbox:       <><path d="M3 13h5l1 3h6l1-3h5M3 13L5 5h14l2 8v7H3v-7z" {...P}/></>,
+    clipboard:   <><rect x="5" y="5" width="14" height="16" {...P}/><rect x="8" y="2.5" width="8" height="4" {...P}/><path d="M8 11h8M8 15h5" {...P}/></>,
+    chart:       <><path d="M3 20h18M6 16v-5M10 16v-9M14 16v-3M18 16v-7" {...Pr}/></>,
+    folder:      <><path d="M3 6h6l2 2h10v11H3V6z" {...P}/></>,
+    receipt:     <><path d="M6 3v18l2-1.5L10 21l2-1.5L14 21l2-1.5L18 21V3H6z" {...P}/><path d="M9 8h6M9 12h6M9 16h4" {...P}/></>,
+    sofa:        <><path d="M4 14v-3a2 2 0 012-2h12a2 2 0 012 2v3M2 14h20v5H2v-5zM5 19v1M19 19v1" {...P}/></>,
+    lamp:        <><path d="M12 3v9M8 12h8l-2 5h-4l-2-5zM10 20h4" {...P}/></>,
+    brush:       <><path d="M14 3l7 7-11 11H3v-7L14 3z" {...P}/><path d="M11 6l7 7" {...P}/></>,
+    package:     <><path d="M3 7l9-4 9 4v10l-9 4-9-4V7z" {...P}/><path d="M3 7l9 4 9-4M12 11v10" {...P}/></>,
+    tool:        <><path d="M14 4a4 4 0 015 5l-9 9-5 1 1-5 8-10z" {...P}/></>,
+    hammer:      <><path d="M3 21l7-7M10 14l3-3 7 7-3 3-7-7zM13 11l-3-3 3-3 5 5-2 2" {...P}/></>,
+    truck:       <><path d="M3 7h11v9H3V7zM14 10h5l2 3v3h-7V10z" {...P}/><circle cx="7" cy="18" r="2" {...P}/><circle cx="17" cy="18" r="2" {...P}/></>,
+    globe:       <><circle cx="12" cy="12" r="8" {...P}/><path d="M4 12h16M12 4a12 12 0 010 16M12 4a12 12 0 000 16" {...P}/></>,
+    cog:         <><circle cx="12" cy="12" r="3" {...P}/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" {...P}/></>,
+    moon:        <><path d="M20 14A8 8 0 1110 4a7 7 0 0010 10z" {...P}/></>,
+    sun:         <><circle cx="12" cy="12" r="4" {...P}/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.5 5.5l1.4 1.4M17.1 17.1l1.4 1.4M5.5 18.5l1.4-1.4M17.1 6.9l1.4-1.4" {...Pr}/></>,
+    logout:      <><path d="M10 4H5v16h5M15 8l4 4-4 4M9 12h10" {...Pr}/></>,
+    help:        <><circle cx="12" cy="12" r="8" {...P}/><path d="M9.5 9a2.5 2.5 0 015 0c0 2-2.5 2-2.5 4M12 17v.5" {...Pr}/></>,
+    upload:      <><path d="M12 16V4M6 10l6-6 6 6M4 20h16" {...Pr}/></>,
+    download:    <><path d="M12 4v12M6 10l6 6 6-6M4 20h16" {...Pr}/></>,
+    archive:     <><rect x="3" y="4" width="18" height="4" {...P}/><path d="M5 8v12h14V8M10 12h4" {...P}/></>,
+    gift:        <><rect x="3" y="9" width="18" height="12" {...P}/><path d="M12 9v12M3 13h18M8 9a3 3 0 010-6c2 0 4 3 4 6M16 9a3 3 0 000-6c-2 0-4 3-4 6" {...P}/></>,
+    target:      <><circle cx="12" cy="12" r="8" {...P}/><circle cx="12" cy="12" r="4" {...P}/><circle cx="12" cy="12" r="1" fill={color} stroke="none"/></>,
+    flame:       <><path d="M12 3c3 4 6 6 6 10a6 6 0 01-12 0c0-2 2-3 3-5 2 2 3 3 3-5z" {...P}/></>,
+    water:       <><path d="M12 3c4 5 7 9 7 12a7 7 0 01-14 0c0-3 3-7 7-12z" {...P}/></>,
+    wifi:        <><path d="M5 9a11 11 0 0114 0M8 13a6 6 0 018 0" {...Pr}/><circle cx="12" cy="17" r="1" fill={color} stroke="none"/></>,
+    paint:       <><path d="M5 3h12v6a1 1 0 01-1 1H6a1 1 0 01-1-1V3zM9 10v4a2 2 0 002 2h2v4h-3v-4" {...P}/></>,
+    ruler:       <><rect x="3" y="8" width="18" height="8" {...P} transform="rotate(-20 12 12)"/><path d="M7 10l1 2M10 9l2 2M13 8l1 2M16 7l2 2" {...P} transform="rotate(-20 12 12)"/></>,
+    key:         <><circle cx="7" cy="12" r="3" {...P}/><path d="M10 12h11M17 12v3M21 12v2" {...Pr}/></>,
+    pin:         <><path d="M12 22s7-7 7-12a7 7 0 10-14 0c0 5 7 12 7 12z" {...P}/><circle cx="12" cy="10" r="2.5" {...P}/></>,
+    copy:        <><rect x="8" y="8" width="12" height="12" {...P}/><path d="M4 16V4h12" {...P}/></>,
+    shield:      <><path d="M12 3l8 3v6a9 9 0 01-8 9 9 9 0 01-8-9V6l8-3z" {...P}/></>,
+    info:        <><circle cx="12" cy="12" r="8" {...P}/><path d="M12 10v6M12 7.5v.5" {...Pr}/></>,
+  };
+
+  return <svg viewBox="0 0 24 24" style={s} aria-hidden="true">{paths[name] || null}</svg>;
+};
+
+window.Icon = Icon;

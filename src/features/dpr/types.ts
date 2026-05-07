@@ -1,5 +1,6 @@
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
+/** Legacy field kept on DPR docs for back-compat; interior projects no longer edit weather in-app. */
 export type Weather = 'clear' | 'cloudy' | 'rain' | 'hot' | 'other';
 
 export const WEATHER_OPTIONS: Array<{ key: Weather; label: string; icon: string }> = [
@@ -23,6 +24,10 @@ export type DailyProgressReport = {
   photoUris: string[];
   staffPresent: number;
   staffTotal: number;
+  /** Same-day material requests (non-rejected), saved at DPR save time. */
+  materialRequestedCount?: number;
+  materialRequestedValue?: number;
+  /** Legacy snapshots from older DPR saves (material in/out). */
   materialReceivedCount: number;
   materialUsedCount: number;
   createdBy: string;

@@ -22,11 +22,14 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
+import { useAuth } from '@/src/features/auth/useAuth';
 import { useProjects } from '@/src/features/projects/useProjects';
 import { useProjectTotals } from '@/src/features/transactions/useProjectTotals';
 import { useLeads } from '@/src/features/crm/useLeads';
 import { useAppointments } from '@/src/features/crm/useAppointments';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
+import { usePermissions } from '@/src/features/org/usePermissions';
+import { useOrgMaterialRequests } from '@/src/features/materialRequests/useOrgMaterialRequests';
 import { Screen } from '@/src/ui/Screen';
 import { color, screenInset, space } from '@/src/theme';
 import { fontFamily } from '@/src/theme/tokens';
@@ -62,7 +65,19 @@ function fmtTime(d: Date): string {
 
 // ── Notification model ────────────────────────────────────────────────
 
-type NotificationKind = 'due' | 'late' | 'overdue' | 'today';
+type NotificationKind =
+  | 'due'
+  | 'late'
+  | 'overdue'
+  | 'today'
+  | 'approval_material'
+  | 'approval_transaction'
+  | 'txn_approved'
+  | 'txn_rejected'
+  | 'txn_cleared'
+  | 'mr_approved'
+  | 'mr_rejected'
+  | 'mr_delivery_update';
 
 type Notification = {
   id: string;
@@ -111,24 +126,332 @@ const KIND_META: Record<
     iconFg: color.primary,
     icon: 'calendar-outline',
   },
+  approval_material: {
+    label: 'MATERIAL',
+    bg: color.primary,
+    chipFg: '#fff',
+    iconBg: color.primarySoft,
+    iconFg: color.primary,
+    icon: 'cube-outline',
+  },
+  approval_transaction: {
+    label: 'EXPENSE',
+    bg: color.warning,
+    chipFg: '#fff',
+    iconBg: color.warningSoft,
+    iconFg: color.warning,
+    icon: 'wallet-outline',
+  },
+  txn_approved: {
+    label: 'APPROVED',
+    bg: color.success,
+    chipFg: '#fff',
+    iconBg: color.successSoft,
+    iconFg: color.success,
+    icon: 'checkmark-circle-outline',
+  },
+  txn_rejected: {
+    label: 'REJECTED',
+    bg: color.danger,
+    chipFg: '#fff',
+    iconBg: color.dangerSoft,
+    iconFg: color.danger,
+    icon: 'close-circle-outline',
+  },
+  txn_cleared: {
+    label: 'CLEARED',
+    bg: color.success,
+    chipFg: '#fff',
+    iconBg: color.successSoft,
+    iconFg: color.success,
+    icon: 'cash-outline',
+  },
+  mr_approved: {
+    label: 'APPROVED',
+    bg: color.success,
+    chipFg: '#fff',
+    iconBg: color.successSoft,
+    iconFg: color.success,
+    icon: 'checkmark-circle-outline',
+  },
+  mr_rejected: {
+    label: 'REJECTED',
+    bg: color.danger,
+    chipFg: '#fff',
+    iconBg: color.dangerSoft,
+    iconFg: color.danger,
+    icon: 'close-circle-outline',
+  },
+  mr_delivery_update: {
+    label: 'DELIVERY',
+    bg: color.primary,
+    chipFg: '#fff',
+    iconBg: color.primarySoft,
+    iconFg: color.primary,
+    icon: 'cube-outline',
+  },
 };
 
 // ── Component ─────────────────────────────────────────────────────────
 
 export default function NotificationsScreen() {
+  const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? undefined;
+  const { can } = usePermissions();
+  const canApproveMaterial = can('material.request.approve');
+  const canApproveTxnCap = can('transaction.approve');
 
   const { data: projects } = useProjects();
-  const { totalsByProject } = useProjectTotals(orgId);
+  const { totalsByProject, transactions: orgTransactions } = useProjectTotals(orgId);
   const { data: leads } = useLeads(orgId);
   const { data: appointments } = useAppointments(orgId);
+  // Fetch ALL material requests for the org (no status filter) so the
+  // same hook drives both the "pending approvals" rows and the new
+  // "Recent" entries (approved / rejected / delivery-update events from
+  // the last 30 days). Cheaper than firing two listeners.
+  const { data: allMaterialsOrg } = useOrgMaterialRequests(orgId);
+  const pendingMaterialsOrg = useMemo(
+    () => allMaterialsOrg.filter((r) => r.status === 'pending'),
+    [allMaterialsOrg],
+  );
 
   const notifications = useMemo<Notification[]>(() => {
     const out: Notification[] = [];
     const now = new Date();
     const today = new Date(now);
     today.setHours(0, 0, 0, 0);
+
+    const uid = user?.uid;
+    const visiblePendingMaterials = pendingMaterialsOrg.filter((r) => {
+      if (!uid) return false;
+      if (canApproveMaterial) return true;
+      if (r.createdBy === uid) return true;
+      return r.designatedApproverUids?.includes(uid) ?? false;
+    });
+    for (const r of visiblePendingMaterials) {
+      const p = projects.find((x) => x.id === r.projectId);
+      out.push({
+        id: `am-${r.id}`,
+        kind: 'approval_material',
+        title: p?.name ?? 'Project',
+        subtitle: `${r.title || 'Material request'} · awaiting approval`,
+        meta: 'PENDING',
+        weight: 96,
+        href: `/(app)/projects/${r.projectId}/material-request/${r.id}`,
+      });
+    }
+
+    const visiblePendingTxns = orgTransactions.filter((t) => {
+      if (t.workflowStatus !== 'pending_approval') return false;
+      if (!uid) return false;
+      if (canApproveTxnCap) return true;
+      return t.createdBy === uid;
+    });
+    for (const t of visiblePendingTxns) {
+      const p = projects.find((x) => x.id === t.projectId);
+      const party = t.partyName || 'Expense';
+      out.push({
+        id: `at-${t.id}`,
+        kind: 'approval_transaction',
+        title: p?.name ?? 'Project',
+        subtitle: `${party} · ${inrCompact(t.amount)} · awaiting approval`,
+        meta: 'PENDING',
+        weight: 97,
+        href: `/(app)/projects/${t.projectId}/transaction/${t.id}`,
+      });
+    }
+
+    // Recent transaction events (last 30 days) — approved / rejected / cleared.
+    // Surface only events the viewer participated in:
+    //   - they submitted the txn (createdBy), OR
+    //   - they made the decision (approvedBy / rejectedBy / cleared by them).
+    // Keeps the bell scoped to "things that happened to me" — admins won't be
+    // spammed with every txn the studio approved, just ones they touched.
+    if (uid) {
+      const cutoff = now.getTime() - 30 * 86_400_000;
+      type RecentEvent = {
+        kind: 'txn_approved' | 'txn_rejected' | 'txn_cleared';
+        whenMs: number;
+        txn: (typeof orgTransactions)[number];
+      };
+      const events: RecentEvent[] = [];
+      // When admin uses "Approve & Clear" in one tap, both approvedAt and
+      // settlement.clearedAt are written by the same Firestore update —
+      // their timestamps land within the same server batch (typically a
+      // few ms apart, well under a second). The bell would otherwise show
+      // two separate entries for the same admin action, which is noise.
+      // Treat the cleared event as the canonical one in that case (it
+      // implies approval) and suppress the duplicate approved entry.
+      const SAME_WRITE_WINDOW_MS = 5_000;
+
+      for (const t of orgTransactions) {
+        const projName = projects.find((x) => x.id === t.projectId)?.name;
+        if (!projName) continue;
+
+        const clearedMs = t.settlement?.clearedAt?.toMillis();
+        const approvedMs = t.approvedAt?.toMillis();
+        const sameWriteApproveAndClear =
+          clearedMs != null &&
+          approvedMs != null &&
+          Math.abs(clearedMs - approvedMs) < SAME_WRITE_WINDOW_MS;
+
+        // Approved — skip when this txn was approved-and-cleared together
+        // (the cleared entry below already represents the same admin action).
+        if (
+          t.workflowStatus === 'posted' &&
+          approvedMs != null &&
+          !sameWriteApproveAndClear
+        ) {
+          if (
+            approvedMs >= cutoff &&
+            (t.createdBy === uid || t.approvedBy === uid)
+          ) {
+            events.push({ kind: 'txn_approved', whenMs: approvedMs, txn: t });
+          }
+        } else if (t.workflowStatus === 'rejected' && t.rejectedAt) {
+          const ms = t.rejectedAt.toMillis();
+          if (ms >= cutoff && (t.createdBy === uid || t.rejectedBy === uid)) {
+            events.push({ kind: 'txn_rejected', whenMs: ms, txn: t });
+          }
+        }
+
+        // Cleared — surfaces on its own; for clear-later flows it's a
+        // distinct event from the earlier approval (which gets its own
+        // entry timestamped at approval time).
+        if (clearedMs != null) {
+          if (
+            clearedMs >= cutoff &&
+            (t.createdBy === uid || t.settlement?.clearedBy === uid)
+          ) {
+            events.push({ kind: 'txn_cleared', whenMs: clearedMs, txn: t });
+          }
+        }
+      }
+
+      events.sort((a, b) => b.whenMs - a.whenMs);
+      const RECENT_CAP = 15;
+      for (const e of events.slice(0, RECENT_CAP)) {
+        const t = e.txn;
+        const p = projects.find((x) => x.id === t.projectId);
+        const party = t.partyName || 'Expense';
+        const amt = inrCompact(t.amount);
+        const ago = relPast(new Date(e.whenMs));
+        let subtitle: string;
+        let metaLabel: string;
+        if (e.kind === 'txn_approved') {
+          subtitle = `${party} · ${amt} · approved`;
+          metaLabel = ago.toUpperCase();
+        } else if (e.kind === 'txn_rejected') {
+          subtitle = `${party} · ${amt} · rejected${
+            t.rejectionNote ? ` (${t.rejectionNote})` : ''
+          }`;
+          metaLabel = ago.toUpperCase();
+        } else {
+          // cleared
+          const isOwn = t.createdBy === uid;
+          const isReimb = t.submissionKind === 'expense_reimbursement';
+          subtitle = isReimb
+            ? isOwn
+              ? `Reimbursement of ${amt} cleared`
+              : `${party} reimbursed · ${amt}`
+            : `Paid to ${party} · ${amt}`;
+          metaLabel = ago.toUpperCase();
+        }
+        // Decided/cleared events weight below pending. Newer events float to
+        // the top of the recent group via whenMs; we squash to the 30–60 band.
+        const ageDays = Math.max(0, (now.getTime() - e.whenMs) / 86_400_000);
+        const weight = 60 - Math.min(30, ageDays); // newest = 60, oldest = 30
+        out.push({
+          id: `${e.kind}-${t.id}-${e.whenMs}`,
+          kind: e.kind,
+          title: p?.name ?? 'Project',
+          subtitle,
+          meta: metaLabel,
+          weight,
+          href: `/(app)/projects/${t.projectId}/transaction/${t.id}`,
+        });
+      }
+    }
+
+    // Recent material request events — last 30 days, scoped to events the
+    // viewer participated in (creator OR the admin who acted on it).
+    // Each event uses a dedicated timestamp field so the bell reflects
+    // the actual moment of the event, not a proxy.
+    if (uid) {
+      const cutoff = now.getTime() - 30 * 86_400_000;
+      type MrEvent = {
+        kind: 'mr_approved' | 'mr_rejected' | 'mr_delivery_update';
+        whenMs: number;
+        req: (typeof allMaterialsOrg)[number];
+      };
+      const mrEvents: MrEvent[] = [];
+      for (const r of allMaterialsOrg) {
+        const projName = projects.find((x) => x.id === r.projectId)?.name;
+        if (!projName) continue;
+
+        // Approved — skip auto-approvals (silent self-actions don't deserve a
+        // "look at this" line in the bell).
+        if (r.status === 'approved' && !r.autoApproved && r.approvedAt) {
+          const ms = r.approvedAt.toMillis();
+          if (ms >= cutoff && (r.createdBy === uid || r.approvedBy === uid)) {
+            mrEvents.push({ kind: 'mr_approved', whenMs: ms, req: r });
+          }
+        }
+
+        // Rejected — surface for both the creator AND the admin who rejected.
+        if (r.status === 'rejected' && r.rejectedAt) {
+          const ms = r.rejectedAt.toMillis();
+          if (ms >= cutoff && (r.createdBy === uid || r.rejectedBy === uid)) {
+            mrEvents.push({ kind: 'mr_rejected', whenMs: ms, req: r });
+          }
+        }
+
+        // Delivery updates — surface for the creator and the admin who made
+        // the change. Bell shows a single rolled-up entry per request; the
+        // granular per-item info goes via push notifications.
+        if (r.status === 'approved' && r.lastDeliveryUpdateAt) {
+          const ms = r.lastDeliveryUpdateAt.toMillis();
+          if (
+            ms >= cutoff &&
+            (r.createdBy === uid || r.lastDeliveryUpdateBy === uid)
+          ) {
+            mrEvents.push({ kind: 'mr_delivery_update', whenMs: ms, req: r });
+          }
+        }
+      }
+
+      mrEvents.sort((a, b) => b.whenMs - a.whenMs);
+      const MR_RECENT_CAP = 15;
+      for (const e of mrEvents.slice(0, MR_RECENT_CAP)) {
+        const r = e.req;
+        const p = projects.find((x) => x.id === r.projectId);
+        const ago = relPast(new Date(e.whenMs));
+        let subtitle: string;
+        if (e.kind === 'mr_approved') {
+          subtitle = `${r.title || 'Material request'} · approved`;
+        } else if (e.kind === 'mr_rejected') {
+          subtitle = `${r.title || 'Material request'} · rejected${
+            r.rejectionNote ? ` (${r.rejectionNote})` : ''
+          }`;
+        } else {
+          const inFlight = r.items.filter((i) => i.deliveryStatus !== 'pending').length;
+          const total = r.items.length;
+          subtitle = `${r.title || 'Material request'} · ${inFlight}/${total} items in transit`;
+        }
+        const ageDays = Math.max(0, (now.getTime() - e.whenMs) / 86_400_000);
+        const weight = 60 - Math.min(30, ageDays);
+        out.push({
+          id: `${e.kind}-${r.id}-${e.whenMs}`,
+          kind: e.kind,
+          title: p?.name ?? 'Project',
+          subtitle,
+          meta: ago.toUpperCase(),
+          weight,
+          href: `/(app)/projects/${r.projectId}/material-request/${r.id}`,
+        });
+      }
+    }
 
     // Project alerts
     for (const p of projects) {
@@ -203,7 +526,18 @@ export default function NotificationsScreen() {
 
     out.sort((a, b) => b.weight - a.weight);
     return out;
-  }, [projects, totalsByProject, leads, appointments]);
+  }, [
+    projects,
+    totalsByProject,
+    leads,
+    appointments,
+    pendingMaterialsOrg,
+    allMaterialsOrg,
+    orgTransactions,
+    user?.uid,
+    canApproveMaterial,
+    canApproveTxnCap,
+  ]);
 
   // Group by kind for section headers
   const grouped = useMemo(() => {
@@ -213,8 +547,14 @@ export default function NotificationsScreen() {
       if (!map.has(n.kind)) map.set(n.kind, []);
       map.get(n.kind)!.push(n);
     }
-    // Stable order: due, late, overdue, today
-    const order: NotificationKind[] = ['due', 'late', 'overdue', 'today'];
+    const order: NotificationKind[] = [
+      'approval_transaction',
+      'approval_material',
+      'due',
+      'late',
+      'overdue',
+      'today',
+    ];
     for (const kind of order) {
       const items = map.get(kind);
       if (items && items.length > 0) {
@@ -246,7 +586,8 @@ export default function NotificationsScreen() {
           <Ionicons name="checkmark-circle-outline" size={36} color={color.success} />
           <RNText style={styles.emptyTitle}>All caught up</RNText>
           <RNText style={styles.emptySub}>
-            No payments due, no late projects, no overdue follow-ups, no appointments today.
+            No pending approvals, payments due, late projects, overdue follow-ups, or appointments
+            today.
           </RNText>
         </View>
       ) : (

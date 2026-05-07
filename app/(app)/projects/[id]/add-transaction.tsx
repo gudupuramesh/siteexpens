@@ -4,14 +4,18 @@
  * then all org parties. Users can add a new party from contacts inline.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import * as Contacts from 'expo-contacts';
+import * as ImagePicker from 'expo-image-picker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { Controller, useForm } from 'react-hook-form';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Image,
+  InteractionManager,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -25,10 +29,16 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { z } from 'zod';
 
+import { guessImageMimeType, recordStorageEvent } from '@/src/lib/r2Upload';
+import { commitStagedFiles, type StagedFile } from '@/src/lib/commitStagedFiles';
+import { auth, db } from '@/src/lib/firebase';
+
 import { useAuth } from '@/src/features/auth/useAuth';
+import { usePermissions } from '@/src/features/org/usePermissions';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useParties } from '@/src/features/parties/useParties';
-import { createParty } from '@/src/features/parties/parties';
+import { createParty, InvalidPhoneError } from '@/src/features/parties/parties';
+import { normalizeIndianPhoneE164 } from '@/src/lib/phone';
 import {
   PARTY_TYPE_GROUPS,
   getPartyTypeLabel,
@@ -42,10 +52,13 @@ import {
   PAYMENT_METHODS,
   type TransactionCategory,
   type PaymentMethod,
+  type TransactionSubmissionKind,
 } from '@/src/features/transactions/types';
 import { formatDate } from '@/src/lib/format';
 import { Button } from '@/src/ui/Button';
+import { DatePickerModal } from '@/src/ui/DatePickerModal';
 import { Screen } from '@/src/ui/Screen';
+import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
 import { color, radius, screenInset, space } from '@/src/theme';
@@ -67,16 +80,152 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
+// ── Diagnostics ──
+//
+// Capture the exact rule inputs Firestore evaluated when the
+// transaction create fails. We intentionally read the org doc here
+// (one extra request, only on failure) so we can see whether the
+// caller's uid is in `memberIds` and what `roles[uid]` resolves to
+// from the perspective of THIS device's auth context. That's the
+// smallest reliable way to tell apart:
+//   - empty/wrong orgId at submit (race)
+//   - uid missing from memberIds (org-doc shape bug)
+//   - roles[uid] outside the allowlist (backfill / mutation bug)
+//   - rules drift between the repo and what's deployed
+// Without this, all four show up as "permission-denied" with no
+// way to tell which one is firing.
+type AddTxnFailureContext = {
+  err: { code?: string; message?: string };
+  projectId: string;
+  orgId: string;
+  createdByPassed: string;
+  authUid: string | null;
+  primaryOrgId: string | null;
+  roleFromHook: string | null;
+  workflowStatus: 'posted' | 'pending_approval';
+};
+
+async function logAddTxnFailure(ctx: AddTxnFailureContext): Promise<string> {
+  let orgDocSnapshot: {
+    exists: boolean;
+    ownerId?: string;
+    isInMemberIds?: boolean;
+    rolesMapEntry?: string | null;
+    memberCount?: number;
+  } = { exists: false };
+  try {
+    const snap = await db.collection('organizations').doc(ctx.orgId).get();
+    if (snap.exists) {
+      const data = snap.data() as Record<string, unknown> | undefined;
+      const memberIds = Array.isArray(data?.memberIds)
+        ? (data!.memberIds as string[])
+        : [];
+      const roles = (data?.roles ?? null) as Record<string, string> | null;
+      orgDocSnapshot = {
+        exists: true,
+        ownerId: typeof data?.ownerId === 'string' ? (data!.ownerId as string) : undefined,
+        isInMemberIds: ctx.authUid ? memberIds.includes(ctx.authUid) : false,
+        rolesMapEntry: ctx.authUid ? (roles?.[ctx.authUid] ?? null) : null,
+        memberCount: memberIds.length,
+      };
+    }
+  } catch (orgErr) {
+    // Reading the org doc itself can fail (rules / network). Don't
+    // mask the original error — record the read failure inline.
+    orgDocSnapshot = {
+      exists: false,
+      rolesMapEntry: `org-read-failed: ${(orgErr as Error).message}`,
+    };
+  }
+  const payload = {
+    code: ctx.err.code ?? 'unknown',
+    message: ctx.err.message ?? 'unknown',
+    projectId: ctx.projectId,
+    orgId: ctx.orgId,
+    createdByPassed: ctx.createdByPassed,
+    authUid: ctx.authUid,
+    uidsMatch: ctx.createdByPassed === ctx.authUid,
+    primaryOrgId: ctx.primaryOrgId,
+    primaryOrgMatchesPayload: ctx.primaryOrgId === ctx.orgId,
+    roleFromHook: ctx.roleFromHook,
+    workflowStatus: ctx.workflowStatus,
+    orgDoc: orgDocSnapshot,
+  };
+  // console.warn is stripped by Hermes in release builds, so the
+  // logcat path is dead in production APKs. Always return the
+  // payload as a string so the caller can render it on-screen
+  // (the only reliable diagnostic surface in a release build).
+  console.warn('[add-txn:fail]', payload);
+  return formatDiagnostic(payload);
+}
+
+/** Compact one-line summary of the rule inputs, suitable for
+ *  inclusion in an on-screen error message. Truncates uids to
+ *  6 chars so the line stays readable. */
+function formatDiagnostic(p: {
+  code: string;
+  uidsMatch: boolean;
+  primaryOrgMatchesPayload: boolean;
+  roleFromHook: string | null;
+  authUid: string | null;
+  primaryOrgId: string | null;
+  orgId: string;
+  orgDoc: {
+    exists: boolean;
+    isInMemberIds?: boolean;
+    rolesMapEntry?: string | null;
+  };
+}): string {
+  const short = (s: string | null | undefined) =>
+    s ? `${s.slice(0, 6)}…` : '∅';
+  return (
+    `code=${p.code} ` +
+    `role=${p.roleFromHook ?? 'null'} ` +
+    `uidsMatch=${p.uidsMatch} ` +
+    `primaryMatchesPayload=${p.primaryOrgMatchesPayload} ` +
+    `orgExists=${p.orgDoc.exists} ` +
+    `inMemberIds=${p.orgDoc.isInMemberIds ?? '∅'} ` +
+    `rolesMap=${p.orgDoc.rolesMapEntry ?? '∅'} ` +
+    `auth=${short(p.authUid)} ` +
+    `primary=${short(p.primaryOrgId)} ` +
+    `payloadOrg=${short(p.orgId)}`
+  );
+}
+
 // ── Component ──
 
 export default function AddTransactionScreen() {
+  // Site Engineer / Supervisor get the submit-only pending path;
+  // everyone else with finance.write goes straight to posted.
+  // Either capability is sufficient to render this screen.
+  useGuardedRoute({ anyOf: ['transaction.write', 'transaction.submit'] });
+
   const params = useLocalSearchParams<{ id: string; type?: string }>();
   const projectId = params.id;
-  const initialType = params.type === 'payment_in' ? 'payment_in' : 'payment_out';
 
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
+  const { can, role, loading: permLoading } = usePermissions();
+  const postsTxnDirectly = can('transaction.write');
+  const mayAddTxn = postsTxnDirectly || can('transaction.submit');
+  // Trust the URL on initial mount. We previously gated this on
+  // `postsTxnDirectly` (= can('transaction.write')) to coerce
+  // submit-only roles back to `payment_out`, but that introduced a
+  // race: `can()` returns `false` on the first render while
+  // `usePermissions` is still loading, which collapsed
+  // `?type=payment_in` to `payment_out`. React Hook Form captures
+  // `defaultValues` once on mount, so the form was stuck on the
+  // wrong type even after permissions arrived.
+  //
+  // The role guard now lives in a post-mount useEffect (below) — it
+  // runs once permissions are real and only coerces if the role
+  // genuinely cannot post Payment In. Submit-only roles also don't
+  // see the Payment In button in the UI, and the server-side
+  // create rule rejects `payment_in` for them, so this is purely a
+  // UX fallback for hand-edited URLs.
+  const initialType: 'payment_in' | 'payment_out' =
+    params.type === 'payment_in' ? 'payment_in' : 'payment_out';
   const { data: allParties } = useParties(orgId || undefined);
   const { data: transactions } = useTransactions(projectId);
 
@@ -86,6 +235,25 @@ export default function AddTransactionScreen() {
   const [showMoreDetail, setShowMoreDetail] = useState(false);
   const [partySearch, setPartySearch] = useState('');
   const [submitError, setSubmitError] = useState<string>();
+  // Receipt is staged locally on pick — R2 upload runs during Save
+  // (see onSubmit) so abandoning the form leaves nothing in R2.
+  const [stagedReceipt, setStagedReceipt] = useState<StagedFile | null>(null);
+  const [savePhase, setSavePhase] = useState<string>();
+  // Only meaningful for submit-only roles submitting payment_out — drives
+  // the wording of the eventual "Cleared" notification (reimbursement vs
+  // party payment). Defaults to 'expense_reimbursement' which is the most
+  // common case for site supervisors paying out-of-pocket.
+  const [submissionKind, setSubmissionKind] =
+    useState<TransactionSubmissionKind>('expense_reimbursement');
+
+  useEffect(() => {
+    if (permLoading || !user) return;
+    if (!mayAddTxn) {
+      Alert.alert('No access', 'You cannot add transactions for this studio.', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+    }
+  }, [permLoading, mayAddTxn, user]);
 
   // New party from contact flow
   const [showNewPartyType, setShowNewPartyType] = useState(false);
@@ -125,6 +293,20 @@ export default function AddTransactionScreen() {
   const isPaymentIn = selectedType === 'payment_in';
   const navTitle = isPaymentIn ? 'Payment In' : 'Payment Out';
 
+  // Post-mount safety coercion: once permissions are real, if the
+  // role cannot post Payment In and the form is sitting on
+  // `payment_in` (deep link / hand-edited URL), flip it to
+  // `payment_out` so the user sees the form they're allowed to
+  // submit. The button rail in TransactionTab already hides the
+  // Payment In affordance for these roles, so this only fires for
+  // edge cases like a shared URL.
+  useEffect(() => {
+    if (permLoading) return;
+    if (!postsTxnDirectly && selectedType === 'payment_in') {
+      setValue('type', 'payment_out');
+    }
+  }, [permLoading, postsTxnDirectly, selectedType, setValue]);
+
   // ── Party sections: project parties first, then rest ──
 
   const partySections = useMemo(() => {
@@ -161,11 +343,6 @@ export default function AddTransactionScreen() {
 
   // ── Handlers ──
 
-  function handleDateChange(_: DateTimePickerEvent, date?: Date) {
-    setShowDatePicker(Platform.OS === 'ios');
-    if (date) setValue('date', date);
-  }
-
   const selectParty = useCallback((party: Party) => {
     setValue('partyName', party.name, { shouldValidate: true });
     setValue('partyId', party.id);
@@ -175,74 +352,269 @@ export default function AddTransactionScreen() {
 
   // Pick from phone contacts → show party type picker → create party
   const pickContactAndAdd = useCallback(async () => {
-    const { status } = await Contacts.requestPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
-      return;
-    }
-    const result = await Contacts.presentContactPickerAsync();
-    if (result) {
+    Keyboard.dismiss();
+    // Dismiss the party sheet before opening the system contact picker. On iOS,
+    // expo-contacts presents from currentViewController(); with our transparent
+    // Modal still mounted (or mid-unmount after hiding it abruptly), that VC is
+    // often nil so `present` never runs and the JS promise never resolves.
+    setShowPartyPicker(false);
+    try {
+      await new Promise<void>((resolve) => {
+        InteractionManager.runAfterInteractions(() => setTimeout(resolve, 500));
+      });
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
+        return;
+      }
+      const result = await Contacts.presentContactPickerAsync();
+      if (!result) return;
+
       const contactName =
-        result.name ??
-        [result.firstName, result.lastName].filter(Boolean).join(' ') ??
+        (result.name ?? '').trim() ||
+        [result.firstName, result.lastName].filter(Boolean).join(' ').trim() ||
+        (result.company ?? '').trim() ||
         '';
-      const phone =
-        result.phoneNumbers?.[0]?.number ??
-        result.phoneNumbers?.[0]?.digits ??
-        '';
+      // Walk every phone on the contact and pick the first one that
+      // normalises to a valid Indian +91 number. Old logic only
+      // looked at digit count which let foreign numbers through —
+      // the strict normaliser rejects them up front so the rest of
+      // the flow can assume a clean E.164 value.
+      const rawNumbers =
+        result.phoneNumbers?.map((p) => p.number ?? p.digits ?? '') ?? [];
+      let normalizedPhone: string | null = null;
+      for (const candidate of rawNumbers) {
+        const n = normalizeIndianPhoneE164(candidate);
+        if (n) {
+          normalizedPhone = n;
+          break;
+        }
+      }
+
+      if (!contactName) {
+        Alert.alert(
+          'Missing name',
+          'That contact has no name or company. Add a name in Contacts and try again.',
+        );
+        return;
+      }
+      if (!normalizedPhone) {
+        Alert.alert(
+          'Phone not supported',
+          'That contact needs a 10-digit Indian mobile number (we currently support +91 only).',
+        );
+        return;
+      }
 
       setNewPartyName(contactName);
-      setNewPartyPhone(phone.replace(/[^\d+]/g, ''));
+      setNewPartyPhone(normalizedPhone);
       setShowPartyPicker(false);
-      setShowNewPartyType(true);
+      // iOS: presenting a second RN Modal in the same tick as closing the first
+      // often drops the role sheet; defer until the party sheet is gone.
+      InteractionManager.runAfterInteractions(() => {
+        setTimeout(() => setShowNewPartyType(true), 120);
+      });
+    } catch (e) {
+      Alert.alert(
+        'Contacts',
+        e instanceof Error ? e.message : 'Could not open the contact picker.',
+      );
     }
   }, []);
 
   const createNewPartyAndSelect = useCallback(async (partyType: PartyType) => {
-    if (!user || !orgId || !newPartyName) return;
+    if (!user || !orgId || !newPartyName.trim()) {
+      Alert.alert('Party', 'Missing party name. Try picking the contact again.');
+      return;
+    }
+    // Re-validate at the create step in case the field was edited
+    // after the contact was picked. createParty also validates
+    // server-adjacent in the helper, but failing here gives a
+    // clearer UX than catching InvalidPhoneError post-hoc.
+    const normalizedPhone = normalizeIndianPhoneE164(newPartyPhone);
+    if (!normalizedPhone) {
+      Alert.alert('Party', 'Enter a valid 10-digit Indian phone number.');
+      return;
+    }
     setCreatingParty(true);
     try {
       const partyId = await createParty({
         orgId,
-        name: newPartyName,
-        phone: newPartyPhone,
+        name: newPartyName.trim(),
+        phone: normalizedPhone,
         partyType,
         createdBy: user.uid,
       });
-      setValue('partyName', newPartyName, { shouldValidate: true });
+      setValue('partyName', newPartyName.trim(), { shouldValidate: true });
       setValue('partyId', partyId);
       setShowNewPartyType(false);
       setNewPartyName('');
       setNewPartyPhone('');
     } catch (err) {
-      Alert.alert('Error', (err as Error).message);
+      const msg =
+        err instanceof InvalidPhoneError
+          ? err.message
+          : (err as Error).message;
+      Alert.alert('Error', msg);
     } finally {
       setCreatingParty(false);
     }
   }, [user, orgId, newPartyName, newPartyPhone, setValue]);
 
+  async function pickReceipt(source: 'camera' | 'library') {
+    const perm = source === 'camera'
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'camera'
+          ? 'Allow camera access to capture a receipt.'
+          : 'Allow photo library access to attach a receipt.',
+      );
+      return;
+    }
+    const opts: ImagePicker.ImagePickerOptions = {
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+    };
+    const result = source === 'camera'
+      ? await ImagePicker.launchCameraAsync(opts)
+      : await ImagePicker.launchImageLibraryAsync(opts);
+    if (result.canceled || !result.assets[0]) return;
+
+    // Stage locally — upload happens during Save.
+    const asset = result.assets[0];
+    setStagedReceipt({
+      id: 'receipt',
+      localUri: asset.uri,
+      contentType: asset.mimeType || guessImageMimeType(asset.uri),
+    });
+  }
+
+  function clearReceipt() {
+    setStagedReceipt(null);
+  }
+
   async function onSubmit(data: FormData) {
-    if (!user || !orgId || !projectId) return;
+    // Belt-and-braces guards. The submit button is disabled while
+    // these aren't satisfied, but a stale render could still send
+    // a tap through — surface the cause instead of silently
+    // returning, which would look like a frozen Save button.
+    if (!user) {
+      setSubmitError('Not signed in. Please sign in again.');
+      return;
+    }
+    if (!projectId) {
+      setSubmitError('Project not loaded. Please reopen the project.');
+      return;
+    }
+    if (!orgId) {
+      setSubmitError('Studio not loaded yet — try again in a moment.');
+      return;
+    }
     setSubmitError(undefined);
     try {
-      await createTransaction({
-        projectId,
-        orgId,
-        type: data.type,
-        amount: parseFloat(data.amount),
-        description: data.description || '',
-        partyId: data.partyId || undefined,
-        partyName: data.partyName,
-        category: (data.category as TransactionCategory) || undefined,
-        paymentMethod: (data.paymentMethod as PaymentMethod) || undefined,
-        referenceNumber: data.referenceNumber || undefined,
-        status: data.status,
-        date: data.date,
-        createdBy: user.uid,
-      });
-      router.back();
+      // Step 1 — upload the staged receipt (if any).
+      let receiptUrl: string | undefined;
+      let receiptKey: string | undefined;
+      let receiptSize = 0;
+      let receiptContentType = '';
+      if (stagedReceipt) {
+        setSavePhase('Uploading receipt…');
+        const { uploaded, failed } = await commitStagedFiles({
+          files: [stagedReceipt],
+          kind: 'transaction',
+          refId: projectId,
+          compress: 'balanced',
+        });
+        if (failed.length > 0) {
+          setSubmitError(`Receipt upload failed: ${failed[0].error}`);
+          setSavePhase(undefined);
+          return;
+        }
+        receiptUrl = uploaded[0].publicUrl;
+        receiptKey = uploaded[0].key;
+        receiptSize = uploaded[0].sizeBytes;
+        receiptContentType = uploaded[0].contentType;
+      }
+
+      // Step 2 — create the transaction.
+      setSavePhase('Saving transaction…');
+      const workflowStatus = postsTxnDirectly ? 'posted' : 'pending_approval';
+      let txnId: string;
+      try {
+        txnId = await createTransaction({
+          projectId,
+          orgId,
+          type: data.type,
+          amount: parseFloat(data.amount),
+          description: data.description || '',
+          partyId: data.partyId || undefined,
+          partyName: data.partyName,
+          category: (data.category as TransactionCategory) || undefined,
+          paymentMethod: (data.paymentMethod as PaymentMethod) || undefined,
+          referenceNumber: data.referenceNumber || undefined,
+          status: data.status,
+          date: data.date,
+          createdBy: user.uid,
+          photoUrl: receiptUrl,
+          photoStoragePath: receiptKey,
+          workflowStatus,
+          // Only attach for submit-only roles submitting payment_out —
+          // approvers posting directly don't need this distinction
+          // (no settlement notification fires for direct posts).
+          submissionKind:
+            !postsTxnDirectly && data.type === 'payment_out' ? submissionKind : undefined,
+        });
+      } catch (err) {
+        // Diagnostic: capture the exact rule inputs Firestore saw,
+        // not just the surfaced error message. Permission-denied
+        // here is almost always one of: orgId mismatch, uid not in
+        // memberIds, role mismatch, or rules drift. The returned
+        // string is appended to the on-screen error because
+        // console.warn is stripped by Hermes in release builds —
+        // logcat is silent in production APKs. The on-screen line
+        // is the ONLY reliable diagnostic surface for users who
+        // aren't running a Metro debug build.
+        const e = err as { code?: string; message?: string };
+        const diag = await logAddTxnFailure({
+          err: e,
+          projectId,
+          orgId,
+          createdByPassed: user.uid,
+          authUid: auth.currentUser?.uid ?? null,
+          primaryOrgId: userDoc?.primaryOrgId ?? null,
+          roleFromHook: role,
+          workflowStatus,
+        });
+        const friendlyHead =
+          e.code === 'permission-denied'
+            ? "Couldn't save — you don't have permission for this studio."
+            : e.message ?? 'Could not save the transaction.';
+        setSubmitError(`${friendlyHead}\n\nDiagnostic: ${diag}`);
+        setSavePhase(undefined);
+        return;
+      }
+
+      // Step 3 — attribute the upload to project storage totals.
+      if (receiptKey) {
+        void recordStorageEvent({
+          projectId,
+          kind: 'transaction',
+          refId: txnId,
+          key: receiptKey,
+          sizeBytes: receiptSize,
+          contentType: receiptContentType,
+          action: 'upload',
+        });
+      }
+      await new Promise((r) => setTimeout(r, 150));
+      router.replace(`/(app)/projects/${projectId}/transaction/${txnId}` as never);
     } catch (err) {
       setSubmitError((err as Error).message);
+    } finally {
+      setSavePhase(undefined);
     }
   }
 
@@ -306,15 +678,84 @@ export default function AddTransactionScreen() {
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          {/* Submission kind — only for submit-only roles on payment_out.
+              Approvers post directly; no clearing/reimbursement flow runs
+              for them, so the toggle would be noise. */}
+          {!postsTxnDirectly && selectedType === 'payment_out' ? (
+            <View style={styles.kindCard}>
+              <Text variant="caption" color="textMuted" style={styles.kindLabel}>
+                THIS IS A
+              </Text>
+              <View style={styles.kindRow}>
+                <Pressable
+                  onPress={() => setSubmissionKind('expense_reimbursement')}
+                  style={[
+                    styles.kindOption,
+                    submissionKind === 'expense_reimbursement' && styles.kindOptionActive,
+                  ]}
+                >
+                  <Ionicons
+                    name="wallet-outline"
+                    size={16}
+                    color={
+                      submissionKind === 'expense_reimbursement'
+                        ? color.primary
+                        : color.textMuted
+                    }
+                  />
+                  <Text
+                    variant="metaStrong"
+                    color={submissionKind === 'expense_reimbursement' ? 'primary' : 'textMuted'}
+                  >
+                    Personal Expense
+                  </Text>
+                  <Text variant="caption" color="textFaint" numberOfLines={2}>
+                    I paid out-of-pocket — please reimburse me
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setSubmissionKind('party_payment')}
+                  style={[
+                    styles.kindOption,
+                    submissionKind === 'party_payment' && styles.kindOptionActive,
+                  ]}
+                >
+                  <Ionicons
+                    name="people-outline"
+                    size={16}
+                    color={
+                      submissionKind === 'party_payment' ? color.primary : color.textMuted
+                    }
+                  />
+                  <Text
+                    variant="metaStrong"
+                    color={submissionKind === 'party_payment' ? 'primary' : 'textMuted'}
+                  >
+                    Payment to Party
+                  </Text>
+                  <Text variant="caption" color="textFaint" numberOfLines={2}>
+                    Studio owes the party — please clear it
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
           {/* To Party */}
           <Pressable
-            onPress={() => setShowPartyPicker(true)}
+            onPress={() => {
+              Keyboard.dismiss();
+              setPartySearch('');
+              setShowPartyPicker(true);
+            }}
             style={styles.partySelector}
           >
             <Ionicons name="people-outline" size={20} color={color.textMuted} />
@@ -452,15 +893,6 @@ export default function AddTransactionScreen() {
             </View>
           )}
 
-          {showDatePicker && (
-            <DateTimePicker
-              value={selectedDate}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'inline' : 'default'}
-              onChange={handleDateChange}
-            />
-          )}
-
           {submitError && (
             <Text variant="caption" color="danger" style={{ marginTop: space.sm }}>
               {submitError}
@@ -468,20 +900,66 @@ export default function AddTransactionScreen() {
           )}
         </ScrollView>
 
+        <DatePickerModal
+          visible={showDatePicker}
+          value={selectedDate}
+          onClose={() => setShowDatePicker(false)}
+          onConfirm={(d) => setValue('date', d)}
+        />
+
+        {/* Receipt preview row — shown above the footer once a photo
+            has been picked. Pure local preview; upload runs only on
+            Save, so backing out leaves nothing in R2. */}
+        {stagedReceipt ? (
+          <View style={styles.receiptRow}>
+            <View style={styles.receiptThumbWrap}>
+              <Image
+                source={{ uri: stagedReceipt.localUri }}
+                style={styles.receiptThumb}
+                resizeMode="cover"
+              />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text variant="metaStrong" color="text">Receipt attached</Text>
+              <Text variant="caption" color="textMuted">
+                Will upload when you tap Save.
+              </Text>
+            </View>
+            <Pressable onPress={clearReceipt} hitSlop={8}>
+              <Ionicons name="close-circle" size={20} color={color.textFaint} />
+            </Pressable>
+          </View>
+        ) : null}
+
+        {!postsTxnDirectly ? (
+          <Text variant="caption" color="textMuted" style={styles.submitHint}>
+            Submitted expenses stay pending until an Admin approves. Project totals update after
+            approval.
+          </Text>
+        ) : null}
+
         {/* Footer */}
         <View style={styles.footer}>
           <View style={styles.footerLeft}>
-            <Pressable style={styles.footerIcon} accessibilityLabel="Take photo">
+            <Pressable
+              style={styles.footerIcon}
+              accessibilityLabel="Take photo"
+              onPress={() => pickReceipt('camera')}
+            >
               <Ionicons name="camera-outline" size={22} color={color.primary} />
             </Pressable>
             <View style={styles.footerDivider} />
-            <Pressable style={styles.footerIcon} accessibilityLabel="Upload file">
+            <Pressable
+              style={styles.footerIcon}
+              accessibilityLabel="Upload file"
+              onPress={() => pickReceipt('library')}
+            >
               <Ionicons name="cloud-upload-outline" size={22} color={color.primary} />
             </Pressable>
           </View>
           <View style={styles.footerSave}>
             <Button
-              label="Save"
+              label={savePhase ?? (postsTxnDirectly ? 'Save' : 'Submit for approval')}
               onPress={handleSubmit(onSubmit)}
               loading={isSubmitting}
               disabled={!isValid || !orgId}
@@ -495,37 +973,48 @@ export default function AddTransactionScreen() {
         visible={showPartyPicker}
         animationType="slide"
         transparent
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
         onRequestClose={() => setShowPartyPicker(false)}
       >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setShowPartyPicker(false)}
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
         >
-          <View />
-        </Pressable>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-            Select Party
-          </Text>
+          <Pressable
+            style={styles.modalOverlay}
+            onPress={() => {
+              Keyboard.dismiss();
+              setShowPartyPicker(false);
+            }}
+          >
+            <View />
+          </Pressable>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
+              Select Party
+            </Text>
 
-          {/* Search */}
-          <View style={styles.searchBar}>
-            <Ionicons name="search" size={18} color={color.textMuted} />
-            <TextInput
-              placeholder="Search party name..."
-              placeholderTextColor={color.textFaint}
-              value={partySearch}
-              onChangeText={setPartySearch}
-              style={styles.searchInput}
-              autoFocus
-            />
-          </View>
+            {/* Search — avoid autoFocus on iOS or the keyboard covers "Add from Contact" */}
+            <View style={styles.searchBar}>
+              <Ionicons name="search" size={18} color={color.textMuted} />
+              <TextInput
+                placeholder="Search party name..."
+                placeholderTextColor={color.textFaint}
+                value={partySearch}
+                onChangeText={setPartySearch}
+                style={styles.searchInput}
+                autoFocus={Platform.OS !== 'ios'}
+                returnKeyType="search"
+              />
+            </View>
 
-          {/* Sectioned party list */}
-          <SectionList
-            sections={partySections}
-            keyExtractor={(p) => p.id}
+            {/* Sectioned party list */}
+            <SectionList
+              keyboardShouldPersistTaps="handled"
+              sections={partySections}
+              keyExtractor={(p) => p.id}
             renderSectionHeader={({ section: { title } }) => (
               <View style={styles.sectionHeader}>
                 <Text variant="caption" color="textMuted">{title.toUpperCase()}</Text>
@@ -577,7 +1066,13 @@ export default function AddTransactionScreen() {
 
           {/* Bottom actions: Add from Contact + Manual entry */}
           <View style={styles.partyActions}>
-            <Pressable onPress={pickContactAndAdd} style={styles.partyActionBtn}>
+            <Pressable
+              onPress={() => {
+                Keyboard.dismiss();
+                pickContactAndAdd();
+              }}
+              style={styles.partyActionBtn}
+            >
               <Ionicons name="person-add-outline" size={18} color={color.primary} />
               <Text variant="metaStrong" color="primary">Add from Contact</Text>
             </Pressable>
@@ -591,11 +1086,14 @@ export default function AddTransactionScreen() {
                   Alert.alert('Party name required', 'Type the party name in the search box first.');
                   return;
                 }
+                Keyboard.dismiss();
                 setNewPartyName(name);
                 setNewPartyPhone('');
                 setShowPartyPicker(false);
                 setPartySearch('');
-                setShowNewPartyType(true);
+                InteractionManager.runAfterInteractions(() => {
+                  setTimeout(() => setShowNewPartyType(true), 120);
+                });
               }}
               style={styles.partyActionBtn}
             >
@@ -608,6 +1106,7 @@ export default function AddTransactionScreen() {
             </Pressable>
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ── New Party Type Picker Modal ── */}
@@ -615,24 +1114,35 @@ export default function AddTransactionScreen() {
         visible={showNewPartyType}
         animationType="slide"
         transparent
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
         onRequestClose={() => setShowNewPartyType(false)}
       >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setShowNewPartyType(false)}
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+          keyboardVerticalOffset={0}
         >
-          <View />
-        </Pressable>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-            Select Party Type
-          </Text>
-          <Text variant="meta" color="textMuted" align="center" style={{ marginBottom: space.sm }}>
-            Adding: {newPartyName}{newPartyPhone ? ` (${newPartyPhone})` : ''}
-          </Text>
+          <Pressable
+            style={styles.modalOverlay}
+            onPress={() => setShowNewPartyType(false)}
+          >
+            <View />
+          </Pressable>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
+              Select Party Type
+            </Text>
+            <Text variant="meta" color="textMuted" align="center" style={{ marginBottom: space.sm }}>
+              Adding: {newPartyName}{newPartyPhone ? ` (${newPartyPhone})` : ''}
+            </Text>
 
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.modalList}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              style={styles.modalList}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+            >
             {PARTY_TYPE_GROUPS.map((group) => (
               <View key={group.label} style={styles.typeGroup}>
                 <Text variant="caption" color="textMuted" style={styles.typeGroupLabel}>
@@ -663,7 +1173,8 @@ export default function AddTransactionScreen() {
               <Text variant="meta" color="textMuted">Creating party...</Text>
             </View>
           )}
-        </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* ── Category Picker Modal ── */}
@@ -671,21 +1182,32 @@ export default function AddTransactionScreen() {
         visible={showCategoryPicker}
         animationType="slide"
         transparent
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
         onRequestClose={() => setShowCategoryPicker(false)}
       >
-        <Pressable
-          style={styles.modalOverlay}
-          onPress={() => setShowCategoryPicker(false)}
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+          keyboardVerticalOffset={0}
         >
-          <View />
-        </Pressable>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-            Cost Code
-          </Text>
+          <Pressable
+            style={styles.modalOverlay}
+            onPress={() => setShowCategoryPicker(false)}
+          >
+            <View />
+          </Pressable>
+          <View style={styles.modalSheet}>
+            <View style={styles.modalHandle} />
+            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
+              Cost Code
+            </Text>
 
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.modalList}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              style={styles.modalList}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+            >
             {TRANSACTION_CATEGORIES.map((c) => {
               const active = selectedCategory === c.key;
               return (
@@ -715,8 +1237,15 @@ export default function AddTransactionScreen() {
               );
             })}
           </ScrollView>
-        </View>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
+
+      <SubmitProgressOverlay
+        visible={isSubmitting}
+        intent="submitTransaction"
+        phaseLabel={savePhase}
+      />
     </Screen>
   );
 }
@@ -770,9 +1299,13 @@ const styles = StyleSheet.create({
   heroAmountInput: {
     flex: 1,
     fontSize: 34,
+    // lineHeight must exceed fontSize on iOS or descenders/ascenders
+    // (the round top of "0", the tail of "9") clip at the box edge.
+    // 42 ≈ 1.24× fontSize lands clean on both platforms.
+    lineHeight: 42,
     fontWeight: '700',
     color: color.text,
-    paddingVertical: 0,
+    paddingVertical: 4,
   },
   dateChip: {
     flexDirection: 'row',
@@ -780,7 +1313,7 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingVertical: space.xs,
     paddingHorizontal: space.sm,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.bg,
     borderWidth: 1,
     borderColor: color.borderStrong,
@@ -799,7 +1332,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.sm,
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     paddingHorizontal: space.md,
@@ -807,11 +1340,42 @@ const styles = StyleSheet.create({
     minHeight: 50,
     marginBottom: space.sm,
   },
-
-  // Section label
-  sectionLabel: {
-    marginTop: space.md,
+  kindCard: {
+    marginBottom: space.sm,
+  },
+  kindLabel: {
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
     marginBottom: space.xs,
+  },
+  kindRow: {
+    flexDirection: 'row',
+    gap: space.sm,
+  },
+  kindOption: {
+    flex: 1,
+    backgroundColor: color.bg,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    gap: 4,
+    alignItems: 'flex-start',
+  },
+  kindOptionActive: {
+    borderColor: color.primary,
+    backgroundColor: color.primarySoft,
+  },
+
+  // Section label — bumped top margin so the caps label has clear
+  // breathing room above (otherwise it reads as "stuck" to the
+  // field above it). Bottom kept tight so it groups visually with
+  // the field below.
+  sectionLabel: {
+    marginTop: space.lg,
+    marginBottom: 6,
+    letterSpacing: 0.8,
   },
 
   // Payment method
@@ -825,7 +1389,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     paddingVertical: space.sm,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -839,7 +1403,7 @@ const styles = StyleSheet.create({
   statusChip: {
     flex: 1,
     paddingVertical: space.xs,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.border,
     alignItems: 'center',
@@ -855,7 +1419,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     paddingHorizontal: space.md,
@@ -895,7 +1459,7 @@ const styles = StyleSheet.create({
   footerIcon: {
     width: 40,
     height: 40,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.surface,
     borderWidth: 1,
     borderColor: color.borderStrong,
@@ -909,6 +1473,40 @@ const styles = StyleSheet.create({
   },
   footerSave: {
     flex: 1,
+  },
+  submitHint: {
+    paddingHorizontal: screenInset,
+    paddingTop: space.xs,
+    paddingBottom: 2,
+    lineHeight: 18,
+  },
+
+  // Receipt preview row — sits between the form ScrollView and the
+  // sticky footer. Hairline-bordered, dense, matches the InteriorOS
+  // sharp-corner language used elsewhere.
+  receiptRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: screenInset,
+    paddingVertical: space.sm,
+    backgroundColor: color.bg,
+    borderTopWidth: 1,
+    borderTopColor: color.borderStrong,
+  },
+  receiptThumbWrap: {
+    width: 44, height: 44,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
+    overflow: 'hidden',
+  },
+  receiptThumb: { width: '100%', height: '100%' },
+  receiptOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center', justifyContent: 'center',
   },
 
   // Modal
@@ -958,8 +1556,9 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
+    lineHeight: 20,
     color: color.text,
-    paddingVertical: Platform.OS === 'ios' ? space.xs : 0,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
   },
 
   // Section header

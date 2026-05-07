@@ -3,11 +3,14 @@
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
+import * as ImagePicker from 'expo-image-picker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { Controller, useForm } from 'react-hook-form';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -20,7 +23,12 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { z } from 'zod';
 
+import { guessImageMimeType } from '@/src/lib/r2Upload';
+import { commitStagedFiles, type StagedFile } from '@/src/lib/commitStagedFiles';
+import { deleteR2Object } from '@/src/lib/r2Delete';
+
 import { useAuth } from '@/src/features/auth/useAuth';
+import { usePermissions } from '@/src/features/org/usePermissions';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useTransactions } from '@/src/features/transactions/useTransactions';
 import { updateTransaction } from '@/src/features/transactions/transactions';
@@ -53,10 +61,16 @@ const schema = z.object({
 type FormData = z.infer<typeof schema>;
 
 export default function EditTransactionScreen() {
+  // Editing a posted txn = finance write. Site Engineer / Supervisor
+  // can only "submit" new ones, not edit; they shouldn't reach this
+  // screen via UI but the guard catches deep links.
+  useGuardedRoute({ capability: 'transaction.write' });
+
   const params = useLocalSearchParams<{ id: string; txnId: string }>();
   const projectId = params.id;
   const txnId = params.txnId;
   const { user } = useAuth();
+  const { can } = usePermissions();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
   const { data: transactions } = useTransactions(projectId);
@@ -69,6 +83,19 @@ export default function EditTransactionScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
+  // Receipt state — same shape as edit-laminate:
+  //   - existingReceipt   = what's in Firestore right now
+  //   - stagedReplacement = a freshly-picked local file waiting for save
+  //   - receiptCleared    = user tapped × on the existing receipt
+  // Upload happens during onSubmit, not pick. Old key is only deleted
+  // after the new doc-write succeeds.
+  const [existingReceipt, setExistingReceipt] = useState<{
+    publicUrl: string;
+    key?: string;
+  } | null>(null);
+  const [stagedReplacement, setStagedReplacement] = useState<StagedFile | null>(null);
+  const [receiptCleared, setReceiptCleared] = useState(false);
+  const [savePhase, setSavePhase] = useState<string>();
 
   const txnType = txn ? normalizeTransactionType(txn.type) : 'payment_out';
   const isPaymentIn = txnType === 'payment_in';
@@ -108,6 +135,16 @@ export default function EditTransactionScreen() {
         status: txn.status || 'paid',
         date: txn.date ? txn.date.toDate() : new Date(),
       });
+      // Hydrate the receipt UI from the existing Firestore values.
+      // Older docs may have a photoUrl without a photoStoragePath
+      // (pre-R2 era) — we still render the preview but won't be able
+      // to delete the old R2 object on replace.
+      if (txn.photoUrl) {
+        setExistingReceipt({
+          publicUrl: txn.photoUrl,
+          key: txn.photoStoragePath,
+        });
+      }
     }
   }, [txn, reset]);
 
@@ -121,10 +158,83 @@ export default function EditTransactionScreen() {
     if (date) setValue('date', date, { shouldDirty: true });
   }
 
+  async function pickReceipt(source: 'camera' | 'library') {
+    if (!projectId || !txn) return;
+    const perm = source === 'camera'
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert(
+        'Permission needed',
+        source === 'camera'
+          ? 'Allow camera access to capture a receipt.'
+          : 'Allow photo library access to attach a receipt.',
+      );
+      return;
+    }
+    const opts: ImagePicker.ImagePickerOptions = {
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+    };
+    const result = source === 'camera'
+      ? await ImagePicker.launchCameraAsync(opts)
+      : await ImagePicker.launchImageLibraryAsync(opts);
+    if (result.canceled || !result.assets[0]) return;
+
+    // Stage the replacement locally — upload during Save.
+    const asset = result.assets[0];
+    setStagedReplacement({
+      id: 'replacement',
+      localUri: asset.uri,
+      contentType: asset.mimeType || guessImageMimeType(asset.uri),
+    });
+    setReceiptCleared(false);
+  }
+
   async function onSubmit(data: FormData) {
-    if (!txnId) return;
+    if (!txnId || !projectId) return;
     setSubmitError(undefined);
     try {
+      // Step 1 — upload the staged replacement (if any).
+      let newPhotoUrl: string | undefined;
+      let newPhotoKey: string | undefined;
+      if (stagedReplacement) {
+        setSavePhase('Uploading receipt…');
+        const { uploaded, failed } = await commitStagedFiles({
+          files: [stagedReplacement],
+          kind: 'transaction',
+          refId: projectId,
+          projectId,
+          compress: 'balanced',
+        });
+        if (failed.length > 0) {
+          setSubmitError(`Receipt upload failed: ${failed[0].error}`);
+          setSavePhase(undefined);
+          return;
+        }
+        newPhotoUrl = uploaded[0].publicUrl;
+        newPhotoKey = uploaded[0].key;
+      }
+
+      // Step 2 — Decide what to write:
+      //   - replaced → new url + key
+      //   - cleared → '' (FieldValue.delete via updateTransaction)
+      //   - neither → skip the photo fields
+      let photoUrl: string | undefined;
+      let photoStoragePath: string | undefined;
+      if (newPhotoUrl) {
+        photoUrl = newPhotoUrl;
+        photoStoragePath = newPhotoKey;
+      } else if (receiptCleared) {
+        photoUrl = '';
+        photoStoragePath = '';
+      } else if (existingReceipt) {
+        // Preserve existing.
+        photoUrl = existingReceipt.publicUrl;
+        photoStoragePath = existingReceipt.key;
+      }
+
+      setSavePhase('Saving transaction…');
       await updateTransaction(txnId, {
         amount: parseFloat(data.amount),
         description: data.description || '',
@@ -134,10 +244,32 @@ export default function EditTransactionScreen() {
         referenceNumber: data.referenceNumber || undefined,
         status: data.status,
         date: data.date,
+        photoUrl,
+        photoStoragePath,
       });
+
+      // Step 3 — Delete the OLD R2 key only after doc-write succeeded.
+      const oldKey = existingReceipt?.key;
+      const shouldDeleteOld =
+        oldKey && (newPhotoKey || receiptCleared) && oldKey !== newPhotoKey;
+      if (shouldDeleteOld && oldKey) {
+        void deleteR2Object({
+          projectId,
+          key: oldKey,
+          kind: 'transaction',
+          refId: projectId,
+          sizeBytes: 0,
+          contentType: 'image/jpeg',
+        });
+      }
+      // Wait briefly so the parent screen's onSnapshot listener catches
+      // the just-updated doc before navigation completes.
+      await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
       setSubmitError((err as Error).message);
+    } finally {
+      setSavePhase(undefined);
     }
   }
 
@@ -150,6 +282,21 @@ export default function EditTransactionScreen() {
         onPress: async () => {
           try {
             await db.collection('transactions').doc(txnId).delete();
+            // Clean up the receipt object in R2 + decrement project
+            // storage totals. Best-effort — if it fails we leave an
+            // orphan, but the txn doc is already gone so the UX is
+            // complete.
+            const receiptKey = txn?.photoStoragePath ?? existingReceipt?.key;
+            if (receiptKey && projectId) {
+              void deleteR2Object({
+                projectId,
+                key: receiptKey,
+                kind: 'transaction',
+                refId: projectId,
+                sizeBytes: 0,
+                contentType: 'image/jpeg',
+              });
+            }
             router.back();
           } catch (err) {
             Alert.alert('Error', (err as Error).message);
@@ -170,6 +317,70 @@ export default function EditTransactionScreen() {
     );
   }
 
+  const wf = txn.workflowStatus ?? 'posted';
+  const mayEditTxn =
+    wf !== 'rejected' &&
+    (can('transaction.write') ||
+      (wf === 'pending_approval' &&
+        !!user?.uid &&
+        txn.createdBy === user.uid &&
+        can('transaction.submit')));
+  const mayDeleteTxn =
+    can('transaction.write') ||
+    (wf === 'pending_approval' &&
+      !!user?.uid &&
+      txn.createdBy === user.uid &&
+      can('transaction.submit'));
+
+  if (wf === 'rejected') {
+    return (
+      <Screen bg="grouped" padded={false}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.navBar}>
+          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
+            <Ionicons name="arrow-back" size={22} color={color.text} />
+          </Pressable>
+          <Text variant="bodyStrong" color="text" style={styles.navTitle}>
+            Transaction rejected
+          </Text>
+          <View style={styles.navBtn} />
+        </View>
+        <View style={{ flex: 1, padding: space.md }}>
+          <Text variant="meta" color="textMuted">
+            This expense was rejected and cannot be edited.
+          </Text>
+          {!!txn.rejectionNote && (
+            <Text variant="meta" color="text" style={{ marginTop: space.sm }}>
+              {txn.rejectionNote}
+            </Text>
+          )}
+        </View>
+      </Screen>
+    );
+  }
+
+  if (!mayEditTxn) {
+    return (
+      <Screen bg="grouped" padded={false}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <View style={styles.navBar}>
+          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
+            <Ionicons name="arrow-back" size={22} color={color.text} />
+          </Pressable>
+          <Text variant="bodyStrong" color="text" style={styles.navTitle}>
+            Cannot edit
+          </Text>
+          <View style={styles.navBtn} />
+        </View>
+        <View style={{ flex: 1, padding: space.md }}>
+          <Text variant="meta" color="textMuted">
+            You do not have permission to edit this transaction.
+          </Text>
+        </View>
+      </Screen>
+    );
+  }
+
   return (
     <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -184,9 +395,13 @@ export default function EditTransactionScreen() {
             Edit {isPaymentIn ? 'Payment In' : 'Payment Out'}
           </Text>
         </View>
-        <Pressable onPress={onDelete} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="trash-outline" size={20} color={color.danger} />
-        </Pressable>
+        {mayDeleteTxn ? (
+          <Pressable onPress={onDelete} hitSlop={12} style={styles.navBtn}>
+            <Ionicons name="trash-outline" size={20} color={color.danger} />
+          </Pressable>
+        ) : (
+          <View style={styles.navBtn} />
+        )}
       </View>
 
       <View style={styles.hero}>
@@ -275,11 +490,78 @@ export default function EditTransactionScreen() {
             <DateTimePicker value={selectedDate} mode="date" display={Platform.OS === 'ios' ? 'inline' : 'default'} onChange={handleDateChange} />
           )}
 
+          {/* Receipt section — pre-filled from txn.photoUrl. Camera +
+              Library let the user attach (or replace) a receipt. The
+              old R2 object is deleted only after a successful save. */}
+          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>RECEIPT</Text>
+          {(stagedReplacement || (existingReceipt && !receiptCleared)) ? (
+            <View style={styles.receiptRow}>
+              <View style={styles.receiptThumbWrap}>
+                <Image
+                  source={{ uri: stagedReplacement?.localUri ?? existingReceipt?.publicUrl ?? '' }}
+                  style={styles.receiptThumb}
+                  resizeMode="cover"
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text variant="metaStrong" color="text">
+                  {stagedReplacement ? 'Replacement queued' : 'Receipt attached'}
+                </Text>
+                <Text variant="caption" color="textMuted">
+                  {stagedReplacement
+                    ? 'Will upload when you tap Save.'
+                    : 'Tap a button below to replace.'}
+                </Text>
+              </View>
+              <Pressable
+                onPress={() => {
+                  setStagedReplacement(null);
+                  setReceiptCleared(!!existingReceipt);
+                }}
+                hitSlop={8}
+              >
+                <Ionicons name="close-circle" size={20} color={color.textFaint} />
+              </Pressable>
+            </View>
+          ) : (
+            <View style={[styles.receiptRow, { justifyContent: 'center' }]}>
+              <Text variant="caption" color="textMuted">No receipt attached</Text>
+            </View>
+          )}
+          <View style={styles.receiptBtnRow}>
+            <Pressable
+              onPress={() => pickReceipt('camera')}
+              style={({ pressed }) => [
+                styles.receiptBtn,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Ionicons name="camera-outline" size={18} color={color.primary} />
+              <Text variant="metaStrong" style={{ color: color.primary }}>Camera</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => pickReceipt('library')}
+              style={({ pressed }) => [
+                styles.receiptBtn,
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Ionicons name="cloud-upload-outline" size={18} color={color.primary} />
+              <Text variant="metaStrong" style={{ color: color.primary }}>Library</Text>
+            </Pressable>
+          </View>
+
           {submitError && <Text variant="caption" color="danger" style={{ marginTop: space.sm }}>{submitError}</Text>}
         </ScrollView>
 
         <View style={styles.footer}>
-          <Button label="Update Transaction" onPress={handleSubmit(onSubmit)} loading={isSubmitting} disabled={!isValid || !isDirty} />
+          <Button
+            label={savePhase ?? 'Update Transaction'}
+            onPress={handleSubmit(onSubmit)}
+            loading={isSubmitting}
+            // Save enabled when form changed OR receipt staging changed.
+            disabled={!isValid || (!isDirty && !stagedReplacement && !receiptCleared)}
+          />
         </View>
       </KeyboardAvoidingView>
 
@@ -324,15 +606,59 @@ const styles = StyleSheet.create({
   heroLabel: { letterSpacing: 1.2, marginBottom: 4 },
   heroAmountRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
   heroAmountInput: { flex: 1, fontSize: 34, fontWeight: '700', color: color.text, paddingVertical: 0 },
-  dateChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: space.xs, paddingHorizontal: space.sm, borderRadius: radius.none, backgroundColor: color.bg, borderWidth: 1, borderColor: color.borderStrong },
+  dateChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: space.xs, paddingHorizontal: space.sm, borderRadius: radius.sm, backgroundColor: color.bg, borderWidth: 1, borderColor: color.borderStrong },
   scroll: { paddingHorizontal: screenInset, paddingTop: 12, paddingBottom: space.xl, backgroundColor: color.bgGrouped },
   sectionLabel: { marginTop: space.md, marginBottom: space.xs },
+
+  // Receipt section styling — matches the rest of the form's sharp /
+  // hairline / dense aesthetic.
+  receiptRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    backgroundColor: color.bg,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    minHeight: 56,
+  },
+  receiptThumbWrap: {
+    width: 44, height: 44,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
+    overflow: 'hidden',
+  },
+  receiptThumb: { width: '100%', height: '100%' },
+  receiptOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  receiptBtnRow: {
+    flexDirection: 'row',
+    gap: space.xs,
+    marginTop: space.xs,
+  },
+  receiptBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: space.sm,
+    backgroundColor: color.bg,
+    borderWidth: 1,
+    borderColor: color.primary,
+  },
   methodRow: { flexDirection: 'row', gap: space.xs, marginBottom: space.sm, flexWrap: 'wrap' },
-  methodChip: { flex: 1, minWidth: '23%', alignItems: 'center', gap: 4, paddingVertical: space.sm, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
+  methodChip: { flex: 1, minWidth: '23%', alignItems: 'center', gap: 4, paddingVertical: space.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
   methodChipActive: { backgroundColor: color.primary, borderColor: color.primary },
-  statusChip: { flex: 1, paddingVertical: space.xs, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, alignItems: 'center' },
+  statusChip: { flex: 1, paddingVertical: space.xs, borderRadius: radius.sm, borderWidth: 1, borderColor: color.borderStrong, alignItems: 'center' },
   statusChipActive: { backgroundColor: color.primary, borderColor: color.primary },
-  dropdownField: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: color.bg, borderRadius: radius.none, borderWidth: 1, borderColor: color.borderStrong, paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: 48, marginBottom: space.sm },
+  dropdownField: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: color.bg, borderRadius: radius.sm, borderWidth: 1, borderColor: color.borderStrong, paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: 48, marginBottom: space.sm },
   footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.bgGrouped, borderTopWidth: 1, borderTopColor: color.borderStrong },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
   modalSheet: { backgroundColor: color.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: space.sm, paddingBottom: space.xxl, maxHeight: '65%' },

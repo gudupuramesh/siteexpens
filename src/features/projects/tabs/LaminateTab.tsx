@@ -1,4 +1,11 @@
-import { useCallback, useState } from 'react';
+/**
+ * Laminate tab — list of laminate specs grouped by room.
+ *
+ * Visual language matches the project's TransactionTab / party detail
+ * pattern: hairline borders, sharp corners, dense rows, mono meta
+ * line. Tapping a row goes to the read-only detail view; the edit
+ * pencil there sends to the existing edit-laminate form.
+ */
 import { FlatList, Image, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
@@ -6,104 +13,132 @@ import * as Haptics from 'expo-haptics';
 
 import { useLaminates } from '@/src/features/laminates/useLaminates';
 import type { Laminate, RoomLaminates } from '@/src/features/laminates/types';
+import { Can } from '@/src/ui/Can';
 import { Text } from '@/src/ui/Text';
-import { Separator } from '@/src/ui/Separator';
-import { color, radius, screenInset, shadow, space } from '@/src/theme';
+import { color, fontFamily, radius, screenInset, shadow, space } from '@/src/theme';
 
-function LaminateCard({ item, projectId }: { item: Laminate; projectId: string }) {
+// ── Row ──────────────────────────────────────────────────────────────
+
+function LaminateRow({
+  item,
+  projectId,
+}: {
+  item: Laminate;
+  projectId: string;
+}) {
+  // Mono meta line stitched together from the most identifying
+  // fields. Each piece omits cleanly when missing — `filter(Boolean)`.
+  const meta = [
+    item.laminateCode,
+    item.finish,
+    item.edgeBandCode ? `EB ${item.edgeBandCode}` : null,
+  ]
+    .filter(Boolean)
+    .join('  ·  ')
+    .toUpperCase();
+
   return (
     <Pressable
-      onPress={() => router.push(`/(app)/projects/${projectId}/edit-laminate?lamId=${item.id}` as never)}
-      style={({ pressed }) => [styles.card, pressed && { opacity: 0.7 }]}
+      onPress={() =>
+        router.push(
+          `/(app)/projects/${projectId}/laminate/${item.id}` as never,
+        )
+      }
+      style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
     >
-      {/* Photo placeholder or actual photo */}
-      <View style={styles.cardPhoto}>
+      {/* Square hairline-bordered thumbnail (matches TransactionTab
+          icon shape — distinct from the rounded chip language used
+          for parties). */}
+      <View style={styles.thumb}>
         {item.photoUrl ? (
-          <Image source={{ uri: item.photoUrl }} style={styles.cardImage} resizeMode="cover" />
+          <Image
+            source={{ uri: item.photoUrl }}
+            style={styles.thumbImg}
+            resizeMode="cover"
+          />
         ) : (
-          <View style={styles.cardPhotoPlaceholder}>
-            <Ionicons name="image-outline" size={28} color={color.textFaint} />
+          <View style={styles.thumbEmpty}>
+            <Ionicons name="image-outline" size={16} color={color.textFaint} />
           </View>
         )}
       </View>
 
-      <View style={styles.cardBody}>
-        {/* Brand */}
+      <View style={styles.body}>
         <Text variant="rowTitle" color="text" numberOfLines={1}>
           {item.brand}
         </Text>
-
-        {/* Laminate Code */}
-        {item.laminateCode ? (
-          <Text variant="metaStrong" color="primary" numberOfLines={1}>
-            {item.laminateCode}
+        {meta ? (
+          <Text style={styles.meta} numberOfLines={1}>
+            {meta}
           </Text>
         ) : null}
-
-        {/* Finish */}
-        <View style={styles.detailRow}>
-          <Text variant="caption" color="textMuted">Finish</Text>
-          <Text variant="meta" color="text" numberOfLines={1}>{item.finish}</Text>
-        </View>
-
-        {/* Edge Band */}
-        <View style={styles.detailRow}>
-          <Text variant="caption" color="textMuted">Edge Band</Text>
-          <Text variant="meta" color="text" numberOfLines={1}>{item.edgeBandCode}</Text>
-        </View>
-
-        {/* Notes */}
         {item.notes ? (
-          <Text variant="meta" color="textMuted" numberOfLines={2} style={{ marginTop: 2 }}>
+          <Text variant="meta" color="textMuted" numberOfLines={1} style={styles.notes}>
             {item.notes}
           </Text>
         ) : null}
       </View>
+
+      <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
     </Pressable>
   );
 }
 
-function RoomSection({ room, projectId }: { room: RoomLaminates; projectId: string }) {
-  return (
-    <View style={styles.roomSection}>
-      <View style={styles.roomHeader}>
-        <Ionicons name="home-outline" size={16} color={color.primary} />
-        <Text variant="bodyStrong" color="text">{room.roomName}</Text>
-        <View style={styles.roomCount}>
-          <Text variant="caption" color="primary">{room.laminates.length}</Text>
-        </View>
-      </View>
+// ── Section ──────────────────────────────────────────────────────────
 
-      {room.laminates.map((lam) => (
-        <LaminateCard key={lam.id} item={lam} projectId={projectId} />
-      ))}
+function RoomSection({
+  room,
+  projectId,
+}: {
+  room: RoomLaminates;
+  projectId: string;
+}) {
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHeader}>
+        <Text style={styles.sectionLabel}>
+          {room.roomName.toUpperCase()}
+        </Text>
+        <Text style={styles.sectionCount}>
+          {room.laminates.length} {room.laminates.length === 1 ? 'item' : 'items'}
+        </Text>
+      </View>
+      <View style={styles.sectionBody}>
+        {room.laminates.map((lam, i) => (
+          <View key={lam.id}>
+            {i > 0 ? <View style={styles.rowDivider} /> : null}
+            <LaminateRow item={lam} projectId={projectId} />
+          </View>
+        ))}
+      </View>
     </View>
   );
 }
 
+// ── Tab ──────────────────────────────────────────────────────────────
+
 export function LaminateTab() {
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { rooms, data, loading } = useLaminates(projectId);
+  const brands = new Set(data.map((l) => l.brand));
 
   return (
     <View style={styles.container}>
-      {/* Summary */}
+      {/* Summary strip — same shape as TransactionTab. */}
       <View style={styles.summaryBar}>
         <View style={styles.summaryCell}>
-          <Text variant="caption" color="textMuted">ROOMS</Text>
-          <Text variant="metaStrong" color="text">{rooms.length}</Text>
+          <Text style={styles.summaryLabel}>ROOMS</Text>
+          <Text style={styles.summaryValue}>{rooms.length}</Text>
         </View>
-        <View style={styles.divider} />
+        <View style={styles.summaryDivider} />
         <View style={styles.summaryCell}>
-          <Text variant="caption" color="textMuted">LAMINATES</Text>
-          <Text variant="metaStrong" color="text">{data.length}</Text>
+          <Text style={styles.summaryLabel}>LAMINATES</Text>
+          <Text style={styles.summaryValue}>{data.length}</Text>
         </View>
-        <View style={styles.divider} />
+        <View style={styles.summaryDivider} />
         <View style={styles.summaryCell}>
-          <Text variant="caption" color="textMuted">BRANDS</Text>
-          <Text variant="metaStrong" color="text">
-            {new Set(data.map((l) => l.brand)).size}
-          </Text>
+          <Text style={styles.summaryLabel}>BRANDS</Text>
+          <Text style={styles.summaryValue}>{brands.size}</Text>
         </View>
       </View>
 
@@ -118,7 +153,8 @@ export function LaminateTab() {
             No laminates added
           </Text>
           <Text variant="meta" color="textMuted" align="center" style={{ maxWidth: 280 }}>
-            Add laminate selections for each room — brand, finish, edge band code, and photos.
+            Add laminate selections for each room — brand, finish, edge band,
+            and reference photos.
           </Text>
         </View>
       ) : (
@@ -132,102 +168,140 @@ export function LaminateTab() {
       )}
 
       {/* FAB */}
-      <Pressable
-        onPress={() => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          router.push(`/(app)/projects/${projectId}/add-laminate` as never);
-        }}
-        style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
-        accessibilityLabel="Add laminate"
-      >
-        <Ionicons name="add" size={24} color={color.onPrimary} />
-      </Pressable>
+      <Can capability="laminate.write">
+        <Pressable
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            router.push(`/(app)/projects/${projectId}/add-laminate` as never);
+          }}
+          style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
+          accessibilityLabel="Add laminate"
+        >
+          <Ionicons name="add" size={24} color={color.onPrimary} />
+        </Pressable>
+      </Can>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1 },
+// ── Styles ───────────────────────────────────────────────────────────
 
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: color.bgGrouped },
+
+  // Summary strip
   summaryBar: {
     flexDirection: 'row',
-    backgroundColor: color.surface,
-    paddingVertical: space.sm,
-    paddingHorizontal: screenInset,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    backgroundColor: color.bg,
+    marginHorizontal: screenInset,
+    marginTop: space.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: color.borderStrong,
+    overflow: 'hidden',
   },
   summaryCell: {
     flex: 1,
-    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 10,
     gap: 2,
+    alignItems: 'flex-start',
   },
-  divider: {
+  summaryLabel: {
+    fontFamily: fontFamily.mono,
+    fontSize: 9,
+    fontWeight: '600',
+    color: color.textFaint,
+    letterSpacing: 1.2,
+  },
+  summaryValue: {
+    fontFamily: fontFamily.mono,
+    fontSize: 18,
+    fontWeight: '700',
+    color: color.text,
+    fontVariant: ['tabular-nums'],
+    letterSpacing: -0.3,
+  },
+  summaryDivider: {
     width: StyleSheet.hairlineWidth,
-    backgroundColor: color.separator,
+    backgroundColor: color.borderStrong,
   },
 
-  // Room section
-  roomSection: {
-    marginBottom: space.md,
+  // Section (room)
+  section: {
+    marginTop: space.md,
+    paddingHorizontal: screenInset,
   },
-  roomHeader: {
+  sectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  sectionLabel: {
+    fontFamily: fontFamily.mono,
+    fontSize: 10,
+    fontWeight: '700',
+    color: color.textFaint,
+    letterSpacing: 1.4,
+  },
+  sectionCount: {
+    fontFamily: fontFamily.mono,
+    fontSize: 9,
+    color: color.textFaint,
+    letterSpacing: 1,
+  },
+  sectionBody: {
+    backgroundColor: color.bg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
+  },
+
+  // Row
+  row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.xs,
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.bgGrouped,
-  },
-  roomCount: {
-    paddingHorizontal: space.xs,
-    paddingVertical: 1,
-    borderRadius: radius.pill,
-    backgroundColor: color.primarySoft,
-  },
-
-  // Card
-  card: {
-    flexDirection: 'row',
-    backgroundColor: color.surface,
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
     gap: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
   },
-  cardPhoto: {
-    width: 80,
-    height: 80,
-    borderRadius: radius.sm,
+  rowDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: color.borderStrong,
+  },
+  thumb: {
+    width: 56,
+    height: 56,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
     overflow: 'hidden',
-    backgroundColor: color.bgGrouped,
   },
-  cardImage: {
-    width: 80,
-    height: 80,
-  },
-  cardPhotoPlaceholder: {
-    width: 80,
-    height: 80,
+  thumbImg: { width: '100%', height: '100%' },
+  thumbEmpty: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.bgGrouped,
   },
-  cardBody: {
+  body: {
     flex: 1,
+    minWidth: 0,
     gap: 2,
   },
-  detailRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
+  meta: {
+    fontFamily: fontFamily.mono,
+    fontSize: 10,
+    fontWeight: '600',
+    color: color.primary,
+    letterSpacing: 0.8,
+    marginTop: 2,
+  },
+  notes: {
+    marginTop: 2,
   },
 
   // List
-  listContent: {
-    paddingBottom: 80,
-  },
+  listContent: { paddingBottom: 100 },
 
   // Empty
   empty: {

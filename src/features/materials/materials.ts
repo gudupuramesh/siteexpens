@@ -1,4 +1,4 @@
-import firestore from '@react-native-firebase/firestore';
+import { firestore } from '@/src/lib/firebase';
 import { db } from '@/src/lib/firebase';
 
 export type CreateMaterialInput = {

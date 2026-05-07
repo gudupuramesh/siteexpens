@@ -4,7 +4,7 @@
  * Stores the full Excalidraw scene JSON + a small SVG thumbnail so the
  * grid can preview each board without spinning up a WebView per card.
  */
-import firestore from '@react-native-firebase/firestore';
+import { firestore } from '@/src/lib/firebase';
 
 import { db } from '@/src/lib/firebase';
 

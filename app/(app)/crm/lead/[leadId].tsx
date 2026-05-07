@@ -665,6 +665,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.danger,
     paddingHorizontal: 6,
     paddingVertical: 3,
+    borderRadius: 6,
   },
   overdueChipText: {
     fontFamily: fontFamily.mono,
@@ -704,6 +705,7 @@ const styles = StyleSheet.create({
   actionBtn: {
     flex: 1,
     minHeight: 56,
+    borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
     backgroundColor: color.surface,

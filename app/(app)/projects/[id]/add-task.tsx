@@ -3,10 +3,10 @@
  * assignee (project member picker), photos.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
 import { Controller, useForm } from 'react-hook-form';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import {
   Alert,
@@ -25,13 +25,23 @@ import { z } from 'zod';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
+import { startOfLocalDay } from '@/src/features/dpr/dprDay';
 import { createTask } from '@/src/features/tasks/tasks';
 import { createTaskCategory } from '@/src/features/tasks/taskCategories';
+import { guessImageMimeType, recordStorageEvent } from '@/src/lib/r2Upload';
+import {
+  commitStagedFiles,
+  makeStagedFile,
+  type StagedFile,
+} from '@/src/lib/commitStagedFiles';
 import { useTaskCategories } from '@/src/features/tasks/useTaskCategories';
-import { type TaskCategory, type TaskStatus } from '@/src/features/tasks/types';
+import { type TaskCategory, type TaskStatus, type Task } from '@/src/features/tasks/types';
+import { useTasks } from '@/src/features/tasks/useTasks';
 import { Button } from '@/src/ui/Button';
+import { DatePickerModal } from '@/src/ui/DatePickerModal';
 import { PartyPickerModal } from '@/src/ui/PartyPickerModal';
 import { Screen } from '@/src/ui/Screen';
+import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
 import { formatDate } from '@/src/lib/format';
@@ -52,7 +62,38 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
+function addCalendarDaysStart(d: Date, days: number): Date {
+  const n = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  n.setDate(n.getDate() + days);
+  return n;
+}
+
+/** Next milestone start: day after latest end (or start if no end); not before today. */
+function suggestedNextTaskStart(existing: Task[], today: Date): Date {
+  const todayStart = startOfLocalDay(today).getTime();
+  if (existing.length === 0) {
+    return new Date(todayStart);
+  }
+  let best = -Infinity;
+  for (const t of existing) {
+    const end = t.endDate?.toDate();
+    const start = t.startDate?.toDate();
+    if (end) {
+      best = Math.max(best, startOfLocalDay(end).getTime());
+    } else if (start) {
+      best = Math.max(best, startOfLocalDay(start).getTime());
+    }
+  }
+  if (best === -Infinity) {
+    return new Date(todayStart);
+  }
+  const after = addCalendarDaysStart(new Date(best), 1);
+  const afterStart = startOfLocalDay(after).getTime();
+  return new Date(Math.max(afterStart, todayStart));
+}
+
 export default function AddTaskScreen() {
+  useGuardedRoute({ capability: 'task.write' });
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -60,11 +101,42 @@ export default function AddTaskScreen() {
   const [submitError, setSubmitError] = useState<string>();
   const [startDate, setStartDate] = useState(new Date());
   const [endDate, setEndDate] = useState<Date | null>(null);
+  const userTouchedStartRef = useRef(false);
+  const defaultStartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { data: existingTasks, loading: tasksLoading } = useTasks(projectId);
+
+  useEffect(() => {
+    userTouchedStartRef.current = false;
+    if (defaultStartTimeoutRef.current) {
+      clearTimeout(defaultStartTimeoutRef.current);
+      defaultStartTimeoutRef.current = null;
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!projectId || userTouchedStartRef.current) return;
+    if (defaultStartTimeoutRef.current) clearTimeout(defaultStartTimeoutRef.current);
+    defaultStartTimeoutRef.current = setTimeout(() => {
+      defaultStartTimeoutRef.current = null;
+      if (userTouchedStartRef.current || tasksLoading) return;
+      setStartDate(suggestedNextTaskStart(existingTasks, new Date()));
+    }, 280);
+    return () => {
+      if (defaultStartTimeoutRef.current) {
+        clearTimeout(defaultStartTimeoutRef.current);
+        defaultStartTimeoutRef.current = null;
+      }
+    };
+  }, [projectId, tasksLoading, existingTasks]);
   const [showStartDate, setShowStartDate] = useState(false);
   const [showEndDate, setShowEndDate] = useState(false);
   const [assignedTo, setAssignedTo] = useState('');
   const [assignedToName, setAssignedToName] = useState('');
-  const [photoUris, setPhotoUris] = useState<string[]>([]);
+  // Photos are staged locally on pick — no R2 round-trip. Upload
+  // happens when the user taps Save (see onSubmit).
+  const [staged, setStaged] = useState<StagedFile[]>([]);
+  const [savePhase, setSavePhase] = useState<string>();
+  const [saveProgress, setSaveProgress] = useState<{ done: number; total: number } | null>(null);
   const [showPartyPicker, setShowPartyPicker] = useState(false);
   const [showCategorySheet, setShowCategorySheet] = useState(false);
   const [newCategory, setNewCategory] = useState('');
@@ -116,18 +188,55 @@ export default function AddTaskScreen() {
     const res = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
-      quality: 0.7,
+      quality: 0.85,
     });
-    if (!res.canceled) {
-      setPhotoUris((prev) => [...prev, ...res.assets.map((a) => a.uri)]);
-    }
+    if (res.canceled) return;
+    // Stage locally — no R2 round-trip. Upload runs during Save.
+    const newEntries = res.assets.map((a) =>
+      makeStagedFile({
+        localUri: a.uri,
+        contentType: a.mimeType || guessImageMimeType(a.uri),
+      }),
+    );
+    setStaged((prev) => [...prev, ...newEntries]);
+  }
+
+  function removePhoto(id: string) {
+    setStaged((prev) => prev.filter((p) => p.id !== id));
   }
 
   async function onSubmit(data: FormData) {
     if (!user || !orgId || !projectId) return;
     setSubmitError(undefined);
     try {
-      await createTask({
+      // Step 1 — upload all staged files in parallel (if any).
+      let uploadedFiles: { publicUrl: string; key: string; sizeBytes: number; contentType: string }[] = [];
+      let failedCount = 0;
+      if (staged.length > 0) {
+        setSavePhase(`Uploading 0 of ${staged.length}…`);
+        const { uploaded, failed } = await commitStagedFiles({
+          files: staged,
+          kind: 'task_photo',
+          refId: projectId,
+          compress: 'balanced',
+          onProgress: (done, total) => {
+            setSaveProgress({ done, total });
+            setSavePhase(`Uploading ${done} of ${total}…`);
+          },
+        });
+        uploadedFiles = uploaded;
+        failedCount = failed.length;
+        if (uploaded.length === 0 && failed.length > 0) {
+          setSubmitError(`All ${failed.length} photo(s) failed to upload. Check your connection and try Save again.`);
+          setSavePhase(undefined);
+          setSaveProgress(null);
+          return;
+        }
+      }
+
+      // Step 2 — create the task.
+      setSavePhase('Saving task…');
+      const taskId = await createTask({
         orgId,
         projectId,
         title: data.title,
@@ -138,12 +247,40 @@ export default function AddTaskScreen() {
         endDate,
         assignedTo,
         assignedToName,
-        photoUris,
+        // Only successfully-uploaded R2 URLs land on the doc.
+        photoUris: uploadedFiles.map((u) => u.publicUrl),
         createdBy: user.uid,
       });
+
+      // Step 3 — record storage events for each uploaded file.
+      for (const u of uploadedFiles) {
+        void recordStorageEvent({
+          projectId,
+          kind: 'task_photo',
+          refId: taskId,
+          key: u.key,
+          sizeBytes: u.sizeBytes,
+          contentType: u.contentType,
+          action: 'upload',
+        });
+      }
+
+      if (failedCount > 0) {
+        // Partial success — surface the count via Alert, then exit
+        // (the doc was still saved with what succeeded).
+        Alert.alert(
+          'Some uploads failed',
+          `${failedCount} of ${staged.length} photo${staged.length === 1 ? '' : 's'} failed to upload. The task was saved with the rest.`,
+        );
+      }
+      // Snapshot-propagation buffer (see add-transaction.tsx).
+      await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
       setSubmitError((err as Error).message);
+    } finally {
+      setSavePhase(undefined);
+      setSaveProgress(null);
     }
   }
 
@@ -244,31 +381,42 @@ export default function AddTaskScreen() {
           <View style={styles.dateRow}>
             <View style={styles.dateField}>
               <Text variant="caption" color="textMuted" style={styles.label}>START DATE</Text>
-              <Pressable onPress={() => setShowStartDate(true)} style={styles.dateBtn}>
+              <Pressable
+                onPress={() => {
+                  setShowEndDate(false);
+                  setShowStartDate(true);
+                }}
+                style={styles.dateBtn}
+              >
                 <Text variant="body" color="text">{formatDate(startDate)}</Text>
               </Pressable>
-              {showStartDate && (
-                <DateTimePicker
-                  value={startDate}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(_, d) => { setShowStartDate(Platform.OS === 'ios'); if (d) setStartDate(d); }}
-                />
-              )}
+              <DatePickerModal
+                visible={showStartDate}
+                value={startDate}
+                onClose={() => setShowStartDate(false)}
+                onConfirm={(d) => {
+                  userTouchedStartRef.current = true;
+                  setStartDate(d);
+                }}
+              />
             </View>
             <View style={styles.dateField}>
               <Text variant="caption" color="textMuted" style={styles.label}>END DATE</Text>
-              <Pressable onPress={() => setShowEndDate(true)} style={styles.dateBtn}>
+              <Pressable
+                onPress={() => {
+                  setShowStartDate(false);
+                  setShowEndDate(true);
+                }}
+                style={styles.dateBtn}
+              >
                 <Text variant="body" color="text">{endDate ? formatDate(endDate) : 'Not set'}</Text>
               </Pressable>
-              {showEndDate && (
-                <DateTimePicker
-                  value={endDate ?? new Date()}
-                  mode="date"
-                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  onChange={(_, d) => { setShowEndDate(Platform.OS === 'ios'); if (d) setEndDate(d); }}
-                />
-              )}
+              <DatePickerModal
+                visible={showEndDate}
+                value={endDate ?? new Date()}
+                onClose={() => setShowEndDate(false)}
+                onConfirm={(d) => setEndDate(d)}
+              />
             </View>
           </View>
 
@@ -282,14 +430,14 @@ export default function AddTaskScreen() {
             <Ionicons name="chevron-forward" size={18} color={color.textFaint} />
           </Pressable>
 
-          {/* Photos */}
+          {/* Photos — staged locally; uploaded only on Save. */}
           <Text variant="caption" color="textMuted" style={styles.label}>PHOTOS</Text>
           <View style={styles.photoRow}>
-            {photoUris.map((uri) => (
-              <View key={uri} style={styles.photoThumbWrap}>
-                <Image source={{ uri }} style={styles.photoThumb} />
+            {staged.map((p) => (
+              <View key={p.id} style={styles.photoThumbWrap}>
+                <Image source={{ uri: p.localUri }} style={styles.photoThumb} />
                 <Pressable
-                  onPress={() => setPhotoUris((prev) => prev.filter((u) => u !== uri))}
+                  onPress={() => removePhoto(p.id)}
                   style={styles.photoClose}
                   hitSlop={6}
                 >
@@ -311,7 +459,7 @@ export default function AddTaskScreen() {
 
         <View style={styles.footer}>
           <Button
-            label="Create Timeline"
+            label={savePhase ?? 'Create Timeline'}
             onPress={handleSubmit(onSubmit)}
             loading={isSubmitting}
             disabled={!isValid || !orgId}
@@ -400,6 +548,12 @@ export default function AddTaskScreen() {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      <SubmitProgressOverlay
+        visible={isSubmitting}
+        intent="createTask"
+        phaseLabel={savePhase}
+      />
     </Screen>
   );
 }
@@ -438,7 +592,7 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: space.sm,
     paddingVertical: space.xs,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -452,7 +606,7 @@ const styles = StyleSheet.create({
   dateBtn: {
     paddingVertical: space.sm,
     paddingHorizontal: space.sm,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -463,7 +617,7 @@ const styles = StyleSheet.create({
     gap: space.xs,
     paddingVertical: space.sm,
     paddingHorizontal: space.sm,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
@@ -473,7 +627,7 @@ const styles = StyleSheet.create({
   photoThumb: {
     width: 72,
     height: 72,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.surface,
     borderWidth: 1,
     borderColor: color.borderStrong,
@@ -489,10 +643,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Status overlay on each photo thumb — translucent dark while
+  // uploading; red when the upload errored.
+  photoOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center', justifyContent: 'center',
+  },
   photoAdd: {
     width: 72,
     height: 72,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.borderStrong,
     alignItems: 'center',
@@ -532,7 +694,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     paddingHorizontal: space.sm,
     marginBottom: 8,
     flexDirection: 'row',
@@ -553,14 +715,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     paddingHorizontal: space.sm,
     color: color.text,
   },
   newCategoryBtn: {
     width: 72,
     minHeight: 42,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.primary,
     borderWidth: 1,
     borderColor: color.primary,

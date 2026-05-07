@@ -17,11 +17,12 @@ import DateTimePicker, { type DateTimePickerEvent } from '@react-native-communit
 import { router, Stack } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Controller, useForm } from 'react-hook-form';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -33,8 +34,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { z } from 'zod';
 
 import { useAuth } from '@/src/features/auth/useAuth';
+import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
-import { createProject } from '@/src/features/projects/projects';
+import { createProject, PlanLimitError } from '@/src/features/projects/projects';
+import { usePaywall } from '@/src/features/billing/usePaywall';
+import { guessImageMimeType, recordStorageEvent } from '@/src/lib/r2Upload';
+import { commitStagedFiles, type StagedFile } from '@/src/lib/commitStagedFiles';
 import {
   PROJECT_STATUS_OPTIONS,
   PROJECT_SUB_TYPES,
@@ -43,6 +48,7 @@ import {
   type ProjectTypology,
 } from '@/src/features/projects/types';
 import { Screen } from '@/src/ui/Screen';
+import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
 import {
   Group,
   InputRow,
@@ -69,11 +75,16 @@ const schema = z
     photoUri: z.string().nullable(),
   })
   .refine((d) => !d.endDate || d.endDate >= d.startDate, {
-    message: 'End date must be after start date',
+    message: 'Handover must be on or after the project start date',
     path: ['endDate'],
   });
 
 type FormValues = z.input<typeof schema>;
+
+/** Calendar date in local timezone (midnight not required; comparisons use Y-M-D). */
+function startOfLocalDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
 
 function formatPickerDate(d: Date | null): string {
   if (!d) return '';
@@ -93,21 +104,40 @@ function typologyLabel(key: ProjectTypology): string {
 }
 
 export default function NewProjectScreen() {
+  // Belt-and-braces route guard. UI hides the projects-list FAB for
+  // roles without `project.create`, but a deep link / stale nav
+  // stack could still land here — bounce them home.
+  useGuardedRoute({ capability: 'project.create' });
+
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? null;
+  const { openPaywall } = usePaywall();
+
+  const initialStartDate = useMemo(() => startOfLocalDay(new Date()), []);
 
   const [submitError, setSubmitError] = useState<string>();
   const [datePicker, setDatePicker] = useState<'start' | 'end' | null>(null);
+  /** iOS: draft value while the modal date picker is open (committed on Done). */
+  const [iosDateDraft, setIosDateDraft] = useState<Date>(() => startOfLocalDay(new Date()));
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [showTypePicker, setShowTypePicker] = useState(false);
   const [showSubTypePicker, setShowSubTypePicker] = useState(false);
+  // Cover photo is staged locally on pick — no R2 upload happens
+  // until the user taps Create project (see onSubmit below). This
+  // prevents orphans when the user backs out of the form without
+  // saving.
+  const [stagedCover, setStagedCover] = useState<StagedFile | null>(null);
+  const [coverError, setCoverError] = useState<string>();
+  // Save-time progress message ("Uploading 1 of 1…").
+  const [savePhase, setSavePhase] = useState<string>();
 
   const {
     control,
     handleSubmit,
     watch,
     setValue,
+    getValues,
     formState: { errors, isSubmitting },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -121,7 +151,7 @@ export default function NewProjectScreen() {
       subTypeCustom: '',
       status: 'active',
       progress: 0,
-      startDate: new Date(),
+      startDate: initialStartDate,
       endDate: null,
       value: '',
       photoUri: null,
@@ -130,10 +160,25 @@ export default function NewProjectScreen() {
 
   const startDate = watch('startDate');
   const endDate = watch('endDate');
+
+  const todayStart = startOfLocalDay(new Date());
+  const handoverMinimum = new Date(
+    Math.max(startOfLocalDay(startDate).getTime(), todayStart.getTime()),
+  );
+
   const photoUri = watch('photoUri');
   const status = watch('status');
   const typology = watch('typology');
   const subTypeKey = watch('subTypeKey');
+
+  useEffect(() => {
+    const curEnd = getValues('endDate');
+    if (!curEnd) return;
+    const minTs = Math.max(startOfLocalDay(startDate).getTime(), startOfLocalDay(new Date()).getTime());
+    if (startOfLocalDay(curEnd).getTime() < minTs) {
+      setValue('endDate', null, { shouldValidate: true });
+    }
+  }, [startDate, getValues, setValue]);
 
   const subTypeOptions = useMemo(
     () => (typology ? PROJECT_SUB_TYPES[typology] : []),
@@ -166,19 +211,61 @@ export default function NewProjectScreen() {
       aspect: [4, 3],
       quality: 0.8,
     });
-    if (!result.canceled && result.assets[0]) {
-      setValue('photoUri', result.assets[0].uri, { shouldValidate: true });
+    if (result.canceled || !result.assets[0]) return;
+
+    // Stage only — no R2 round-trip. Files upload during onSubmit so
+    // backing out without saving leaves no orphans in the bucket.
+    const asset = result.assets[0];
+    setCoverError(undefined);
+    setStagedCover({
+      id: 'cover',
+      localUri: asset.uri,
+      contentType: asset.mimeType || guessImageMimeType(asset.uri),
+    });
+  }
+
+  function openDatePicker(kind: 'start' | 'end') {
+    const today = startOfLocalDay(new Date()).getTime();
+    if (kind === 'start') {
+      setIosDateDraft(new Date(Math.max(startOfLocalDay(startDate).getTime(), today)));
+    } else {
+      const minHandover = Math.max(startOfLocalDay(startDate).getTime(), today);
+      const fallback = new Date(minHandover);
+      if (!endDate) {
+        setIosDateDraft(fallback);
+      } else {
+        setIosDateDraft(new Date(Math.max(startOfLocalDay(endDate).getTime(), minHandover)));
+      }
     }
+    setDatePicker(kind);
   }
 
   function handleDateChange(kind: 'start' | 'end', event: DateTimePickerEvent, picked?: Date) {
     if (Platform.OS === 'android') setDatePicker(null);
     if (event.type === 'dismissed' || !picked) return;
+    const today = startOfLocalDay(new Date()).getTime();
     if (kind === 'start') {
-      setValue('startDate', picked, { shouldValidate: true });
+      const n = startOfLocalDay(picked);
+      setValue('startDate', new Date(Math.max(n.getTime(), today)), { shouldValidate: true });
     } else {
-      setValue('endDate', picked, { shouldValidate: true });
+      const minTs = Math.max(startOfLocalDay(startDate).getTime(), today);
+      const n = startOfLocalDay(picked);
+      setValue('endDate', new Date(Math.max(n.getTime(), minTs)), { shouldValidate: true });
     }
+  }
+
+  function confirmIosDatePicker() {
+    if (!datePicker) return;
+    const today = startOfLocalDay(new Date()).getTime();
+    if (datePicker === 'start') {
+      const n = startOfLocalDay(iosDateDraft);
+      setValue('startDate', new Date(Math.max(n.getTime(), today)), { shouldValidate: true });
+    } else {
+      const minTs = Math.max(startOfLocalDay(startDate).getTime(), today);
+      const n = startOfLocalDay(iosDateDraft);
+      setValue('endDate', new Date(Math.max(n.getTime(), minTs)), { shouldValidate: true });
+    }
+    setDatePicker(null);
   }
 
   async function onSubmit(values: FormValues) {
@@ -198,6 +285,42 @@ export default function NewProjectScreen() {
     }
 
     try {
+      // Step 1 — upload the cover photo to R2 (if any was picked).
+      // Skipped entirely when stagedCover is null so projects with
+      // no cover save instantly.
+      let coverPublicUrl: string | null = null;
+      let coverKey: string | null = null;
+      let coverSize = 0;
+      let coverContentType = '';
+      if (stagedCover) {
+        setSavePhase('Uploading cover…');
+        const { uploaded, failed } = await commitStagedFiles({
+          files: [stagedCover],
+          kind: 'project_cover',
+          // refId is the user's uid for now — the project doc doesn't
+          // exist yet so we have no project id to attribute the file
+          // to inside the storage path. Each upload gets its own UUID
+          // so no collision risk.
+          refId: user.uid,
+          compress: 'balanced',
+        });
+        if (failed.length > 0) {
+          // Cover is optional — but if the user picked one and it
+          // failed, surface the error and keep them on the form so
+          // they can retry without losing the form data.
+          setSubmitError(`Cover photo upload failed: ${failed[0].error}`);
+          setSavePhase(undefined);
+          return;
+        }
+        const ok = uploaded[0];
+        coverPublicUrl = ok.publicUrl;
+        coverKey = ok.key;
+        coverSize = ok.sizeBytes;
+        coverContentType = ok.contentType;
+      }
+
+      // Step 2 — create the project doc.
+      setSavePhase('Saving project…');
       const id = await createProject({
         uid: user.uid,
         orgId,
@@ -206,16 +329,43 @@ export default function NewProjectScreen() {
         endDate: values.endDate,
         siteAddress: values.siteAddress.trim(),
         value: parseInt(values.value, 10),
-        photoUri: values.photoUri,
+        photoUri: coverPublicUrl,
+        // R2 key is stored alongside the URL so a future replace
+        // flow can delete the old object cleanly.
+        photoR2Key: coverKey,
         status: values.status,
         location: values.location?.trim() || undefined,
         typology: values.typology,
         subType,
         progress: values.progress,
       });
+
+      // Step 3 — attribute the cover upload to project storage totals
+      // now that the project id exists. Best-effort.
+      if (coverKey) {
+        void recordStorageEvent({
+          projectId: id,
+          kind: 'project_cover',
+          refId: id,
+          key: coverKey,
+          sizeBytes: coverSize,
+          contentType: coverContentType,
+          action: 'upload',
+        });
+      }
       router.replace(`/(app)/projects/${id}` as never);
     } catch (err) {
+      // Tier paywall — open the upgrade sheet instead of dumping a
+      // raw "failed-precondition" string at the user. Bail cleanly
+      // so the form keeps its values for retry after upgrade.
+      if (err instanceof PlanLimitError) {
+        openPaywall({ reason: 'plan_limit_projects' });
+        setSavePhase(undefined);
+        return;
+      }
       setSubmitError((err as Error).message);
+    } finally {
+      setSavePhase(undefined);
     }
   }
 
@@ -380,14 +530,14 @@ export default function NewProjectScreen() {
               label="Start date"
               icon="calendar-outline"
               value={formatPickerDate(startDate)}
-              onPress={() => setDatePicker('start')}
+              onPress={() => openDatePicker('start')}
             />
             <PickerRow
               label="Target handover"
               icon="flag-outline"
               value={endDate ? formatPickerDate(endDate) : undefined}
               placeholder="Optional"
-              onPress={() => setDatePicker('end')}
+              onPress={() => openDatePicker('end')}
               last
             />
             {errors.endDate?.message ? (
@@ -419,7 +569,10 @@ export default function NewProjectScreen() {
             ) : null}
           </Group>
 
-          {/* PHOTO */}
+          {/* PHOTO — staged locally on pick; uploaded only when the
+              user taps Create project. No R2 round-trip happens
+              during pick, so backing out of the form leaves nothing
+              behind in the bucket. */}
           <Group header="Cover photo (optional)">
             <Pressable
               onPress={handlePickPhoto}
@@ -428,8 +581,12 @@ export default function NewProjectScreen() {
                 pressed && { opacity: 0.85 },
               ]}
             >
-              {photoUri ? (
-                <Image source={{ uri: photoUri }} style={styles.photoImg} resizeMode="cover" />
+              {stagedCover ? (
+                <Image
+                  source={{ uri: stagedCover.localUri }}
+                  style={styles.photoImg}
+                  resizeMode="cover"
+                />
               ) : (
                 <View style={styles.photoPlaceholder}>
                   <Ionicons name="image-outline" size={22} color={color.textFaint} />
@@ -437,6 +594,9 @@ export default function NewProjectScreen() {
                 </View>
               )}
             </Pressable>
+            {coverError ? (
+              <RNText style={styles.fieldError}>{coverError}</RNText>
+            ) : null}
           </Group>
 
           {submitError ? (
@@ -448,7 +608,7 @@ export default function NewProjectScreen() {
 
         <View style={styles.footer}>
           <PrimaryButton
-            label="Create project"
+            label={savePhase ?? 'Create project'}
             onPress={handleSubmit(onSubmit)}
             loading={isSubmitting}
             disabled={!orgId}
@@ -456,11 +616,63 @@ export default function NewProjectScreen() {
         </View>
       </KeyboardAvoidingView>
 
-      {datePicker ? (
+      {datePicker && Platform.OS === 'ios' ? (
+        <Modal
+          visible
+          transparent
+          animationType="slide"
+          onRequestClose={() => setDatePicker(null)}
+        >
+          <Pressable style={styles.dateModalBackdrop} onPress={() => setDatePicker(null)}>
+            <View />
+          </Pressable>
+          <View style={styles.dateModalSheet}>
+            <DateTimePicker
+              value={iosDateDraft}
+              mode="date"
+              display="spinner"
+              themeVariant="light"
+              minimumDate={datePicker === 'start' ? todayStart : handoverMinimum}
+              onChange={(_: DateTimePickerEvent, picked?: Date) => {
+                if (!picked) return;
+                if (datePicker === 'start') {
+                  const n = startOfLocalDay(picked);
+                  setIosDateDraft(new Date(Math.max(n.getTime(), todayStart.getTime())));
+                } else {
+                  const minTs = Math.max(startOfLocalDay(startDate).getTime(), todayStart.getTime());
+                  const n = startOfLocalDay(picked);
+                  setIosDateDraft(new Date(Math.max(n.getTime(), minTs)));
+                }
+              }}
+            />
+            <View style={styles.dateModalActions}>
+              <Pressable
+                onPress={() => setDatePicker(null)}
+                style={({ pressed }) => [styles.dateModalBtnGhost, pressed && { opacity: 0.7 }]}
+              >
+                <RNText style={styles.dateModalBtnGhostText}>Cancel</RNText>
+              </Pressable>
+              <Pressable
+                onPress={confirmIosDatePicker}
+                style={({ pressed }) => [styles.dateModalBtnPrimary, pressed && { opacity: 0.9 }]}
+              >
+                <RNText style={styles.dateModalBtnPrimaryText}>Done</RNText>
+              </Pressable>
+            </View>
+          </View>
+        </Modal>
+      ) : null}
+
+      {datePicker && Platform.OS === 'android' ? (
         <DateTimePicker
-          value={datePicker === 'start' ? startDate : (endDate ?? startDate)}
+          value={
+            datePicker === 'start'
+              ? startDate
+              : (endDate ?? handoverMinimum)
+          }
           mode="date"
-          display={Platform.OS === 'ios' ? 'inline' : 'default'}
+          display="default"
+          minimumDate={datePicker === 'start' ? todayStart : handoverMinimum}
           onChange={(e, d) => handleDateChange(datePicker, e, d)}
         />
       ) : null}
@@ -490,6 +702,12 @@ export default function NewProjectScreen() {
         value={status}
         onPick={(k) => setValue('status', k as ProjectStatus, { shouldValidate: true })}
         onClose={() => setShowStatusPicker(false)}
+      />
+
+      <SubmitProgressOverlay
+        visible={isSubmitting}
+        intent="createProject"
+        phaseLabel={savePhase}
       />
     </Screen>
   );
@@ -595,6 +813,22 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: color.textMuted,
   },
+  // Translucent overlay shown while the picked image uploads to R2.
+  photoOverlay: {
+    position: 'absolute',
+    top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(15,23,42,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  photoOverlayText: {
+    fontFamily: fontFamily.sans,
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#fff',
+    letterSpacing: 0.2,
+  },
 
   footer: {
     paddingHorizontal: 16,
@@ -603,5 +837,49 @@ const styles = StyleSheet.create({
     backgroundColor: color.bgGrouped,
     borderTopWidth: 1,
     borderTopColor: color.borderStrong,
+  },
+
+  dateModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15,23,42,0.4)',
+  },
+  dateModalSheet: {
+    backgroundColor: color.bgGrouped,
+    borderTopLeftRadius: 14,
+    borderTopRightRadius: 14,
+    paddingBottom: 28,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: color.borderStrong,
+  },
+  dateModalActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+  },
+  dateModalBtnGhost: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+  },
+  dateModalBtnGhostText: {
+    fontFamily: fontFamily.sans,
+    fontSize: 16,
+    fontWeight: '600',
+    color: color.textMuted,
+  },
+  dateModalBtnPrimary: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    backgroundColor: color.primary,
+    borderRadius: 10,
+  },
+  dateModalBtnPrimaryText: {
+    fontFamily: fontFamily.sans,
+    fontSize: 16,
+    fontWeight: '600',
+    color: color.onPrimary,
   },
 });

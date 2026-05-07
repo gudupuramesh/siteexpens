@@ -1,4 +1,4 @@
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
 export type TransactionType = 'payment_in' | 'payment_out';
 
@@ -43,6 +43,31 @@ export const PAYMENT_METHODS: { key: PaymentMethod; label: string; icon: string 
 
 export type TransactionStatus = 'paid' | 'pending' | 'partial';
 
+/** Money workflow separate from payment status (`paid`/`pending`/`partial`). */
+export type TransactionWorkflowStatus = 'posted' | 'pending_approval' | 'rejected';
+
+export type TransactionSettlement = {
+  clearedToParty: boolean;
+  payeeLabel?: string;
+  note?: string;
+  recordedAt: FirebaseFirestoreTypes.Timestamp | null;
+  recordedBy: string;
+  /** Admin's payment proof (UPI screenshot, bank receipt) attached when the
+   *  payment is actually marked cleared — separate from the submitter's
+   *  bill photo on the transaction itself. */
+  settlementPhotoUrl?: string;
+  settlementPhotoStoragePath?: string;
+  /** Set when admin marks the money as actually moved out. May be the same
+   *  moment as `recordedAt` (cleared at approval) or later (deferred clear). */
+  clearedAt?: FirebaseFirestoreTypes.Timestamp | null;
+  clearedBy?: string;
+};
+
+/** Distinguishes whether the supervisor paid out-of-pocket (admin reimburses
+ *  the supervisor later) or recorded a debt to a party (admin pays the party).
+ *  Only meaningful for `payment_out` submissions from submit-only roles. */
+export type TransactionSubmissionKind = 'expense_reimbursement' | 'party_payment';
+
 export type Transaction = {
   id: string;
   projectId: string;
@@ -69,8 +94,34 @@ export type Transaction = {
   createdAt: FirebaseFirestoreTypes.Timestamp | null;
   createdBy: string;
 
+  workflowStatus?: TransactionWorkflowStatus;
+  submittedAt?: FirebaseFirestoreTypes.Timestamp | null;
+  approvedBy?: string;
+  approvedAt?: FirebaseFirestoreTypes.Timestamp | null;
+  rejectedBy?: string;
+  rejectedAt?: FirebaseFirestoreTypes.Timestamp | null;
+  rejectionNote?: string;
+  settlement?: TransactionSettlement;
+  /** How the supervisor framed this payment_out at submission time. Drives
+   *  the "Cleared" notification wording and the settlement UX hint
+   *  (reimbursement vs party-payment). Optional / legacy docs lack it. */
+  submissionKind?: TransactionSubmissionKind;
+
   // Legacy compat — old docs may have 'income'/'expense'
 };
+
+export function isTransactionCleared(t: { settlement?: TransactionSettlement }): boolean {
+  return !!t.settlement?.clearedAt;
+}
+
+/** Legacy docs without workflowStatus count toward project totals. */
+export function isTransactionCountedInTotals(t: {
+  workflowStatus?: TransactionWorkflowStatus;
+}): boolean {
+  const w = t.workflowStatus;
+  if (w == null) return true;
+  return w === 'posted';
+}
 
 /** Map old type values to new */
 export function normalizeTransactionType(raw: string): TransactionType {

@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 
 import { db } from '@/src/lib/firebase';
+import { subscribeWithRetry } from '@/src/lib/subscribeWithRetry';
 
 import type { Organization } from './types';
 import { useCurrentUserDoc } from './useCurrentUserDoc';
@@ -34,24 +35,22 @@ export function useCurrentOrganization(): UseCurrentOrganizationResult {
     }
 
     setLoading(true);
-    const unsub = db
-      .collection('organizations')
-      .doc(orgId)
-      .onSnapshot(
-        (snap) => {
-          if (snap.exists) {
-            setData({ id: snap.id, ...(snap.data() as Omit<Organization, 'id'>) });
-          } else {
-            setData(null);
-          }
-          setLoading(false);
-        },
-        (err) => {
-          console.warn('[useCurrentOrganization] snapshot error:', err);
-          setLoading(false);
-        },
-      );
-    return unsub;
+    return subscribeWithRetry(
+      db.collection('organizations').doc(orgId),
+      (snap) => {
+        if (snap.exists) {
+          setData({ id: snap.id, ...(snap.data() as Omit<Organization, 'id'>) });
+        } else {
+          setData(null);
+        }
+        setLoading(false);
+      },
+      (err) => {
+        console.warn('[useCurrentOrganization] snapshot error:', err);
+        setLoading(false);
+      },
+      { tag: '[useCurrentOrganization]' },
+    );
   }, [orgId, userLoading]);
 
   return { data, loading };

@@ -1,5 +1,6 @@
 /**
- * Resolve org.memberIds to user display docs (same shape as useProjectMembers).
+ * Resolve org roster from `organizations/{orgId}/memberPublic` — the production,
+ * rules-safe projection maintained by Cloud Functions (not peer `users/{uid}` reads).
  */
 import { useEffect, useState } from 'react';
 
@@ -17,7 +18,6 @@ export function useOrgMembers(orgId: string | undefined): UseOrgMembersResult {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    let cancelled = false;
     if (!orgId) {
       setMembers([]);
       setLoading(false);
@@ -28,47 +28,40 @@ export function useOrgMembers(orgId: string | undefined): UseOrgMembersResult {
     const unsub = db
       .collection('organizations')
       .doc(orgId)
+      .collection('memberPublic')
       .onSnapshot(
-        async (snap) => {
-          if (cancelled) return;
-          const data = snap.data() as { memberIds?: string[] } | undefined;
-          const memberIds = data?.memberIds ?? [];
-          if (memberIds.length === 0) {
-            setMembers([]);
-            setLoading(false);
-            return;
-          }
-          try {
-            const docs = await Promise.all(
-              memberIds.map((uid) => db.collection('users').doc(uid).get()),
-            );
-            if (cancelled) return;
-            const resolved: ProjectMember[] = docs.map((d, i) => {
-              const u = d.data() as { displayName?: string; photoURL?: string | null } | undefined;
-              return {
-                uid: memberIds[i],
-                displayName: u?.displayName ?? 'Member',
-                photoURL: u?.photoURL ?? null,
-              };
-            });
-            resolved.sort((a, b) => a.displayName.localeCompare(b.displayName));
-            setMembers(resolved);
-            setLoading(false);
-          } catch (err) {
-            console.warn('[useOrgMembers] user fetch error:', err);
-            setLoading(false);
-          }
+        (snap) => {
+          const resolved: ProjectMember[] = snap.docs.map((d) => {
+            const u = d.data() as {
+              displayName?: string;
+              photoURL?: string | null;
+              phoneNumber?: string;
+              roleKey?: string;
+            };
+            return {
+              uid: d.id,
+              displayName: typeof u.displayName === 'string' && u.displayName.trim() ? u.displayName : 'Member',
+              photoURL: u.photoURL ?? null,
+              phoneNumber: typeof u.phoneNumber === 'string' ? u.phoneNumber : null,
+              // `useOrgMembers` doesn't validate roleKey here (the rules-safe
+              // memberPublic doc holds it but consumers of this hook only need
+              // identity for member-pickers; project-scoped role logic lives
+              // in `useProjectMembers`). Pass it through if present, else null.
+              role: (typeof u.roleKey === 'string' ? u.roleKey : null) as ProjectMember['role'],
+              isProjectClient: false,
+            };
+          });
+          resolved.sort((a, b) => a.displayName.localeCompare(b.displayName, undefined, { sensitivity: 'base' }));
+          setMembers(resolved);
+          setLoading(false);
         },
         (err) => {
-          console.warn('[useOrgMembers] org snapshot error:', err);
+          console.warn('[useOrgMembers] memberPublic snapshot error:', err);
           setLoading(false);
         },
       );
 
-    return () => {
-      cancelled = true;
-      unsub();
-    };
+    return unsub;
   }, [orgId]);
 
   return { members, loading };

@@ -8,6 +8,8 @@ import {
   TextInput,
   View,
 } from 'react-native';
+
+import { KeyboardAvoidingShell } from '@/src/ui/KeyboardFormLayout';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useAuth } from '@/src/features/auth/useAuth';
@@ -79,6 +81,7 @@ export default function TaskCategoryLibraryScreen() {
         <View style={styles.navBtn} />
       </View>
 
+      <KeyboardAvoidingShell headerInset={52}>
       <View style={styles.addRow}>
         <TextInput
           value={draft}
@@ -101,9 +104,12 @@ export default function TaskCategoryLibraryScreen() {
       </View>
 
       <FlatList
+        style={{ flex: 1 }}
         data={categories}
         keyExtractor={(i) => i.key}
         contentContainerStyle={styles.listContent}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         renderItem={({ item }) => {
           const isCustom = !defaultKeys.has(item.key);
           return (
@@ -129,6 +135,7 @@ export default function TaskCategoryLibraryScreen() {
           )
         }
       />
+      </KeyboardAvoidingShell>
     </Screen>
   );
 }
@@ -159,14 +166,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.borderStrong,
     backgroundColor: color.bg,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     paddingHorizontal: space.sm,
     color: color.text,
   },
   addBtn: {
     width: 72,
     minHeight: 42,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     borderWidth: 1,
     borderColor: color.primary,
     backgroundColor: color.primary,
@@ -178,7 +185,7 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderWidth: 1,
     borderColor: color.borderStrong,
-    borderRadius: radius.none,
+    borderRadius: radius.sm,
     backgroundColor: color.bg,
     paddingHorizontal: space.sm,
     marginBottom: 8,

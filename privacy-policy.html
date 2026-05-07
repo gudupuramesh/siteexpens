@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — InteriorOS</title>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+  :root{
+    --blue-deep:oklch(38% 0.18 265);
+    --blue-primary:oklch(48% 0.2 265);
+    --blue-mid:oklch(58% 0.16 265);
+    --lavender:oklch(72% 0.1 275);
+    --lavender-light:oklch(92% 0.04 275);
+    --lavender-wash:oklch(97% 0.015 275);
+    --white:#fff;
+    --off-white:#fafbfd;
+    --fg:oklch(18% 0.02 265);
+    --muted:oklch(50% 0.02 265);
+    --border:oklch(90% 0.015 270);
+
+    --font-display:'Iowan Old Style','Charter','Palatino Linotype',Georgia,serif;
+    --font-body:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+
+    --max-w:1200px;
+    --content-w:720px;
+  }
+
+  html{scroll-behavior:smooth}
+  body{font-family:var(--font-body);color:var(--fg);background:var(--white);-webkit-font-smoothing:antialiased;line-height:1.6}
+
+  /* ── Nav ── */
+  .nav{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,0.88);backdrop-filter:blur(20px) saturate(1.4);-webkit-backdrop-filter:blur(20px) saturate(1.4);border-bottom:1px solid var(--border)}
+  .nav-inner{max-width:var(--max-w);margin:0 auto;padding:0 32px;height:64px;display:flex;align-items:center;justify-content:space-between}
+  .nav-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--fg)}
+  .nav-logo{width:36px;height:36px;border-radius:10px;background:var(--blue-primary);display:flex;align-items:center;justify-content:center;color:white;font-family:var(--font-display);font-size:15px;font-weight:700;letter-spacing:-0.02em}
+  .nav-name{font-family:var(--font-display);font-size:18px;font-weight:700;letter-spacing:-0.03em}
+  .nav-links{display:flex;align-items:center;gap:32px;list-style:none}
+  .nav-links a{font-size:14px;font-weight:500;color:var(--muted);text-decoration:none;transition:color 0.2s}
+  .nav-links a:hover{color:var(--fg)}
+  .nav-cta{padding:10px 22px;border-radius:10px;background:var(--blue-primary);color:white !important;font-weight:600;transition:background 0.2s}
+  .nav-cta:hover{background:var(--blue-deep) !important}
+
+  /* ── Page Header ── */
+  .page-header{padding:140px 32px 60px;text-align:center;background:linear-gradient(180deg, var(--lavender-wash) 0%, var(--white) 100%)}
+  .page-header h1{font-family:var(--font-display);font-size:clamp(32px, 4vw, 48px);font-weight:700;letter-spacing:-0.04em;line-height:1.15;color:var(--fg);margin-bottom:12px}
+  .page-header .updated{font-size:15px;color:var(--muted);font-weight:500}
+
+  /* ── Content ── */
+  .policy-content{max-width:var(--content-w);margin:0 auto;padding:40px 32px 100px}
+
+  .policy-content h2{font-family:var(--font-display);font-size:24px;font-weight:700;letter-spacing:-0.02em;line-height:1.3;color:var(--fg);margin-top:48px;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+
+  .policy-content h3{font-family:var(--font-display);font-size:18px;font-weight:700;letter-spacing:-0.01em;line-height:1.4;color:var(--fg);margin-top:28px;margin-bottom:10px}
+
+  .policy-content p{font-size:15px;color:var(--fg);line-height:1.75;margin-bottom:16px}
+
+  .policy-content ul{margin:0 0 16px 0;padding-left:24px;display:flex;flex-direction:column;gap:8px}
+  .policy-content ul li{font-size:15px;color:var(--fg);line-height:1.7}
+
+  .policy-content a{color:var(--blue-primary);text-decoration:underline;text-underline-offset:2px;transition:color 0.2s}
+  .policy-content a:hover{color:var(--blue-deep)}
+
+  .policy-content .intro-lead{font-size:16px;color:var(--muted);line-height:1.75;margin-bottom:24px}
+
+  /* ── Footer ── */
+  .footer{padding:60px 32px 40px;background:var(--off-white);border-top:1px solid var(--border)}
+  .footer-inner{max-width:var(--max-w);margin:0 auto;display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:40px}
+  .footer-brand p{font-size:14px;line-height:1.6;max-width:280px;color:var(--muted);margin-top:12px}
+  .footer h4{font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:16px}
+  .footer ul{list-style:none;display:flex;flex-direction:column;gap:10px}
+  .footer ul a{color:var(--muted);text-decoration:none;font-size:14px;transition:color 0.2s}
+  .footer ul a:hover{color:var(--fg)}
+  .footer-bottom{max-width:var(--max-w);margin:40px auto 0;padding-top:24px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted)}
+
+  /* ── Responsive ── */
+  @media (max-width:768px){
+    .nav-links{display:none}
+    .page-header h1{font-size:28px}
+    .policy-content{padding:32px 20px 80px}
+    .policy-content h2{font-size:20px;margin-top:36px}
+    .policy-content h3{font-size:16px}
+    .footer-inner{grid-template-columns:1fr 1fr}
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Navigation ── -->
+<nav class="nav"><div class="nav-inner">
+  <a href="interioros-landing-2.html" class="nav-brand"><div class="nav-logo">iO</div><span class="nav-name">InteriorOS</span></a>
+  <ul class="nav-links">
+    <li><a href="interioros-landing-2.html#features">Features</a></li>
+    <li><a href="interioros-landing-2.html#solutions">Solutions</a></li>
+    <li><a href="interioros-landing-2.html#testimonials">Testimonials</a></li>
+    <li><a href="interioros-landing-2.html#pricing">Pricing</a></li>
+    <li><a href="interioros-landing-2.html#pricing" class="nav-cta">Get Started Free</a></li>
+  </ul>
+</div></nav>
+
+<!-- ── Page Header ── -->
+<header class="page-header">
+  <h1>Privacy Policy</h1>
+  <p class="updated">Last updated: May 6, 2026</p>
+</header>
+
+<!-- ── Policy Content ── -->
+<main class="policy-content">
+
+  <!-- 1. Introduction -->
+  <h2>1. Introduction</h2>
+  <p class="intro-lead">InteriorOS ("we", "our", or "us") is committed to protecting the privacy of our users. This Privacy Policy explains how we collect, use, store, and share information when you use the InteriorOS platform, including our web application, mobile applications (iOS and Android), and any related services (collectively, the "Service").</p>
+  <p>By accessing or using InteriorOS, you agree to the terms of this Privacy Policy. If you do not agree with this policy, please do not use our Service.</p>
+
+  <!-- 2. Information We Collect -->
+  <h2>2. Information We Collect</h2>
+  <p>We collect information in several ways to provide, improve, and personalize our Service.</p>
+
+  <h3>2.1 Personal Information</h3>
+  <p>When you register for an account, create a studio profile, or interact with the Service, we may collect:</p>
+  <ul>
+    <li>Full name, email address, and phone number</li>
+    <li>Studio or business name and address</li>
+    <li>Role within your organization (e.g., owner, supervisor, designer)</li>
+    <li>Profile photo, if provided</li>
+    <li>Billing and payment information when subscribing to paid plans</li>
+  </ul>
+
+  <h3>2.2 Usage Data</h3>
+  <p>We automatically collect information about how you interact with the Service, including:</p>
+  <ul>
+    <li>Pages and features accessed, actions taken, and time spent</li>
+    <li>Projects created, daily progress reports submitted, and tasks managed</li>
+    <li>Search queries within the application</li>
+    <li>Interaction patterns and feature usage frequency</li>
+    <li>Error logs and crash reports</li>
+  </ul>
+
+  <h3>2.3 Device Information</h3>
+  <p>When you access InteriorOS from a device, we may collect:</p>
+  <ul>
+    <li>Device type, model, and operating system version</li>
+    <li>Unique device identifiers</li>
+    <li>Browser type and version (for web app usage)</li>
+    <li>IP address and approximate geographic location</li>
+    <li>Network information (Wi-Fi or mobile data)</li>
+  </ul>
+
+  <!-- 3. How We Use Your Information -->
+  <h2>3. How We Use Your Information</h2>
+  <p>We use the information we collect for the following purposes:</p>
+  <ul>
+    <li><strong>Provide and operate the Service</strong> — to create and manage your account, enable project management features, process payments, and deliver daily progress reports and notifications.</li>
+    <li><strong>Improve and personalize</strong> — to understand usage patterns, fix bugs, develop new features, and tailor the experience to your studio's needs.</li>
+    <li><strong>Communicate with you</strong> — to send transactional notifications (e.g., approval requests, payment reminders, milestone alerts), respond to support inquiries, and share important product updates.</li>
+    <li><strong>Ensure security</strong> — to detect and prevent fraud, unauthorized access, and other harmful activities.</li>
+    <li><strong>Legal compliance</strong> — to comply with applicable laws, regulations, and legal processes.</li>
+    <li><strong>Analytics and research</strong> — to analyze aggregated, anonymized usage trends to improve our platform for all users.</li>
+  </ul>
+
+  <!-- 4. Data Storage & Security -->
+  <h2>4. Data Storage &amp; Security</h2>
+  <p>We take the security of your data seriously and implement industry-standard measures to protect it.</p>
+  <ul>
+    <li><strong>Encryption</strong> — All data is encrypted in transit using TLS 1.2+ and at rest using AES-256 encryption.</li>
+    <li><strong>Access controls</strong> — We enforce strict role-based access controls internally. Only authorized personnel can access user data, and only when necessary for support or operational purposes.</li>
+    <li><strong>Infrastructure</strong> — Our Service is hosted on secure, SOC 2 compliant cloud infrastructure with regular security audits and vulnerability assessments.</li>
+    <li><strong>Backups</strong> — We perform automated daily backups to ensure data integrity and availability.</li>
+    <li><strong>Data isolation</strong> — Each organization's data is logically isolated. Team members belonging to multiple organizations cannot cross-access data between them.</li>
+  </ul>
+  <p>While we strive to protect your information, no method of electronic storage or transmission is 100% secure. We cannot guarantee absolute security but are committed to promptly notifying affected users in the event of a data breach.</p>
+
+  <!-- 5. Third-Party Services -->
+  <h2>5. Third-Party Services</h2>
+  <p>We may share limited information with trusted third-party service providers who assist in operating our Service:</p>
+  <ul>
+    <li><strong>Payment processing</strong> — We use third-party payment processors to handle billing. We do not store your full credit card or bank details on our servers.</li>
+    <li><strong>Cloud hosting</strong> — Our infrastructure providers store and process data on our behalf under strict data processing agreements.</li>
+    <li><strong>Analytics</strong> — We use analytics tools to understand usage patterns. Data shared with these providers is anonymized or pseudonymized wherever possible.</li>
+    <li><strong>Communication services</strong> — We use third-party providers for sending emails, SMS (OTP verification), and push notifications.</li>
+  </ul>
+  <p>We do not sell your personal information to third parties. We only share data with third parties as described in this policy or with your explicit consent.</p>
+
+  <!-- 6. Your Rights -->
+  <h2>6. Your Rights</h2>
+  <p>You have the following rights regarding your personal data:</p>
+
+  <h3>6.1 Access</h3>
+  <p>You may request a copy of the personal information we hold about you at any time. We will respond to such requests within 30 days.</p>
+
+  <h3>6.2 Correction</h3>
+  <p>If any of your personal information is inaccurate or incomplete, you can update it directly through your account settings, or contact us to request a correction.</p>
+
+  <h3>6.3 Deletion</h3>
+  <p>You may request the deletion of your account and associated personal data. Upon receiving such a request, we will delete your data within 30 days, except where we are required to retain it by law or for legitimate business purposes (e.g., financial records for tax compliance).</p>
+
+  <h3>6.4 Data Portability</h3>
+  <p>You have the right to request your data in a structured, commonly used, machine-readable format (such as CSV or JSON). This includes project data, financial records, and any other information you have contributed to the platform.</p>
+
+  <p>To exercise any of these rights, please contact us at <a href="mailto:privacy@interioros.app">privacy@interioros.app</a>.</p>
+
+  <!-- 7. Cookies -->
+  <h2>7. Cookies</h2>
+  <p>InteriorOS uses cookies and similar technologies to enhance your experience:</p>
+  <ul>
+    <li><strong>Essential cookies</strong> — Required for the Service to function, such as maintaining your login session and remembering your preferences.</li>
+    <li><strong>Analytics cookies</strong> — Help us understand how users interact with our platform so we can improve it. These cookies collect anonymized data.</li>
+    <li><strong>Functional cookies</strong> — Enable enhanced functionality and personalization, such as remembering your preferred language or most recently accessed projects.</li>
+  </ul>
+  <p>We do not use advertising or tracking cookies. You can manage cookie preferences through your browser settings. Note that disabling essential cookies may affect the functionality of the Service.</p>
+
+  <!-- 8. Children's Privacy -->
+  <h2>8. Children's Privacy</h2>
+  <p>InteriorOS is designed for business use by interior design professionals and is not intended for children under the age of 16. We do not knowingly collect personal information from children under 16. If we become aware that we have inadvertently collected data from a child under 16, we will take steps to delete that information promptly.</p>
+  <p>If you are a parent or guardian and believe your child has provided us with personal information, please contact us at <a href="mailto:privacy@interioros.app">privacy@interioros.app</a> so we can take appropriate action.</p>
+
+  <!-- 9. Changes to This Policy -->
+  <h2>9. Changes to This Policy</h2>
+  <p>We may update this Privacy Policy from time to time to reflect changes in our practices, technology, legal requirements, or for other operational reasons. When we make material changes, we will:</p>
+  <ul>
+    <li>Update the "Last updated" date at the top of this page</li>
+    <li>Notify you via email or an in-app notification if the changes are significant</li>
+    <li>Provide a summary of key changes where applicable</li>
+  </ul>
+  <p>We encourage you to review this page periodically to stay informed about how we protect your data. Your continued use of the Service after any changes constitutes your acceptance of the updated policy.</p>
+
+  <!-- 10. Contact Us -->
+  <h2>10. Contact Us</h2>
+  <p>If you have any questions, concerns, or requests regarding this Privacy Policy or how we handle your data, please reach out to us:</p>
+  <ul>
+    <li><strong>Email:</strong> <a href="mailto:privacy@interioros.app">privacy@interioros.app</a></li>
+    <li><strong>Address:</strong> InteriorOS, Hyderabad, Telangana, India</li>
+  </ul>
+  <p>We aim to respond to all privacy-related inquiries within 5 business days.</p>
+
+</main>
+
+<!-- ── Footer ── -->
+<footer class="footer"><div class="footer-inner">
+  <div class="footer-brand"><div class="nav-logo">iO</div><p>InteriorOS is project management software built specifically for interior design studios in India. Replace WhatsApp, Excel, and Tally with one connected platform.</p></div>
+  <div><h4>Product</h4><ul>
+    <li><a href="interioros-landing-2.html">Home</a></li>
+    <li><a href="interioros-landing-2.html#features">Features</a></li>
+    <li><a href="interioros-landing-2.html#pricing">Pricing</a></li>
+    <li><a href="interioros-landing-2.html#testimonials">Testimonials</a></li>
+  </ul></div>
+  <div><h4>Company</h4><ul>
+    <li><a href="about.html">About</a></li>
+    <li><a href="contact.html">Contact</a></li>
+    <li><a href="help-center.html">Help Center</a></li>
+  </ul></div>
+  <div><h4>Legal</h4><ul>
+    <li><a href="privacy-policy.html">Privacy Policy</a></li>
+    <li><a href="terms.html">Terms of Service</a></li>
+  </ul></div>
+</div><div class="footer-bottom"><span>&copy; 2026 InteriorOS. All rights reserved.</span><span>Made with care in Hyderabad</span></div></footer>
+
+</body>
+</html>

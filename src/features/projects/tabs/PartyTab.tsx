@@ -1,14 +1,20 @@
 /**
- * Project Party tab — lists every party involved in this project (derived from
- * transactions + attendance + tasks) plus the app-user team members. Parties
- * with transactions show their running balance; parties brought in only via
- * attendance or task-assignment display their role instead.
+ * Project Party tab — compact team-members chip at top, then full party list
+ * with running balances. Tapping the team chip navigates to the dedicated
+ * Team Members page where invite/role logic lives.
  */
-import { Pressable, SectionList, StyleSheet, View } from 'react-native';
+import { useMemo } from 'react';
+import {
+  FlatList,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
+import { usePendingInvites } from '@/src/features/org/usePendingInvites';
 import { useProjectMembers, type ProjectMember } from '@/src/features/projects/useProjectMembers';
 import { useProjectParties } from '@/src/features/parties/useProjectParties';
 import { getPartyTypeLabel } from '@/src/features/parties/types';
@@ -16,8 +22,12 @@ import type { Party } from '@/src/features/parties/types';
 import { normalizeTransactionType } from '@/src/features/transactions/types';
 import { useTransactions } from '@/src/features/transactions/useTransactions';
 import { formatInr } from '@/src/lib/format';
+import { formatIndianPhone } from '@/src/lib/phone';
 import { Text } from '@/src/ui/Text';
 import { color, screenInset, space } from '@/src/theme';
+
+const AVATAR_COLORS = [color.primary, '#10b981', '#f59e0b', '#8b5cf6', '#ef4444'];
+const MAX_VISIBLE_AVATARS = 3;
 
 type PartyBalance = {
   totalIn: number;
@@ -25,10 +35,6 @@ type PartyBalance = {
   balance: number;
   txnCount: number;
 };
-
-type Row =
-  | { kind: 'member'; member: ProjectMember }
-  | { kind: 'party'; party: Party; balance: PartyBalance | null };
 
 export function PartyTab() {
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
@@ -38,27 +44,35 @@ export function PartyTab() {
   const { members } = useProjectMembers(projectId);
   const { parties, loading: partiesLoading } = useProjectParties(orgId, projectId);
   const { data: transactions, loading: txnsLoading } = useTransactions(projectId);
+  const { data: pending } = usePendingInvites(orgId || null);
 
-  // Aggregate balance per partyId
-  const balanceByPartyId = new Map<string, PartyBalance>();
-  for (const t of transactions) {
-    const key = t.partyId;
-    if (!key) continue;
-    const entry = balanceByPartyId.get(key) ?? {
-      totalIn: 0,
-      totalOut: 0,
-      balance: 0,
-      txnCount: 0,
-    };
-    const isIn = normalizeTransactionType(t.type) === 'payment_in';
-    if (isIn) entry.totalIn += t.amount;
-    else entry.totalOut += t.amount;
-    entry.balance = entry.totalIn - entry.totalOut;
-    entry.txnCount += 1;
-    balanceByPartyId.set(key, entry);
-  }
+  const memberPhoneSet = new Set(
+    members.map((m) => m.phoneNumber).filter((p): p is string => !!p),
+  );
+  const pendingCount = pending.filter(
+    (p) =>
+      !memberPhoneSet.has(p.phoneNumber) &&
+      (p.projectIds.includes(projectId ?? '') || p.projectId === projectId),
+  ).length;
 
-  // Summary totals (across parties only — members don't have balances)
+  const totalTeamCount = members.length + pendingCount;
+
+  const balanceByPartyId = useMemo(() => {
+    const map = new Map<string, PartyBalance>();
+    for (const t of transactions) {
+      const key = t.partyId;
+      if (!key) continue;
+      const entry = map.get(key) ?? { totalIn: 0, totalOut: 0, balance: 0, txnCount: 0 };
+      const isIn = normalizeTransactionType(t.type) === 'payment_in';
+      if (isIn) entry.totalIn += t.amount;
+      else entry.totalOut += t.amount;
+      entry.balance = entry.totalIn - entry.totalOut;
+      entry.txnCount += 1;
+      map.set(key, entry);
+    }
+    return map;
+  }, [transactions]);
+
   let totalAdvancePaid = 0;
   let totalToReceive = 0;
   for (const b of balanceByPartyId.values()) {
@@ -66,57 +80,25 @@ export function PartyTab() {
     if (b.balance > 0) totalToReceive += b.balance;
   }
 
-  const sortedParties = [...parties].sort((a, b) => a.name.localeCompare(b.name));
-
-  const sections: Array<{ title: string; data: Row[] }> = [];
-  if (members.length > 0) {
-    sections.push({
-      title: 'Team',
-      data: members.map((m) => ({ kind: 'member', member: m }) as Row),
-    });
-  }
-  if (sortedParties.length > 0) {
-    sections.push({
-      title: 'Parties',
-      data: sortedParties.map(
-        (p) => ({ kind: 'party', party: p, balance: balanceByPartyId.get(p.id) ?? null }) as Row,
-      ),
-    });
-  }
+  const sortedParties = useMemo(
+    () => [...parties].sort((a, b) => a.name.localeCompare(b.name)),
+    [parties],
+  );
 
   const anyContent = members.length > 0 || sortedParties.length > 0;
   const isLoading = partiesLoading || txnsLoading;
 
-  const renderItem = ({ item }: { item: Row }) => {
-    if (item.kind === 'member') {
-      const initial = item.member.displayName.charAt(0).toUpperCase() || '?';
-      return (
-        <View style={[styles.row, styles.rowStatic]}>
-          <View style={[styles.avatar, styles.avatarMember]}>
-            <Text variant="metaStrong" style={{ color: color.onPrimary }}>
-              {initial}
-            </Text>
-          </View>
-          <View style={styles.body}>
-            <Text variant="rowTitle" color="text" numberOfLines={1}>
-              {item.member.displayName}
-            </Text>
-            <Text variant="meta" color="textMuted">
-              Team member
-            </Text>
-          </View>
-          <View style={styles.memberBadge}>
-            <Ionicons name="shield-checkmark-outline" size={14} color={color.primary} />
-          </View>
-        </View>
-      );
-    }
-
-    const { party, balance } = item;
-    const initial = party.name.charAt(0).toUpperCase() || '?';
+  const renderParty = ({ item }: { item: Party }) => {
+    const balance = balanceByPartyId.get(item.id) ?? null;
+    const initial = item.name.charAt(0).toUpperCase() || '?';
+    const phoneDisplay = formatIndianPhone(item.phone);
     return (
       <Pressable
-        onPress={() => router.push(`/(app)/party/${party.id}` as never)}
+        onPress={() =>
+          router.push(
+            `/(app)/party/${item.id}?projectId=${projectId ?? ''}` as never,
+          )
+        }
         style={({ pressed }) => [styles.row, pressed && { opacity: 0.78 }]}
       >
         <View style={styles.avatar}>
@@ -126,10 +108,11 @@ export function PartyTab() {
         </View>
         <View style={styles.body}>
           <Text variant="rowTitle" color="text" numberOfLines={1}>
-            {party.name}
+            {item.name}
           </Text>
           <Text variant="meta" color="textMuted" numberOfLines={1}>
-            {getPartyTypeLabel(party.partyType)}
+            {getPartyTypeLabel(item.partyType)}
+            {phoneDisplay ? ` · ${phoneDisplay}` : ''}
             {balance ? ` · ${balance.txnCount} txn${balance.txnCount !== 1 ? 's' : ''}` : ''}
           </Text>
         </View>
@@ -154,6 +137,52 @@ export function PartyTab() {
 
   return (
     <View style={styles.container}>
+      {/* Compact team chip */}
+      {totalTeamCount > 0 && (
+        <Pressable
+          onPress={() => router.push(`/(app)/projects/${projectId}/members` as never)}
+          style={({ pressed }) => [styles.teamChip, pressed && { opacity: 0.82 }]}
+        >
+          <View style={styles.avatarStack}>
+            {members.slice(0, MAX_VISIBLE_AVATARS).map((m, i) => {
+              const initial = m.displayName.charAt(0).toUpperCase() || '?';
+              const bg = AVATAR_COLORS[m.uid.charCodeAt(0) % AVATAR_COLORS.length];
+              return (
+                <View
+                  key={m.uid}
+                  style={[
+                    styles.stackAvatar,
+                    { backgroundColor: bg, zIndex: MAX_VISIBLE_AVATARS - i },
+                    i > 0 && { marginLeft: -8 },
+                  ]}
+                >
+                  <Text variant="metaStrong" style={{ color: '#fff', fontSize: 11 }}>
+                    {initial}
+                  </Text>
+                </View>
+              );
+            })}
+            {totalTeamCount > MAX_VISIBLE_AVATARS && (
+              <View style={[styles.overflowCircle, { marginLeft: -8, zIndex: 0 }]}>
+                <Text variant="metaStrong" color="textMuted" style={{ fontSize: 10 }}>
+                  +{totalTeamCount - MAX_VISIBLE_AVATARS}
+                </Text>
+              </View>
+            )}
+          </View>
+          <View style={styles.body}>
+            <Text variant="rowTitle" color="text">
+              {totalTeamCount} {totalTeamCount === 1 ? 'member' : 'members'}
+            </Text>
+            <Text variant="meta" color="textMuted">
+              Tap to view team
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
+        </Pressable>
+      )}
+
+      {/* Summary bar */}
       {balanceByPartyId.size > 0 && (
         <View style={styles.summaryBar}>
           <View style={styles.summaryCell}>
@@ -172,11 +201,12 @@ export function PartyTab() {
         </View>
       )}
 
+      {/* Parties list */}
       {isLoading && !anyContent ? (
         <View style={styles.empty}>
           <Text variant="meta" color="textMuted">Loading…</Text>
         </View>
-      ) : !anyContent ? (
+      ) : sortedParties.length === 0 && members.length === 0 ? (
         <View style={styles.empty}>
           <Ionicons name="people-outline" size={28} color={color.textFaint} />
           <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
@@ -187,31 +217,64 @@ export function PartyTab() {
             project via tasks, attendance, or transactions.
           </Text>
         </View>
-      ) : (
-        <SectionList
-          sections={sections}
-          keyExtractor={(item, index) =>
-            item.kind === 'member' ? `m-${item.member.uid}` : `p-${item.party.id}-${index}`
-          }
-          renderItem={renderItem}
-          renderSectionHeader={({ section }) => (
-            <View style={styles.sectionHeader}>
-              <Text variant="caption" color="textMuted">
-                {section.title.toUpperCase()} · {section.data.length}
-              </Text>
-            </View>
-          )}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContent}
-          stickySectionHeadersEnabled={false}
-        />
-      )}
+      ) : sortedParties.length > 0 ? (
+        <>
+          <View style={styles.sectionHeader}>
+            <Text variant="caption" color="textMuted">
+              PARTIES · {sortedParties.length}
+            </Text>
+          </View>
+          <FlatList
+            data={sortedParties}
+            keyExtractor={(item) => item.id}
+            renderItem={renderParty}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.listContent}
+          />
+        </>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  teamChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    backgroundColor: color.surface,
+    borderWidth: 1,
+    borderColor: color.separator,
+    borderRadius: 10,
+    marginHorizontal: screenInset,
+    marginTop: space.sm,
+    gap: space.sm,
+  },
+  avatarStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  stackAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: color.surface,
+  },
+  overflowCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: color.bgGrouped,
+    borderWidth: 2,
+    borderColor: color.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   summaryBar: {
     flexDirection: 'row',
     backgroundColor: color.bg,
@@ -221,7 +284,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: color.separator,
     overflow: 'hidden',
-    paddingVertical: 0,
     paddingHorizontal: screenInset,
   },
   summaryCell: {
@@ -234,15 +296,15 @@ const styles = StyleSheet.create({
     width: StyleSheet.hairlineWidth,
     backgroundColor: color.separator,
   },
+  sectionHeader: {
+    paddingHorizontal: screenInset,
+    paddingTop: space.md,
+    paddingBottom: space.xs,
+    backgroundColor: color.bgGrouped,
+  },
   listContent: {
     paddingHorizontal: screenInset,
     paddingBottom: 40,
-  },
-  sectionHeader: {
-    paddingHorizontal: 0,
-    paddingTop: space.md,
-    paddingBottom: space.xs,
-    backgroundColor: color.bg,
   },
   row: {
     flexDirection: 'row',
@@ -256,9 +318,6 @@ const styles = StyleSheet.create({
     marginBottom: space.xs,
     gap: space.sm,
   },
-  rowStatic: {
-    opacity: 1,
-  },
   avatar: {
     width: 36,
     height: 36,
@@ -266,9 +325,6 @@ const styles = StyleSheet.create({
     backgroundColor: color.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  avatarMember: {
-    backgroundColor: color.primary,
   },
   body: {
     flex: 1,
@@ -278,14 +334,6 @@ const styles = StyleSheet.create({
   trailing: {
     alignItems: 'flex-end',
     gap: 2,
-  },
-  memberBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: color.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   empty: {
     flex: 1,

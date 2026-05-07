@@ -1,7 +1,7 @@
-import type { FirebaseFirestoreTypes } from '@react-native-firebase/firestore';
+import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
 export type AttendanceStatus = 'present' | 'absent' | 'half_day' | 'paid_leave' | 'week_off';
-export type AttendanceUiStatus = AttendanceStatus | 'unmarked';
+export type AttendanceUiStatus = AttendanceStatus | 'unmarked' | 'loading';
 
 export type ProjectLabour = {
   id: string;

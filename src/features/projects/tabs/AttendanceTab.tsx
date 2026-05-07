@@ -1,5 +1,6 @@
 import { memo, useState, useCallback, useEffect, useMemo } from 'react';
 import {
+  ActivityIndicator,
   FlatList,
   Modal,
   Platform,
@@ -18,6 +19,7 @@ import { markAttendanceForDate, updateAttendanceStatus } from '@/src/features/at
 import type { AttendanceRecord, AttendanceStatus, AttendanceUiStatus } from '@/src/features/attendance/types';
 import { useEffectiveProjectLabour } from '@/src/features/attendance/useEffectiveProjectLabour';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
+import { Can } from '@/src/ui/Can';
 import { Text } from '@/src/ui/Text';
 import { color, radius, screenInset, shadow, space } from '@/src/theme';
 
@@ -55,23 +57,27 @@ const StatusToggle = memo(function StatusToggle({
   status: AttendanceUiStatus;
   onToggle: (s: AttendanceStatus) => void;
 }) {
+  const busy = status === 'loading';
   return (
     <View style={styles.toggleRow}>
       <Pressable
+        disabled={busy}
         onPress={() => onToggle('present')}
-        style={[styles.toggleBtn, status === 'present' && styles.togglePresent]}
+        style={[styles.toggleBtn, status === 'present' && styles.togglePresent, busy && styles.toggleDisabled]}
       >
         <Text variant="caption" style={{ color: status === 'present' ? '#fff' : color.success }}>P</Text>
       </Pressable>
       <Pressable
+        disabled={busy}
         onPress={() => onToggle('absent')}
-        style={[styles.toggleBtn, status === 'absent' && styles.toggleAbsent]}
+        style={[styles.toggleBtn, status === 'absent' && styles.toggleAbsent, busy && styles.toggleDisabled]}
       >
         <Text variant="caption" style={{ color: status === 'absent' ? '#fff' : color.danger }}>A</Text>
       </Pressable>
       <Pressable
+        disabled={busy}
         onPress={() => onToggle('half_day')}
-        style={[styles.toggleBtn, status === 'half_day' && styles.toggleHalf]}
+        style={[styles.toggleBtn, status === 'half_day' && styles.toggleHalf, busy && styles.toggleDisabled]}
       >
         <Text variant="caption" style={{ color: status === 'half_day' ? '#fff' : color.warning }}>H</Text>
       </Pressable>
@@ -95,6 +101,7 @@ export function AttendanceTab() {
   const [actionError, setActionError] = useState<string>();
 
   const handleToggle = useCallback(async (row: AttendanceRow, newStatus: AttendanceStatus) => {
+    if (row.status === 'loading') return;
     if (isFutureDate) return;
     if (!projectId || !user || !orgId) return;
     setActionError(undefined);
@@ -188,6 +195,8 @@ export function AttendanceTab() {
           sourceRecord: day,
         };
       }
+      const fallbackStatus: AttendanceUiStatus =
+        dayLoading && !optimistic ? 'loading' : optimistic ?? 'unmarked';
       return {
         labourId: labour.labourId,
         labourName: labour.labourName,
@@ -195,7 +204,7 @@ export function AttendanceTab() {
         description: labour.description,
         payRate: labour.payRate,
         payUnit: labour.payUnit,
-        status: optimistic ?? 'unmarked',
+        status: fallbackStatus,
       };
     });
 
@@ -218,7 +227,7 @@ export function AttendanceTab() {
 
     merged.sort((a, b) => a.labourName.localeCompare(b.labourName));
     return merged;
-  }, [dayRecords, optimisticByLabour, roster]);
+  }, [dayLoading, dayRecords, optimisticByLabour, roster]);
 
   const summary = useMemo(() => {
     let present = 0;
@@ -274,13 +283,15 @@ export function AttendanceTab() {
         : '';
     const displayStatus: DisplayStatus = item.status;
     const statusMeta =
-      displayStatus === 'present'
-        ? { label: 'PRESENT', bg: color.successSoft, fg: color.success }
-        : displayStatus === 'half_day'
-          ? { label: 'HALF', bg: color.warningSoft, fg: color.warning }
-          : displayStatus === 'absent'
-            ? { label: 'ABSENT', bg: color.dangerSoft, fg: color.danger }
-            : { label: 'UNMARKED', bg: color.surfaceAlt, fg: color.textMuted };
+      displayStatus === 'loading'
+        ? { label: '…', bg: color.surfaceAlt, fg: color.textFaint }
+        : displayStatus === 'present'
+          ? { label: 'PRESENT', bg: color.successSoft, fg: color.success }
+          : displayStatus === 'half_day'
+            ? { label: 'HALF', bg: color.warningSoft, fg: color.warning }
+            : displayStatus === 'absent'
+              ? { label: 'ABSENT', bg: color.dangerSoft, fg: color.danger }
+              : { label: 'UNMARKED', bg: color.surfaceAlt, fg: color.textMuted };
     return (
       <View style={styles.row}>
         <View style={styles.avatar}>
@@ -346,9 +357,14 @@ export function AttendanceTab() {
             <Text variant="caption" color="textMuted" style={styles.summaryKicker} numberOfLines={1}>
               DAY TOTAL · PAYABLE
             </Text>
-            <Text variant="bodyStrong" color="text" style={styles.summaryMain} numberOfLines={1}>
-              {summary.total} workers · {estimatedHours} hrs
-            </Text>
+            <View style={styles.summaryMainRow}>
+              <Text variant="bodyStrong" color="text" style={styles.summaryMain} numberOfLines={1}>
+                {summary.total} workers · {estimatedHours} hrs
+              </Text>
+              {dayLoading && roster.length > 0 ? (
+                <ActivityIndicator size="small" color={color.textMuted} style={styles.summarySpinner} />
+              ) : null}
+            </View>
           </View>
           <Pressable onPress={() => setShowCalendar(true)} style={styles.calendarBtn}>
             <Ionicons name="calendar-outline" size={16} color={color.textMuted} />
@@ -408,16 +424,18 @@ export function AttendanceTab() {
       )}
 
       {!isFutureDate ? (
-        <Pressable
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            router.push(`/(app)/projects/${projectId}/add-labour` as never);
-          }}
-          style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
-          accessibilityLabel="Add labour"
-        >
-          <Ionicons name="add" size={24} color={color.onPrimary} />
-        </Pressable>
+        <Can capability="attendance.write">
+          <Pressable
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push(`/(app)/projects/${projectId}/add-labour` as never);
+            }}
+            style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
+            accessibilityLabel="Add labour"
+          >
+            <Ionicons name="add" size={24} color={color.onPrimary} />
+          </Pressable>
+        </Can>
       ) : null}
 
       {showCalendar ? (
@@ -477,12 +495,14 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
     backgroundColor: color.surface,
+    borderRadius: 10,
     padding: 8,
     gap: 8,
   },
   dateNavBtn: {
     width: 36,
     height: 36,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
     alignItems: 'center',
@@ -509,6 +529,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
     backgroundColor: color.surface,
+    borderRadius: 10,
   },
   summaryKicker: {
     letterSpacing: 1,
@@ -524,10 +545,22 @@ const styles = StyleSheet.create({
   },
   summaryMain: {
     marginTop: 2,
+    flex: 1,
+    minWidth: 0,
+  },
+  summaryMainRow: {
+    marginTop: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  summarySpinner: {
+    marginTop: 2,
   },
   calendarBtn: {
     width: 36,
     height: 36,
+    borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: color.borderStrong,
     alignItems: 'center',
@@ -552,6 +585,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.bgGrouped,
     paddingHorizontal: 8,
     paddingVertical: 4,
+    borderRadius: 8,
   },
   errorPill: {
     marginTop: 10,
@@ -561,6 +595,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.dangerSoft,
     paddingHorizontal: 8,
     paddingVertical: 4,
+    borderRadius: 8,
   },
   errorPillText: {
     color: color.danger,
@@ -620,7 +655,7 @@ const styles = StyleSheet.create({
   toggleBtn: {
     width: 34,
     height: 34,
-    borderRadius: 0,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: color.borderStrong,
     alignItems: 'center',
@@ -638,6 +673,9 @@ const styles = StyleSheet.create({
   toggleHalf: {
     backgroundColor: color.warning,
     borderColor: color.warning,
+  },
+  toggleDisabled: {
+    opacity: 0.4,
   },
   listContent: {
     paddingHorizontal: screenInset,

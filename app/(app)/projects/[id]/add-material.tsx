@@ -92,6 +92,8 @@ export default function AddMaterialScreen() {
         notes: data.notes ?? '',
         createdBy: user.uid,
       });
+      // Snapshot-propagation buffer (see add-transaction.tsx).
+      await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
       setSubmitError((err as Error).message);

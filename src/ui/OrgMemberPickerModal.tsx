@@ -139,8 +139,9 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 15,
+    lineHeight: 20,
     color: color.text,
-    paddingVertical: Platform.OS === 'ios' ? space.xs : 0,
+    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
   },
   list: { paddingHorizontal: screenInset, maxHeight: 420 },
   row: {

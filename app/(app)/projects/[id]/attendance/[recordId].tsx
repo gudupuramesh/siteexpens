@@ -2,11 +2,12 @@ import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +23,7 @@ import {
 import type { AttendanceRecord, ProjectLabour } from '@/src/features/attendance/types';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { Button } from '@/src/ui/Button';
+import { KeyboardFormLayout } from '@/src/ui/KeyboardFormLayout';
 import { Screen } from '@/src/ui/Screen';
 import { Text } from '@/src/ui/Text';
 import { TextField } from '@/src/ui/TextField';
@@ -345,7 +347,11 @@ export default function AttendanceLabourDetailScreen() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <KeyboardFormLayout
+        headerInset={52}
+        contentContainerStyle={styles.scroll}
+        scrollViewProps={{ keyboardDismissMode: 'interactive' }}
+      >
         <View style={styles.card}>
           <Text variant="caption" color="textMuted">WORKER</Text>
           <Text variant="title" color="text" style={{ marginTop: 4 }}>{record.labourName}</Text>
@@ -435,16 +441,28 @@ export default function AttendanceLabourDetailScreen() {
             <Text variant="metaStrong" color="danger">Delete this person from database</Text>
           </Pressable>
         </View>
-      </ScrollView>
 
-      <Modal visible={showEdit} transparent animationType="slide" onRequestClose={() => !saving && setShowEdit(false)}>
-        <Pressable style={styles.overlay} onPress={() => !saving && setShowEdit(false)}>
-          <View />
-        </Pressable>
-        <View style={styles.sheet}>
-          <View style={styles.handle} />
-          <Text variant="bodyStrong" color="text" style={styles.sheetTitle}>Edit Labour Details</Text>
-          <ScrollView contentContainerStyle={styles.sheetBody} keyboardShouldPersistTaps="handled">
+      </KeyboardFormLayout>
+
+      <Modal
+        visible={showEdit}
+        transparent
+        animationType="slide"
+        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+        onRequestClose={() => !saving && setShowEdit(false)}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+          keyboardVerticalOffset={0}
+        >
+          <Pressable style={styles.overlay} onPress={() => !saving && setShowEdit(false)}>
+            <View />
+          </Pressable>
+          <View style={styles.sheet}>
+            <View style={styles.handle} />
+            <Text variant="bodyStrong" color="text" style={styles.sheetTitle}>Edit Labour Details</Text>
+            <ScrollView contentContainerStyle={styles.sheetBody} keyboardShouldPersistTaps="handled" keyboardDismissMode="interactive">
             <TextField
               label="Labour Name"
               value={editingName}
@@ -501,6 +519,7 @@ export default function AttendanceLabourDetailScreen() {
             <Button label="Save Changes" onPress={saveEdit} loading={saving} />
           </View>
         </View>
+        </KeyboardAvoidingView>
       </Modal>
     </Screen>
   );

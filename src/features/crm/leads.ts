@@ -1,5 +1,4 @@
-import firestore from '@react-native-firebase/firestore';
-import { db } from '@/src/lib/firebase';
+import { db, firestore } from '@/src/lib/firebase';
 
 import type {
   LeadPriority,
