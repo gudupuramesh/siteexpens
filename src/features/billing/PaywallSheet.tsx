@@ -41,6 +41,7 @@ import {
   isUnlimited,
   nextTierAbove,
 } from './limits';
+import { usePlanConfig } from './usePlanConfig';
 import type { PlanTier } from './types';
 
 /** Why the paywall is showing — drives the headline copy. */
@@ -77,6 +78,12 @@ export function PaywallSheet({
   reason,
   headline,
 }: PaywallSheetProps) {
+  // Live `system/planConfig` overrides the hardcoded `PLAN_LIMITS` so
+  // the paywall's "1 seat / 1 project / N GB" copy matches whatever
+  // the App Owner has set in the admin portal. Falls back to the
+  // hardcoded constant when the doc hasn't loaded yet.
+  const planConfig = usePlanConfig();
+
   const goToSubscription = useCallback(() => {
     onClose();
     router.push('/(app)/subscription');
@@ -107,7 +114,8 @@ export function PaywallSheet({
           </>
         );
       }
-      if (PLAN_LIMITS[currentTier].maxMembers <= 1) {
+      const liveCurrent = planConfig?.[currentTier] ?? PLAN_LIMITS[currentTier];
+      if (liveCurrent.maxMembers <= 1) {
         return (
           <>
             Your {label} plan includes one team seat. Upgrade to Studio or Agency to add more people.
@@ -120,7 +128,7 @@ export function PaywallSheet({
         Your <Text variant="footnote" color="label">{label}</Text> plan has reached its cap. Upgrade to keep working.
       </>
     );
-  }, [currentTier, reason]);
+  }, [currentTier, reason, planConfig]);
 
   return (
     <Modal
@@ -220,7 +228,11 @@ type PlanCardProps = {
 };
 
 function PlanCard({ tier, isCurrent, isSuggested, onUpgrade }: PlanCardProps) {
-  const limits = PLAN_LIMITS[tier];
+  // Live `system/planConfig` overrides the hardcoded constant. The
+  // `useSyncExternalStore` listener inside `usePlanConfig` is shared
+  // across all cards so N PlanCards = 1 Firestore listener.
+  const planConfig = usePlanConfig();
+  const limits = planConfig?.[tier] ?? PLAN_LIMITS[tier];
   const pricing = PLAN_PRICING_INR[tier];
 
   return (

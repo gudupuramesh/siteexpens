@@ -30,11 +30,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/src/features/auth/useAuth';
+import { isUnlimited } from '@/src/features/billing/limits';
 import { useSubscription } from '@/src/features/billing/useSubscription';
 import { useCurrentOrganization } from '@/src/features/org/useCurrentOrganization';
 import { usePermissions } from '@/src/features/org/usePermissions';
 import { useProjects } from '@/src/features/projects/useProjects';
 import { auth, callFunction } from '@/src/lib/firebase';
+import { formatBytes } from '@/src/lib/format';
 import { openLegalUrl } from '@/src/lib/openLegalUrl';
 
 import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
@@ -59,15 +61,23 @@ export default function AccountTabScreen() {
 
   const { user } = useAuth();
   const { data: org } = useCurrentOrganization();
-  const { effectiveTier, subscription } = useSubscription();
+  // Pull live `limits` + `counters` from `useSubscription` so the
+  // hero card's `used / max` strings reflect the App Owner's latest
+  // edits to `system/planConfig` (no rebuild needed).
+  const { effectiveTier, subscription, limits, counters } = useSubscription();
   const { can, isOwner } = usePermissions();
   const { data: projects } = useProjects();
 
   // ── Derived display fields ────────────────────────────────────────
   const studioName = org?.name ?? 'Studio';
   const tier = (effectiveTier ?? 'free') as 'free' | 'solo' | 'studio' | 'agency';
-  const memberCount = org?.memberIds?.length ?? 0;
-  const projectCount = projects.length;
+  // Prefer the server-maintained `counters` (lives on the org doc and
+  // updates via Firestore triggers) over local `org.memberIds.length`
+  // / `projects.length` so the card stays consistent with the gates
+  // the server enforces. Fall back to local arrays if the counters
+  // haven't been initialised yet (very early bootstrap edge case).
+  const memberCount = counters.memberCount || (org?.memberIds?.length ?? 0);
+  const projectCount = counters.projectCount || projects.length;
   // Subline beneath the studio name — phone is the canonical identifier
   // for our auth (Firebase phone-OTP); fall back to email if absent.
   const cardSubline = user?.phoneNumber ?? user?.email ?? undefined;
@@ -93,6 +103,21 @@ export default function AccountTabScreen() {
     : tier === 'solo' ? 'Solo · ₹499/mo'
     : tier === 'studio' ? 'Studio · ₹1,999/mo'
     : 'Agency · ₹4,999/mo';
+
+  // ── Stat strip strings ────────────────────────────────────────────
+  // Format usage as "used / max" (or "used / ∞" for unlimited tiers)
+  // so the at-a-glance card matches the grammar of the Subscription
+  // screen's "YOUR PLAN" card. Limits come from the live planConfig
+  // (via useSubscription); a hardcoded constant is the safety net.
+  const projectsLine = isUnlimited(limits.maxProjects)
+    ? `${projectCount} / ∞`
+    : `${projectCount} / ${limits.maxProjects}`;
+  const membersLine = isUnlimited(limits.maxMembers)
+    ? `${memberCount} / ∞`
+    : `${memberCount} / ${limits.maxMembers}`;
+  const storageLine = isUnlimited(limits.maxStorageBytes)
+    ? `${formatBytes(counters.storageBytes)} / ∞`
+    : `${formatBytes(counters.storageBytes)} / ${formatBytes(limits.maxStorageBytes)}`;
 
   const billingSubtitleAccess = can('billing.manage');
 
@@ -210,16 +235,19 @@ export default function AccountTabScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl {...refresh.props} />}
       >
-        {/* Hero: studio profile card with the 5 key details */}
+        {/* Hero: studio profile card with the 5 key details. The
+            uploaded logo (if any) replaces the auto initials gradient. */}
         <StudioProfileCard
           studioName={studioName}
           subline={cardSubline}
           tier={tier}
+          logoUrl={(org as { logoUrl?: string | null } | null)?.logoUrl ?? null}
           expiryValue={expiryValue}
           expiryLabel={expiryLabel}
           stats={{
-            projects: String(projectCount),
-            members: String(memberCount),
+            projects: projectsLine,
+            members: membersLine,
+            storage: storageLine,
           }}
         />
 

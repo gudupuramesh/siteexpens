@@ -15,17 +15,22 @@
  * `<AppTabBar>`, so this screen does NOT render its own.
  */
 import { Stack, router } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import {
+  Dimensions,
+  FlatList,
   Linking,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   View,
+  type ViewToken,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 import { useAppointments } from '@/src/features/crm/useAppointments';
 import { useLeads } from '@/src/features/crm/useLeads';
@@ -181,6 +186,48 @@ export default function CrmTabScreen() {
   const [apptFilter, setApptFilter] = useState<ApptFilterKey>('all');
   const [query, setQuery] = useState('');
 
+  // ── Sub-tab pager (swipe between Leads / Appointments / … ) ──
+  // Pattern mirrors the project-detail TabPager: the SubTabs strip
+  // updates `subTab` on tap, which scrolls the pager; the pager's
+  // `onViewableItemsChanged` updates `subTab` on swipe — gated by
+  // `isUserSwipe` so the two paths don't fight each other.
+  const pagerRef = useRef<FlatList<{ key: SubTabKey; label: string }>>(null);
+  const isUserSwipe = useRef(true);
+
+  const handleSubTabChange = useCallback((key: SubTabKey) => {
+    setSubTab(key);
+    const idx = SUB_TABS.findIndex((tt) => tt.key === key);
+    if (idx >= 0) {
+      isUserSwipe.current = false;
+      pagerRef.current?.scrollToIndex({ index: idx, animated: true });
+    }
+  }, []);
+
+  const onViewableItemsChanged = useRef(
+    ({ viewableItems }: { viewableItems: ViewToken[] }) => {
+      if (viewableItems.length > 0 && isUserSwipe.current) {
+        const key = viewableItems[0].item.key as SubTabKey;
+        setSubTab(key);
+      }
+    },
+  ).current;
+
+  const onScrollBeginDrag = useCallback(() => {
+    isUserSwipe.current = true;
+  }, []);
+
+  const onMomentumScrollEnd = useCallback(() => {
+    isUserSwipe.current = true;
+  }, []);
+
+  const initialPagerIndex = useMemo(
+    () => Math.max(0, SUB_TABS.findIndex((tt) => tt.key === subTab)),
+    // Capture the FIRST subTab value only — the pager is uncontrolled
+    // after mount; later changes go through `handleSubTabChange`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
   // Counts per filter, used as badges on the chips
   const counts = useMemo(() => {
     const m: Record<string, number> = { all: leads.length };
@@ -331,22 +378,51 @@ export default function CrmTabScreen() {
       </View>
 
       {/* Sub-tabs strip */}
-      <SubTabs items={SUB_TABS} selected={subTab} onChange={(k) => setSubTab(k)} />
+      <SubTabs items={SUB_TABS} selected={subTab} onChange={handleSubTabChange} />
 
-      <ScrollView
-        contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={[
-          styles.scroll,
-          { paddingBottom: t.region.tabBarBuffer + 24 },
-        ]}
-        showsVerticalScrollIndicator={false}
+      {/* Swipeable pager — one page per sub-tab. Each page is a full
+          ScrollView with the tab's KPI / search / filter / body chrome.
+          The header + SubTabs above stay fixed; only the scroll body
+          slides under the swipe gesture. */}
+      <FlatList
+        ref={pagerRef}
+        data={SUB_TABS}
+        keyExtractor={(item) => item.key}
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        bounces={false}
+        initialScrollIndex={initialPagerIndex}
+        removeClippedSubviews={false}
+        initialNumToRender={SUB_TABS.length}
+        maxToRenderPerBatch={SUB_TABS.length}
+        windowSize={SUB_TABS.length + 2}
+        getItemLayout={(_, index) => ({
+          length: SCREEN_WIDTH,
+          offset: SCREEN_WIDTH * index,
+          index,
+        })}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={{ itemVisiblePercentThreshold: 60 }}
+        onScrollBeginDrag={onScrollBeginDrag}
+        onMomentumScrollEnd={onMomentumScrollEnd}
         keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-        refreshControl={<RefreshControl {...refresh.props} />}
-      >
+        renderItem={({ item }) => (
+          <View style={{ width: SCREEN_WIDTH, flex: 1 }}>
+            <ScrollView
+              contentInsetAdjustmentBehavior="never"
+              contentContainerStyle={[
+                styles.scroll,
+                { paddingBottom: t.region.tabBarBuffer + 24 },
+              ]}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              refreshControl={<RefreshControl {...refresh.props} />}
+            >
         {/* KPI strip — Leads tab shows pipeline/hot/conversion;
             Appointments tab shows today/week/past-due. */}
-        {subTab === 'leads' ? (
+        {item.key === 'leads' ? (
           <View style={styles.kpiRow}>
             <KpiCard
               caption="Pipeline"
@@ -367,7 +443,7 @@ export default function CrmTabScreen() {
               sub={`${kpi.won} won`}
             />
           </View>
-        ) : subTab === 'appointments' ? (
+        ) : item.key === 'appointments' ? (
           <View style={styles.kpiRow}>
             <KpiCard
               caption="Today"
@@ -396,9 +472,9 @@ export default function CrmTabScreen() {
             value={query}
             onChangeText={setQuery}
             placeholder={
-              subTab === 'leads'
+              item.key === 'leads'
                 ? 'Search leads, phone, location'
-                : subTab === 'appointments'
+                : item.key === 'appointments'
                   ? 'Search appointments'
                   : 'Search'
             }
@@ -406,7 +482,7 @@ export default function CrmTabScreen() {
         </View>
 
         {/* Filter chips — Leads → status chips, Appointments → status chips. */}
-        {subTab === 'leads' ? (
+        {item.key === 'leads' ? (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -422,7 +498,7 @@ export default function CrmTabScreen() {
               />
             ))}
           </ScrollView>
-        ) : subTab === 'appointments' ? (
+        ) : item.key === 'appointments' ? (
           <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -442,7 +518,7 @@ export default function CrmTabScreen() {
 
         {/* Body */}
         <View style={styles.body}>
-          {subTab === 'leads' ? (
+          {item.key === 'leads' ? (
             leadsLoading && leads.length === 0 ? (
               <EmptyOrLoading icon="hourglass-outline" title="Loading leads…" />
             ) : visibleLeads.length === 0 ? (
@@ -477,7 +553,7 @@ export default function CrmTabScreen() {
                 </Text>
               </>
             )
-          ) : subTab === 'appointments' ? (
+          ) : item.key === 'appointments' ? (
             appointmentsLoading && appointments.length === 0 ? (
               <EmptyOrLoading icon="hourglass-outline" title="Loading appointments…" />
             ) : visibleAppointments.length === 0 ? (
@@ -527,10 +603,10 @@ export default function CrmTabScreen() {
             )
           ) : (
             <ComingSoon
-              icon={subTab === 'quotation' ? 'document-text-outline' : 'receipt-outline'}
-              title={subTab === 'quotation' ? 'Quotation' : 'Invoice'}
+              icon={item.key === 'quotation' ? 'document-text-outline' : 'receipt-outline'}
+              title={item.key === 'quotation' ? 'Quotation' : 'Invoice'}
               message={
-                subTab === 'quotation'
+                item.key === 'quotation'
                   ? 'Generate quotations from leads, send via WhatsApp, and convert won quotations to projects in one tap.'
                   : 'GST-ready invoices linked to projects and parties — track paid · partial · pending against the project ledger.'
               }
@@ -538,6 +614,9 @@ export default function CrmTabScreen() {
           )}
         </View>
       </ScrollView>
+          </View>
+        )}
+      />
 
       {/* FAB — context-aware */}
       {showFab ? (

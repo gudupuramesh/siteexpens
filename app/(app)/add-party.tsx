@@ -3,28 +3,30 @@
  *
  * Layout:
  *   1. SheetHeader: Cancel · "New party" / "Edit party" · Save
- *   2. "Pick from contacts" pill (dashed blue)
- *   3. FormGroup "Type" — opens TypePickerSheet (sectioned General/Vendor)
- *   4. FormGroup "Identity" — Name + Phone + Email + Father + Joined date
- *   5. FormGroup "Address" — Street + City + State + Pincode
- *   6. FormGroup "Compliance (optional)" — Aadhar + PAN
- *   7. FormGroup "Opening balance" — Amount + To-pay/To-receive pill row
- *   8. FormGroup "Bank (optional)" — Holder + Bank + Account + IFSC + Branch + UPI + IBAN
+ *   2. FormGroup "Type" — opens TypePickerSheet (sectioned General/Vendor)
+ *   3. FormGroup "Identity" — Name + Phone + Email + Father + Joined date
+ *   4. FormGroup "Address" — Street + City + State + Pincode
+ *   5. FormGroup "Compliance (optional)" — Aadhar + PAN
+ *   6. FormGroup "Opening balance" — Amount + To-pay/To-receive pill row
+ *   7. FormGroup "Bank (optional)" — Holder + Bank + Account + IFSC + Branch + UPI + IBAN
+ *
+ * Manual entry only — there is no native iOS contact picker on this
+ * form. Phonebook contacts are surfaced inline by `/select-party`
+ * (the unified party picker), which is the canonical way to bring a
+ * contact into the system. This screen accepts optional `prefillName`
+ * / `prefillPhone` query params for the case where `/select-party`
+ * routed here after the user tapped a contact.
  *
  * Preserves all existing schema validation, Firestore writes
- * (createParty/updateParty), the contacts picker pipeline, and the
- * defensive `safeDate` + `dropUndefined` helpers (Firestore rejects
- * `undefined` values).
+ * (createParty/updateParty), and the defensive `safeDate` +
+ * `dropUndefined` helpers (Firestore rejects `undefined` values).
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import * as Contacts from 'expo-contacts';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
-  InteractionManager,
-  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -232,48 +234,6 @@ export default function AddPartyScreen() {
     if (prefillPhone) setValue('phone', prefillPhone, { shouldValidate: true });
   }, [isEdit, prefillName, prefillPhone, setValue]);
 
-  // Contact picker
-  const pickContact = useCallback(async () => {
-    Keyboard.dismiss();
-    try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
-        return;
-      }
-      await new Promise<void>((resolve) => {
-        InteractionManager.runAfterInteractions(() => {
-          setTimeout(resolve, 320);
-        });
-      });
-      const result = await Contacts.presentContactPickerAsync();
-      if (!result) return;
-
-      const contactName =
-        result.name ??
-        [result.firstName, result.lastName].filter(Boolean).join(' ') ??
-        '';
-      if (contactName) setValue('name', contactName, { shouldValidate: true });
-
-      const raw =
-        result.phoneNumbers?.find(
-          (p) => (p.number ?? p.digits ?? '').replace(/\D/g, '').length >= 10,
-        ) ?? result.phoneNumbers?.[0];
-      const phone = raw?.number ?? raw?.digits ?? '';
-      if (phone) {
-        setValue('phone', phone.replace(/[^\d+]/g, ''), { shouldValidate: true });
-      }
-
-      const email = result.emails?.[0]?.email;
-      if (email) setValue('email', email, { shouldValidate: true });
-    } catch (e) {
-      Alert.alert(
-        'Contacts',
-        e instanceof Error ? e.message : 'Could not open the contact picker.',
-      );
-    }
-  }, [setValue]);
-
   async function onSubmit(data: FormData) {
     if (!user || !orgId) return;
     setSubmitError(undefined);
@@ -396,39 +356,6 @@ export default function AddPartyScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Pick from Contacts */}
-          {!isEdit ? (
-            <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
-              <Pressable
-                onPress={pickContact}
-                style={({ pressed }) => [
-                  styles.contactBtn,
-                  {
-                    backgroundColor:
-                      t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
-                    borderRadius: t.radii.field,
-                    borderColor: t.palette.blue.base + '33',
-                    borderWidth: t.hairline,
-                    borderStyle: 'dashed',
-                  },
-                  pressed && { opacity: 0.85 },
-                ]}
-              >
-                <Ionicons name="person-add" size={18} color={t.palette.blue.base} />
-                <Text
-                  variant="callout"
-                  style={{
-                    color: t.palette.blue.base,
-                    fontWeight: '700',
-                    marginLeft: 8,
-                  }}
-                >
-                  Pick from contacts
-                </Text>
-              </Pressable>
-            </View>
-          ) : null}
-
           {/* Type */}
           <FormGroup header="Type">
             <Row
@@ -1016,14 +943,6 @@ function TypePickerSheet({
 }
 
 const styles = StyleSheet.create({
-  contactBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-  },
-
   // Balance pill row
   balanceRow: {
     flexDirection: 'row',

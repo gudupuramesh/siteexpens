@@ -1,24 +1,29 @@
 /**
- * Sign-in — restored InteriorScene background, iOS 26 styled card.
+ * Sign-in — clean white field with line-art InteriorScene at the bottom.
  *
- * Background: full-bleed `<InteriorScene/>` illustration (the herringbone
- * floor + window + plant scene that gives the auth flow its identity).
+ * Foreground (top → bottom):
+ *   • Magazine-style brand hero — left-aligned monogram + serif wordmark
+ *   • Flat phone field (iOS pill with India flag chip) — no card chrome
+ *   • Blue pill "Send OTP →" CTA
+ *   • "★ #1 App for Interior Designers" trust tagline
+ *   • Tiny "Terms / Privacy Policy" legal footer
  *
- * Foreground: a frosted `<BlurView>` glass card holding an iOS-style
- * grouped form — uppercase eyebrow label, big rounded country-chip +
- * phone field, helper line, full-width pill CTA, terms footer.
+ * The frosted-glass card is gone — the InteriorScene is now a quiet
+ * line drawing on pure white, so the form sits directly on it without
+ * needing its own surface.
  *
- * Logic preserved from the previous version:
- *   - Same MSG91 + Firebase custom-token flow via `sendOtp`
- *   - Same `nationalDigitsIndia` digit-strip handling for paste-with-91
- *   - Same dev-bypass via `EXPO_PUBLIC_DEV_LOGIN_PHONE` (in `phoneAuth.ts`)
- *   - Same error states + 10-digit validation
- *   - Display still formatted "98765 43210"; submit is `+91XXXXXXXXXX`
+ * Logic preserved:
+ *   - MSG91 + Firebase custom-token flow via `sendOtp`
+ *   - `nationalDigitsIndia` digit-strip handling for paste-with-91
+ *   - Dev-bypass via `EXPO_PUBLIC_DEV_LOGIN_PHONE` (in `phoneAuth.ts`)
+ *   - 10-digit validation + error states
+ *   - Display formatted "98765 43210"; submit is `+91XXXXXXXXXX`
  */
 import { router } from 'expo-router';
 import { useState } from 'react';
 import {
   ActivityIndicator,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -28,22 +33,23 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle, Rect } from 'react-native-svg';
+import Svg, { Circle, Path as SvgPath, Rect } from 'react-native-svg';
 
 import { sendOtp } from '@/src/features/auth/phoneAuth';
 import { setPendingConfirmation } from '@/src/features/auth/pendingConfirmation';
 
 import { InteriorScene } from '@/src/ui/brand/InteriorScene';
-import { SquareMonogram } from '@/src/ui/brand/SquareMonogram';
 import { Wordmark } from '@/src/ui/brand/Wordmark';
-import { TrustBadge } from '@/src/ui/brand/TrustBadge';
+
+// Real InteriorOS app icon (the same PNG that ships in the bundle).
+const APP_ICON = require('../../assets/images/icon.png');
 import { AppearOnMount } from '@/src/ui/v2/AppearOnMount';
 import { Text } from '@/src/ui/v2/Text';
 import { useThemeV2 } from '@/src/theme/v2';
 
 const COUNTRY_CODE = '+91';
+const TRUST_RED = '#E63946';
 
 /** User may type/paste `91XXXXXXXXXX` while the field already shows
  *  `+91`. Strip repeated `91` prefixes until we have 10 digits. */
@@ -71,6 +77,19 @@ function IndiaFlag() {
       <Rect y={4.67} width={20} height={4.67} fill="#FFFFFF" />
       <Rect y={9.33} width={20} height={4.67} fill="#138808" />
       <Circle cx={10} cy={7} r={1.6} fill="none" stroke="#000080" strokeWidth={0.5} />
+    </Svg>
+  );
+}
+
+/** Filled star glyph used by the trust tagline. Inline SVG keeps the
+ *  red consistent across themes without pulling in an icon dependency. */
+function StarGlyph() {
+  return (
+    <Svg width={12} height={12} viewBox="0 0 24 24">
+      <SvgPath
+        d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+        fill={TRUST_RED}
+      />
     </Svg>
   );
 }
@@ -108,7 +127,7 @@ export default function SignInScreen() {
 
   return (
     <View style={styles.root}>
-      {/* Full-bleed brand illustration */}
+      {/* White-field line-art interior scene (bottom-anchored) */}
       <InteriorScene />
 
       <KeyboardAvoidingView
@@ -127,130 +146,122 @@ export default function SignInScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Magazine-style hero — left-aligned monogram + serif wordmark.
-              SquareMonogram's `animated` mode draws the outer ring on
-              mount, giving the splash a subtle premium reveal. */}
+          {/* Two top-level blocks — `justifyContent: 'space-between'`
+              on the scroll puts the brand+form column at the top and
+              the trust footer at the bottom. The brand-to-form gap is
+              controlled by `hero.marginBottom` so the logo and the
+              phone field sit close together as one visual unit. */}
+
           <View style={styles.column}>
+            {/* Centered brand hero — app icon + serif wordmark */}
             <AppearOnMount rise={10}>
               <View style={styles.hero}>
-                <SquareMonogram
-                  size={48}
-                  animated
-                  ringDelay={140}
-                  style={styles.monogram}
+                <Image
+                  source={APP_ICON}
+                  style={styles.appIcon}
+                  resizeMode="contain"
+                  accessibilityIgnoresInvertColors
                 />
-                <Wordmark size="lg" font="serif" align="left" />
+                <Wordmark size="lg" font="serif" align="center" showTagline={false} />
               </View>
             </AppearOnMount>
 
-            {/* iOS-style glass card — staggered after the hero */}
-            <AppearOnMount delay={140} rise={18} style={styles.cardShell}>
-              <BlurView
-                intensity={24}
-                tint="light"
-                style={StyleSheet.absoluteFill}
+            {/* Form — phone, terms (right under the number), CTA */}
+            <AppearOnMount delay={140} rise={18}>
+              {/* Phone field — country chip + input */}
+            <View
+              style={[
+                styles.phoneField,
+                {
+                  borderColor: error ? '#FF3B30' : 'rgba(0,0,0,0.08)',
+                  borderWidth: error ? 1.5 : StyleSheet.hairlineWidth,
+                },
+              ]}
+            >
+              <View style={styles.countryChip}>
+                <IndiaFlag />
+                <Text style={styles.countryCodeText}>
+                  {COUNTRY_CODE}
+                </Text>
+              </View>
+              <View style={styles.divider} />
+              <TextInput
+                value={formatNationalIN(national10)}
+                onChangeText={(tx) => {
+                  let d = tx.replace(/\D/g, '');
+                  while (d.length > 10 && d.startsWith('91')) d = d.slice(2);
+                  d = d.slice(0, 10);
+                  setPhone(d);
+                  if (error) setError(undefined);
+                }}
+                placeholder="98765 43210"
+                placeholderTextColor="rgba(60,60,67,0.36)"
+                keyboardType="phone-pad"
+                autoComplete="tel"
+                autoCorrect={false}
+                maxLength={11 /* 5 + space + 5 */}
+                editable={!submitting}
+                returnKeyType="done"
+                onSubmitEditing={() => void handleSendOtp()}
+                style={styles.phoneInput}
               />
-              <View style={styles.cardOverlay} pointerEvents="none" />
+            </View>
 
-              <View style={styles.cardBody}>
-                <Text
-                  variant="caption2"
-                  style={styles.eyebrow}
-                >
-                  SIGN IN TO CONTINUE
-                </Text>
+            {error ? (
+              <Text variant="caption2" style={styles.errorText}>
+                {error}
+              </Text>
+            ) : null}
 
-                {/* Phone field — country chip + input */}
-                <View
-                  style={[
-                    styles.phoneField,
-                    {
-                      borderColor: error ? '#FF3B30' : 'rgba(0,0,0,0.08)',
-                      borderWidth: error ? 1.5 : StyleSheet.hairlineWidth,
-                    },
-                  ]}
-                >
-                  <View style={styles.countryChip}>
-                    <IndiaFlag />
-                    <Text style={styles.countryCodeText}>
-                      {COUNTRY_CODE}
-                    </Text>
-                  </View>
-                  <View style={styles.divider} />
-                  <TextInput
-                    value={formatNationalIN(national10)}
-                    onChangeText={(tx) => {
-                      let d = tx.replace(/\D/g, '');
-                      while (d.length > 10 && d.startsWith('91')) d = d.slice(2);
-                      d = d.slice(0, 10);
-                      setPhone(d);
-                      if (error) setError(undefined);
-                    }}
-                    placeholder="98765 43210"
-                    placeholderTextColor="rgba(60,60,67,0.36)"
-                    keyboardType="phone-pad"
-                    autoComplete="tel"
-                    autoCorrect={false}
-                    maxLength={11 /* 5 + space + 5 */}
-                    editable={!submitting}
-                    returnKeyType="done"
-                    onSubmitEditing={() => void handleSendOtp()}
-                    style={styles.phoneInput}
+            {/* Terms — sits right under the phone number, contextual
+                to the action the user is about to take */}
+            <Text style={styles.terms}>
+              By continuing you agree to our{' '}
+              <Text style={styles.termsLink}>Terms</Text>{' '}
+              &amp;{' '}
+              <Text style={styles.termsLink}>Privacy Policy</Text>.
+            </Text>
+
+            <Pressable
+              onPress={() => void handleSendOtp()}
+              disabled={!canSubmit}
+              style={({ pressed }) => [
+                styles.cta,
+                {
+                  backgroundColor: t.palette.blue.base,
+                },
+                pressed && { opacity: 0.85 },
+                !canSubmit && { opacity: 0.5 },
+              ]}
+            >
+              {submitting ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <>
+                  <Text style={styles.ctaText}>Send OTP</Text>
+                  <Ionicons
+                    name="arrow-forward"
+                    size={16}
+                    color="#fff"
+                    style={{ marginLeft: 8 }}
                   />
-                </View>
-
-                {error ? (
-                  <Text variant="caption2" style={styles.errorText}>
-                    {error}
-                  </Text>
-                ) : null}
-
-                <Text variant="footnote" style={styles.helper}>
-                  We'll send a 6-digit OTP to verify it's you.
-                </Text>
-
-                <Pressable
-                  onPress={() => void handleSendOtp()}
-                  disabled={!canSubmit}
-                  style={({ pressed }) => [
-                    styles.cta,
-                    {
-                      backgroundColor: t.palette.blue.base,
-                    },
-                    pressed && { opacity: 0.85 },
-                    !canSubmit && { opacity: 0.5 },
-                  ]}
-                >
-                  {submitting ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <>
-                      <Text style={styles.ctaText}>Send OTP</Text>
-                      <Ionicons
-                        name="arrow-forward"
-                        size={16}
-                        color="#fff"
-                        style={{ marginLeft: 8 }}
-                      />
-                    </>
-                  )}
-                </Pressable>
-
-                <Text style={styles.terms}>
-                  By continuing you agree to our{' '}
-                  <Text style={styles.termsLink}>Terms</Text>{' '}
-                  &amp;{' '}
-                  <Text style={styles.termsLink}>Privacy Policy</Text>.
-                </Text>
-              </View>
-            </AppearOnMount>
+                </>
+              )}
+            </Pressable>
+          </AppearOnMount>
           </View>
 
-          {/* Footer trust stamp — staggered last */}
-          <AppearOnMount delay={300} rise={6}>
-            <View style={styles.footer}>
-              <TrustBadge />
+          {/* Bottom: trust block (★ #1 + Trusted by …) */}
+          <AppearOnMount delay={260} rise={6} style={styles.footer}>
+            <View style={styles.trustRow}>
+              <StarGlyph />
+              <Text style={styles.trustText}>
+                #1 App for Interior Designers
+              </Text>
             </View>
+            <Text style={styles.trustedBy}>
+              Trusted by 10,000+ designers across India
+            </Text>
           </AppearOnMount>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -264,6 +275,7 @@ const styles = StyleSheet.create({
   scroll: {
     flexGrow: 1,
     paddingHorizontal: 24,
+    // Column floats up, footer hugs the bottom of the screen
     justifyContent: 'space-between',
   },
   column: {
@@ -272,39 +284,26 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
 
-  // Hero
+  // Centered brand hero — app icon stacked above the wordmark.
+  // Tight gap to the form (logo + phone field read as one unit).
   hero: {
-    alignItems: 'flex-start',
-    marginBottom: 40,
+    alignItems: 'center',
+    marginBottom: 36,
   },
-  monogram: { marginBottom: 16 },
-
-  // Glass card
-  cardShell: {
-    borderRadius: 22,
-    overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(0,0,0,0.08)',
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: 18,
+  appIcon: {
+    width: 64,
+    height: 64,
+    // iOS app-icon corner radius is ~22.37% of width — round shape
+    // matches what the user sees on the home screen.
+    borderRadius: 14,
+    marginBottom: 14,
+    // Subtle lift so the icon doesn't feel pasted onto the white field.
+    // (No `overflow: 'hidden'` — that would clip the shadow on iOS;
+    // <Image> with borderRadius already rounds the corners natively.)
+    shadowColor: '#0E5BA8',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
-  },
-  cardOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(255,255,255,0.78)',
-  },
-  cardBody: {
-    position: 'relative',
-    paddingHorizontal: 22,
-    paddingVertical: 26,
-  },
-  eyebrow: {
-    color: 'rgba(60,60,67,0.6)',
-    letterSpacing: 1.2,
-    fontWeight: '700',
-    marginBottom: 16,
-    textAlign: 'center',
   },
 
   // Phone field — iOS pill with country chip on the left
@@ -323,8 +322,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 10,
     paddingVertical: 8,
-    backgroundColor: 'rgba(255,255,255,0.7)',
+    backgroundColor: '#FFFFFF',
     borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(0,0,0,0.06)',
   },
   countryCodeText: {
     color: 'rgba(0,0,0,0.92)',
@@ -353,11 +354,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     paddingHorizontal: 4,
   },
-  helper: {
-    color: 'rgba(60,60,67,0.6)',
-    marginTop: 14,
-    textAlign: 'center',
-  },
 
   // CTA
   cta: {
@@ -366,7 +362,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 15,
     borderRadius: 999,
-    marginTop: 18,
+    marginTop: 16,
     shadowColor: '#0A84FF',
     shadowOpacity: 0.2,
     shadowRadius: 14,
@@ -379,21 +375,43 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
 
-  // Terms
+  // Terms — directly under the phone field
   terms: {
-    color: 'rgba(60,60,67,0.5)',
+    color: 'rgba(60,60,67,0.55)',
     fontSize: 11,
     lineHeight: 15,
     textAlign: 'center',
-    marginTop: 14,
+    marginTop: 12,
+    paddingHorizontal: 12,
   },
   termsLink: {
     color: '#0A84FF',
     fontWeight: '600',
   },
 
+  // Bottom trust footer (★ #1 App + Trusted by …)
   footer: {
     alignItems: 'center',
     paddingTop: 28,
+    paddingBottom: 4,
+    gap: 4,
+  },
+  trustRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  trustText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: TRUST_RED,
+    letterSpacing: 0.2,
+  },
+  trustedBy: {
+    fontSize: 11,
+    color: 'rgba(60,60,67,0.55)',
+    letterSpacing: 0.2,
+    textAlign: 'center',
   },
 });

@@ -56,6 +56,10 @@ import { formatInr } from '@/src/lib/format';
 
 import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
 import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import {
+  ProjectAmountSparkline,
+  type SparkBar,
+} from '@/src/ui/v2/ProjectAmountSparkline';
 import { FAB } from '@/src/ui/v2/FAB';
 import { OrgSwitcher } from '@/src/ui/v2/OrgSwitcher';
 import { SelectSheet } from '@/src/ui/v2/SelectSheet';
@@ -87,6 +91,33 @@ function projectCashMtd(transactions: Transaction[]) {
   }
   return { income, expense };
 }
+
+/** Per-project MTD net balance (income − expense) for the current
+ *  month. Returned sorted by descending |balance| so the most-active
+ *  projects render leftmost in the hero-zone sparkline. Used to feed
+ *  `<ProjectAmountSparkline>`; the dummy padding is added downstream. */
+function projectMtdBalances(transactions: Transaction[]): number[] {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const map = new Map<string, number>();
+  for (const tx of transactions) {
+    const d = tx.date?.toDate?.() ?? tx.createdAt?.toDate?.();
+    if (!d || d.getFullYear() !== y || d.getMonth() !== m) continue;
+    const kind = normalizeTransactionType(tx.type);
+    const sign = kind === 'payment_in' ? 1 : -1;
+    map.set(tx.projectId, (map.get(tx.projectId) ?? 0) + sign * tx.amount);
+  }
+  const arr = Array.from(map.values()).filter((v) => v !== 0);
+  arr.sort((a, b) => Math.abs(b) - Math.abs(a));
+  return arr;
+}
+
+/** Hero-zone sparkline target slot count. Real per-project bars fill
+ *  from the left; remaining slots are padded with grey dummies so the
+ *  chart always has a stable shape — even on a fresh studio with one
+ *  project. */
+const SPARKLINE_TARGET_BARS = 8;
 
 const STATUS_LABELS: Record<ProjectStatus, string> = {
   active: 'Active',
@@ -184,13 +215,19 @@ export default function ProjectsTabScreen() {
   const { data: materialRequests } = useOrgMaterialRequests(orgId);
   const { openCount } = useOrgOpenTaskCount(orgId);
 
-  const activeProjectCount = useMemo(
-    () => projects.filter((p) => p.status === 'active').length,
-    [projects],
-  );
   const pendingMaterialCount = useMemo(
     () => materialRequests.filter((r) => r.status === 'pending').length,
     [materialRequests],
+  );
+  // Transactions a supervisor / site engineer submitted for an admin
+  // to review (workflowStatus === 'pending_approval'). Drives the
+  // home-tab summary card's APPROVALS cell + the org-wide approvals
+  // inbox screen. Same `transactions` array that feeds the hero
+  // numbers, so the count is always in lock-step with the ledger.
+  const pendingApprovalCount = useMemo(
+    () =>
+      transactions.filter((t) => t.workflowStatus === 'pending_approval').length,
+    [transactions],
   );
 
   const canSeeProjectFinance =
@@ -206,6 +243,23 @@ export default function ProjectsTabScreen() {
   // Mirrors the same computation on the Overview tab so the two screens
   // never disagree.
   const projectMtd = useMemo(() => projectCashMtd(transactions), [transactions]);
+  // Per-project bars for the hero-zone sparkline. Real bars come from
+  // `projectMtdBalances` (sorted by |balance|, biggest first); we then
+  // pad with grey dummies up to SPARKLINE_TARGET_BARS so the chart has
+  // a stable shape — even on day-one studios with one project. As the
+  // user adds projects + revenue, real bars displace the dummies from
+  // the left.
+  const sparklineBars = useMemo<SparkBar[]>(() => {
+    const real = projectMtdBalances(transactions).slice(0, SPARKLINE_TARGET_BARS);
+    const realBars: SparkBar[] = real.map((v) => ({ value: v }));
+    if (realBars.length >= SPARKLINE_TARGET_BARS) return realBars;
+    const padCount = SPARKLINE_TARGET_BARS - realBars.length;
+    const dummies: SparkBar[] = Array.from({ length: padCount }, () => ({
+      value: 0,
+      isDummy: true,
+    }));
+    return [...realBars, ...dummies];
+  }, [transactions]);
   const combined = useMemo(() => {
     const inTotal = projectMtd.income + finMtd.income;
     const outTotal = projectMtd.expense + finMtd.expense;
@@ -346,7 +400,7 @@ export default function ProjectsTabScreen() {
         >
           {canSeeProjectFinance ? (
             <View style={styles.summaryFinance}>
-              {/* Zone 1 — period label + margin pill */}
+              {/* Zone 1 — period label + margin pill (full-width row). */}
               <View style={styles.summaryTopRow}>
                 <Text
                   variant="caption2"
@@ -360,62 +414,81 @@ export default function ProjectsTabScreen() {
                 ) : null}
               </View>
 
-              {/* Zone 2 — NET amount + inline IN/OUT caption. Uses
-                  title2 (22pt) instead of title1 (28pt) so the card
-                  trims a row of vertical mass without losing the
-                  hero treatment. */}
-              {moneyLoading ? (
-                <ActivityIndicator
-                  style={{ marginTop: 4, alignSelf: 'flex-start' }}
-                  color={t.palette.blue.base}
-                />
-              ) : (
-                <Text
-                  variant="title2"
-                  style={{
-                    marginTop: 2,
-                    // Negative net = the studio is bleeding money this
-                    // month → red. Positive net stays neutral.
-                    color:
-                      combined.net < 0 ? t.palette.red.base : t.colors.label,
-                  }}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.6}
-                >
-                  {formatInr(combined.net)}
-                </Text>
-              )}
+              {/* Zone 2 — split row: text left, sparkline right.
+                  Text column flexes; sparkline is a fixed 120 × 40
+                  block so it never crowds the headline number. */}
+              <View style={styles.summaryHeroRow}>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  {moneyLoading ? (
+                    <ActivityIndicator
+                      style={{ marginTop: 4, alignSelf: 'flex-start' }}
+                      color={t.palette.blue.base}
+                    />
+                  ) : (
+                    <Text
+                      variant="title2"
+                      style={{
+                        marginTop: 2,
+                        // Negative net = the studio is bleeding money this
+                        // month → red. Positive net stays neutral.
+                        color:
+                          combined.net < 0
+                            ? t.palette.red.base
+                            : t.colors.label,
+                      }}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.6}
+                    >
+                      {formatInr(combined.net)}
+                    </Text>
+                  )}
 
-              <Text
-                variant="caption1"
-                color="secondary"
-                numberOfLines={1}
-                style={{ marginTop: 4 }}
-              >
-                <Text
-                  variant="caption1"
-                  style={{
-                    color: t.palette.green.base,
-                    fontWeight: '600',
-                    fontVariant: ['tabular-nums'],
-                  }}
-                >
-                  +{inrCompact(combined.in)}
-                </Text>
-                {' IN   ·   '}
-                <Text
-                  variant="caption1"
-                  style={{
-                    color: t.palette.red.base,
-                    fontWeight: '600',
-                    fontVariant: ['tabular-nums'],
-                  }}
-                >
-                  −{inrCompact(combined.out)}
-                </Text>
-                {' OUT'}
-              </Text>
+                  <Text
+                    variant="caption1"
+                    color="secondary"
+                    numberOfLines={1}
+                    style={{ marginTop: 4 }}
+                  >
+                    <Text
+                      variant="caption1"
+                      style={{
+                        color: t.palette.green.base,
+                        fontWeight: '600',
+                        fontVariant: ['tabular-nums'],
+                      }}
+                    >
+                      +{inrCompact(combined.in)}
+                    </Text>
+                    {' IN   ·   '}
+                    <Text
+                      variant="caption1"
+                      style={{
+                        color: t.palette.red.base,
+                        fontWeight: '600',
+                        fontVariant: ['tabular-nums'],
+                      }}
+                    >
+                      −{inrCompact(combined.out)}
+                    </Text>
+                    {' OUT'}
+                  </Text>
+                </View>
+
+                {/* Per-project amount sparkline. Animates in once on
+                    mount; remaining slots show grey dummy bars until
+                    real revenue arrives. Tap → Finance tab. */}
+                {!moneyLoading ? (
+                  <ProjectAmountSparkline
+                    bars={sparklineBars}
+                    width={120}
+                    height={40}
+                    onPress={() =>
+                      router.push('/(app)/(tabs)/overview' as never)
+                    }
+                  />
+                ) : null}
+              </View>
 
               {/* Hairline that separates the finance zone from the
                   always-on counts strip below. */}
@@ -428,23 +501,41 @@ export default function ProjectsTabScreen() {
             </View>
           ) : null}
 
-          {/* Zone 3 — counts strip (3 cells split by vertical hairlines) */}
+          {/* Zone 3 — counts strip (3 cells split by vertical hairlines).
+              All three open the matching org-wide inbox:
+                APPROVALS  → transactions awaiting admin review
+                TASKS      → all open tasks across projects
+                REQUESTS   → pending material-purchase requests */}
           <View style={styles.summaryCountsRow}>
-            <SummaryCount label="ACTIVE" value={String(activeProjectCount)} />
+            <SummaryCount
+              label="APPROVALS"
+              value={String(pendingApprovalCount)}
+              onPress={() =>
+                router.push('/(app)/transaction-approvals' as never)
+              }
+            />
             <View
               style={[
                 styles.summaryCellDivider,
                 { backgroundColor: t.colors.separator },
               ]}
             />
-            <SummaryCount label="OPEN TASKS" value={String(openCount)} />
+            <SummaryCount
+              label="TASKS"
+              value={String(openCount)}
+              onPress={() => router.push('/(app)/tasks' as never)}
+            />
             <View
               style={[
                 styles.summaryCellDivider,
                 { backgroundColor: t.colors.separator },
               ]}
             />
-            <SummaryCount label="MATERIAL" value={String(pendingMaterialCount)} />
+            <SummaryCount
+              label="REQUESTS"
+              value={String(pendingMaterialCount)}
+              onPress={() => router.push('/(app)/material-requests' as never)}
+            />
           </View>
         </View>
       </View>
@@ -915,9 +1006,19 @@ function MarginPill({ pct }: { pct: number }) {
  * vertically aligned). Centered horizontally in the cell so the
  * hairline-divided strip reads as a balanced 3-up grid.
  */
-function SummaryCount({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.summaryCell}>
+function SummaryCount({
+  label,
+  value,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  /** When provided, the cell becomes a Pressable that routes on tap.
+   *  Cells without `onPress` stay display-only. */
+  onPress?: () => void;
+}) {
+  const Inner = (
+    <>
       <Text
         variant="caption2"
         color="tertiary"
@@ -938,7 +1039,24 @@ function SummaryCount({ label, value }: { label: string; value: string }) {
       >
         {value}
       </Text>
-    </View>
+    </>
+  );
+
+  if (!onPress) {
+    return <View style={styles.summaryCell}>{Inner}</View>;
+  }
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.summaryCell,
+        pressed && { opacity: 0.55 },
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={`${label}: ${value}`}
+    >
+      {Inner}
+    </Pressable>
   );
 }
 
@@ -1018,6 +1136,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  // Splits the hero zone into [text | sparkline]. Cross-axis end so
+  // the sparkline aligns with the bottom of the IN/OUT caption (i.e.
+  // sits on the visual baseline of the row), not the top of the
+  // headline number.
+  summaryHeroRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 12,
   },
   summaryDivider: {
     height: 0.5,

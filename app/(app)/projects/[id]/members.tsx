@@ -10,12 +10,9 @@
  * Tapping a row (when allowed) opens the existing RolePickerSheet to
  * change role or remove from project.
  */
-import * as Contacts from 'expo-contacts';
 import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
-  InteractionManager,
-  Keyboard,
   Pressable,
   SectionList,
   StyleSheet,
@@ -23,6 +20,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/src/features/auth/useAuth';
@@ -37,12 +35,14 @@ import {
   ROLE_LABELS,
   type AssignableRole,
 } from '@/src/features/org/permissions';
+import { ManualMemberEntryModal } from '@/src/features/org/ManualMemberEntryModal';
 import { RolePickerSheet } from '@/src/features/org/RolePickerSheet';
+import { consumeNewTeamMemberOutbox } from '@/src/features/org/newTeamMemberOutbox';
 import { usePendingInvites } from '@/src/features/org/usePendingInvites';
 import { usePermissions } from '@/src/features/org/usePermissions';
 import { useProjectMembers, type ProjectMember } from '@/src/features/projects/useProjectMembers';
 import { db, firestore } from '@/src/lib/firebase';
-import { formatIndianPhone, normalizeIndianPhoneE164 } from '@/src/lib/phone';
+import { formatIndianPhone } from '@/src/lib/phone';
 
 import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
 import { Text } from '@/src/ui/v2/Text';
@@ -58,6 +58,7 @@ type SheetState =
   | { kind: 'invite'; contact: { phone: string; name?: string } }
   | { kind: 'edit'; row: Row };
 
+
 export default function ProjectMembersScreen() {
   const t = useThemeV2();
   const insets = useSafeAreaInsets();
@@ -72,6 +73,7 @@ export default function ProjectMembersScreen() {
   const { data: pending } = usePendingInvites(orgId || null);
 
   const [sheet, setSheet] = useState<SheetState>({ kind: 'idle' });
+  const [manualOpen, setManualOpen] = useState(false);
 
   const partyAssignable = useMemo((): AssignableRole[] => {
     if (isOwner) return ASSIGNABLE_ROLES_BY_SUPER_ADMIN;
@@ -91,41 +93,41 @@ export default function ProjectMembersScreen() {
       && (p.projectIds.includes(projectId ?? '') || p.projectId === projectId),
   );
 
-  const startAdd = useCallback(async () => {
+  // "Add team member" → opens the unified picker in team mode. The
+  // user picks an existing org member (no-op + alert in this context),
+  // a phonebook contact (→ role-picker → invite), or "+ New Member"
+  // (→ small manual-entry modal → role-picker → invite).
+  const startAdd = useCallback(() => {
     if (!projectId || !orgId || !canManageTeam) return;
-    Keyboard.dismiss();
-    try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Allow contacts access to add a member.');
-        return;
-      }
-      await new Promise<void>((resolve) => {
-        InteractionManager.runAfterInteractions(() => setTimeout(resolve, 320));
-      });
-      const result = await Contacts.presentContactPickerAsync();
-      if (!result) return;
-      const name =
-        result.name ?? [result.firstName, result.lastName].filter(Boolean).join(' ');
-      const candidates =
-        result.phoneNumbers?.map((p) => p.number ?? p.digits ?? '') ?? [];
-      let normalized: string | null = null;
-      for (const c of candidates) {
-        const n = normalizeIndianPhoneE164(c);
-        if (n) { normalized = n; break; }
-      }
-      if (!normalized) {
+    router.push('/(app)/select-party?mode=team' as never);
+  }, [orgId, projectId, canManageTeam]);
+
+  // Drain newTeamMemberOutbox after returning from /select-party.
+  // Branches on the kind of selection the user made over there.
+  useFocusEffect(
+    useCallback(() => {
+      const next = consumeNewTeamMemberOutbox();
+      if (!next) return;
+      if (next.kind === 'existing') {
+        // They're already an org member — inviting them again is a
+        // no-op. Tell the user. (Future: route to edit-role flow.)
         Alert.alert(
-          'Phone not supported',
-          'That contact needs a 10-digit Indian mobile number (we currently support +91 only).',
+          'Already in this organisation',
+          `${next.displayName} is already a team member. To change their role, tap their row in the list.`,
         );
         return;
       }
-      setSheet({ kind: 'invite', contact: { phone: normalized, name: name || undefined } });
-    } catch (e) {
-      Alert.alert('Contacts', e instanceof Error ? e.message : 'Could not open the picker.');
-    }
-  }, [orgId, projectId, canManageTeam]);
+      if (next.kind === 'contact') {
+        setSheet({
+          kind: 'invite',
+          contact: { phone: next.phoneE164, name: next.displayName },
+        });
+        return;
+      }
+      // 'manual' — open the small name+phone entry modal.
+      setManualOpen(true);
+    }, []),
+  );
 
   const { openPaywall } = usePaywall();
 
@@ -517,9 +519,22 @@ export default function ProjectMembersScreen() {
         onRemove={showRemove ? onRemove : undefined}
         saveLabel={sheet.kind === 'invite' ? 'Add to project' : 'Save role'}
       />
+
+      {/* Manual entry modal — appears when user picked "+ New Member"
+          in /select-party (contact not in their phonebook). Captures
+          name + phone, then hands off to the existing role picker. */}
+      <ManualMemberEntryModal
+        state={{ open: manualOpen }}
+        onClose={() => setManualOpen(false)}
+        onContinue={(name, phoneE164) => {
+          setManualOpen(false);
+          setSheet({ kind: 'invite', contact: { phone: phoneE164, name } });
+        }}
+      />
     </View>
   );
 }
+
 
 const styles = StyleSheet.create({
   header: {

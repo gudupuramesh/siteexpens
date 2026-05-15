@@ -21,6 +21,7 @@ import { getAuth } from 'firebase-admin/auth';
 import { refreshUserClaims } from './userClaims';
 import { writeMemberPublicDoc } from './memberPublicSync';
 import { effectiveLimits } from './billing/limits';
+import { getPlanConfig } from './billing/planConfigCache';
 
 const ASSIGNABLE_ROLES = [
   'admin',
@@ -216,6 +217,11 @@ export const inviteMember = onCall<InviteMemberRequest, Promise<InviteMemberResp
     const userRef = uid ? db.collection('users').doc(uid) : null;
     const callerUid = request.auth.uid;
 
+    // Resolve live tier limits OUTSIDE the transaction. `getPlanConfig`
+    // is a 60s-cached read; we don't want it inside the tx body where
+    // it could trigger contention retries.
+    const planConfig = await getPlanConfig();
+
     // ── Cap check + writes inside ONE transaction ─────────────────
     // Why a transaction: without one, two concurrent invite calls
     // (admin double-tap, or two admins online at once) could BOTH
@@ -238,7 +244,7 @@ export const inviteMember = onCall<InviteMemberRequest, Promise<InviteMemberResp
       const memberIds = Array.isArray(org.memberIds)
         ? (org.memberIds as string[])
         : [];
-      const { tier, limits } = effectiveLimits(org);
+      const { tier, limits } = effectiveLimits(org, planConfig);
 
       let pendingNonClientCount = 0;
       if (role !== 'client' && Number.isFinite(limits.maxMembers)) {
@@ -441,6 +447,10 @@ export const claimInvites = onCall<unknown, Promise<ClaimInvitesResponse>>(
     // are dropped from this map so the invite naturally shrinks.
     const remainingOrgs: Record<string, InviteEntry> = {};
 
+    // Resolve live tier limits ONCE per claim (not per-org) — the
+    // `system/planConfig` doc is the same for every org.
+    const planConfig = await getPlanConfig();
+
     for (const [orgId, entry] of entries) {
       const role = entry?.role;
       if (!role || !ASSIGNABLE_ROLES.includes(role)) {
@@ -501,7 +511,7 @@ export const claimInvites = onCall<unknown, Promise<ClaimInvitesResponse>>(
           const memberIds = Array.isArray(org.memberIds)
             ? (org.memberIds as string[])
             : [];
-          const { limits } = effectiveLimits(org);
+          const { limits } = effectiveLimits(org, planConfig);
           const alreadyMember = memberIds.includes(claimerUid);
 
           if (!alreadyMember && Number.isFinite(limits.maxMembers)) {

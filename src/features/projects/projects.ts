@@ -45,7 +45,6 @@ export type CreateProjectInput = {
   typology?: ProjectTypology;
   subType?: string;
   progress?: number;
-  team?: number;
 };
 
 type CreateProjectCallablePayload = {
@@ -63,7 +62,6 @@ type CreateProjectCallablePayload = {
   typology?: ProjectTypology;
   subType?: string;
   progress?: number;
-  team?: number;
 };
 
 type CreateProjectCallableResponse = { projectId: string };
@@ -89,9 +87,6 @@ export async function createProject(input: CreateProjectInput): Promise<string> 
   if (input.subType) payload.subType = input.subType;
   if (input.progress !== undefined && !Number.isNaN(input.progress)) {
     payload.progress = Math.max(0, Math.min(100, input.progress));
-  }
-  if (input.team !== undefined && !Number.isNaN(input.team) && input.team > 0) {
-    payload.team = input.team;
   }
 
   try {
@@ -136,12 +131,11 @@ export type UpdateProjectInput = {
   typology?: ProjectTypology;
   subType?: string;
   progress?: number;
-  team?: number;
 };
 
 /**
  * Update project fields. All keys optional; only provided keys are
- * written. Numbers (progress / value / team) are clamped + sanitised.
+ * written. Numbers (progress / value) are clamped + sanitised.
  */
 export async function updateProject(input: UpdateProjectInput): Promise<void> {
   const patch: Record<string, unknown> = {};
@@ -180,10 +174,6 @@ export async function updateProject(input: UpdateProjectInput): Promise<void> {
   }
   if (input.progress !== undefined && !Number.isNaN(input.progress)) {
     patch.progress = Math.max(0, Math.min(100, Math.round(input.progress)));
-  }
-  if (input.team !== undefined && !Number.isNaN(input.team)) {
-    if (input.team > 0) patch.team = Math.round(input.team);
-    else patch.team = firestore.FieldValue.delete();
   }
 
   // Cover photo — keep URL + key in lockstep. Passing `null` clears

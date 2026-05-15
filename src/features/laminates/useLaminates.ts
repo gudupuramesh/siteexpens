@@ -1,5 +1,16 @@
 /**
  * Live subscription to laminates for a project, grouped by room.
+ *
+ * `refreshKey` is an optional safety-net: when the project detail
+ * screen regains focus (after popping back from an add/edit sub-route)
+ * it bumps a key in `ProjectTabRefreshContext`, and any tab that
+ * passes that key here will tear down + re-subscribe its Firestore
+ * listener. Without it, an `onSnapshot` left dangling through a
+ * `Stack.push → freeze → pop` cycle can stay stale until the tab
+ * re-mounts — which is exactly what happens to LaminateTab today
+ * (newly-added laminate doesn't show up until the user navigates
+ * away and back). Mirrors the pattern already used by MaterialTab,
+ * SiteTab and TaskTab.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { db } from '@/src/lib/firebase';
@@ -12,7 +23,10 @@ export type UseLaminatesResult = {
   loading: boolean;
 };
 
-export function useLaminates(projectId: string | undefined): UseLaminatesResult {
+export function useLaminates(
+  projectId: string | undefined,
+  refreshKey: number = 0,
+): UseLaminatesResult {
   const [data, setData] = useState<Laminate[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -48,7 +62,7 @@ export function useLaminates(projectId: string | undefined): UseLaminatesResult 
         },
       );
     return unsub;
-  }, [projectId]);
+  }, [projectId, refreshKey]);
 
   const rooms = useMemo(() => {
     const map = new Map<string, Laminate[]>();

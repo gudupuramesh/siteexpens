@@ -15,8 +15,9 @@
  *   7. Delete button at bottom (red.soft pill)
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import {
   Alert,
@@ -44,7 +45,7 @@ import { createTaskCategory } from '@/src/features/tasks/taskCategories';
 import { useTask } from '@/src/features/tasks/useTasks';
 import { useTaskCategories } from '@/src/features/tasks/useTaskCategories';
 import { type TaskCategory, type TaskPriority, type TaskStatus } from '@/src/features/tasks/types';
-import { PartyPickerModal } from '@/src/ui/PartyPickerModal';
+import { consumeNewPartyOutbox } from '@/src/features/parties/newPartyOutbox';
 
 import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
 import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
@@ -84,10 +85,22 @@ export default function EditTaskScreen() {
   const [showEndDate, setShowEndDate] = useState(false);
   const [assignedTo, setAssignedTo] = useState('');
   const [assignedToName, setAssignedToName] = useState('');
+
+  // After the user creates (or matches an existing) party in the
+  // /add-party form via the dual-button picker below, the new party id
+  // lands in `newPartyOutbox`. Drain it on focus and auto-fill the
+  // assignee row so the user doesn't have to re-pick.
+  useFocusEffect(
+    useCallback(() => {
+      const next = consumeNewPartyOutbox();
+      if (!next) return;
+      setAssignedTo(next.id);
+      setAssignedToName(next.name);
+    }, []),
+  );
   const [existingPhotos, setExistingPhotos] = useState<string[]>([]);
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [savePhase, setSavePhase] = useState<string>();
-  const [showPartyPicker, setShowPartyPicker] = useState(false);
   const [showCategorySheet, setShowCategorySheet] = useState(false);
   const [newCategory, setNewCategory] = useState('');
   const [addingCategory, setAddingCategory] = useState(false);
@@ -470,7 +483,7 @@ export default function EditTaskScreen() {
               value={assignedToName || 'Unassigned'}
               valueColor={assignedToName ? undefined : t.colors.tertiary}
               chevron
-              onPress={() => setShowPartyPicker(true)}
+              onPress={() => router.push('/(app)/select-party' as never)}
               divider={false}
             />
           </FormGroup>
@@ -591,19 +604,6 @@ export default function EditTaskScreen() {
         onClose={() => setShowEndDate(false)}
         mode="date"
         title="End date"
-      />
-
-      <PartyPickerModal
-        visible={showPartyPicker}
-        orgId={orgId}
-        projectId={projectId}
-        allowUnassign
-        onPick={(id, name) => {
-          setAssignedTo(id);
-          setAssignedToName(name);
-          setShowPartyPicker(false);
-        }}
-        onClose={() => setShowPartyPicker(false)}
       />
 
       <CategorySheet

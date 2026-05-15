@@ -2,7 +2,7 @@
   "expo": {
     "name": "Interior OS",
     "slug": "siteexpens",
-    "version": "1.0.5",
+    "version": "1.0.6",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "siteexpens",
@@ -14,7 +14,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.siteexpens.app",
-      "buildNumber": "13",
+      "buildNumber": "14",
       "googleServicesFile": "./GoogleService-Info.plist",
       "appleTeamId": "QWW8YD6KZV",
       "infoPlist": {
@@ -23,7 +23,7 @@
     },
     "android": {
       "package": "com.siteexpens.app",
-      "versionCode": 12,
+      "versionCode": 13,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#ffffff",

@@ -1,26 +1,32 @@
 /**
  * Add Staff — v2 design.
  *
- * Adding a staff member from the Finance hub creates BOTH a staff doc
- * AND the corresponding `parties/{id}` entry with `partyType='staff'`.
- * The two stay in sync via `staff.partyId` so the same person doesn't
- * have to be entered twice.
+ * Adding a staff member from the Finance hub creates a staff doc
+ * linked to a `parties/{id}` entry with `partyType='staff'`.
+ *
+ * Two paths to populate name + phone:
+ *   1. **Pick from saved or contacts** — opens the unified
+ *      `/select-party` picker. If the user picks an existing party,
+ *      we link the new staff doc to it via `partyId` (no duplicate
+ *      party gets created). If they pick a phonebook contact or use
+ *      "+ New Party", `/add-party` runs and the new party id flows
+ *      back via `newPartyOutbox` — same pattern as transactions.
+ *   2. **Type manually** — name + phone fields below. On save we
+ *      `createParty` first, then `createStaff` with the new id.
  *
  * Layout:
  *   1. SheetHeader: Cancel · "New staff" · Save
- *   2. KeyboardAvoidingView + ScrollView
- *      a. "Pick from contacts" CTA card (one-tap auto-fill)
+ *   2. ScrollView:
+ *      a. "Pick from saved or contacts" link
  *      b. FormGroup "Identity" — Name · Phone · Role (sheet)
  *      c. FormGroup "Salary" — Monthly salary · Pay model pill row
  *      d. Footer note
  */
-import * as Contacts from 'expo-contacts';
 import { router, Stack } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useState } from 'react';
 import {
   Alert,
-  InteractionManager,
-  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -34,6 +40,8 @@ import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { usePermissions } from '@/src/features/org/usePermissions';
 import { createParty, InvalidPhoneError } from '@/src/features/parties/parties';
+import { useParties } from '@/src/features/parties/useParties';
+import { consumeNewPartyOutbox } from '@/src/features/parties/newPartyOutbox';
 import { createStaff } from '@/src/features/staff/staff';
 import { type PayUnit } from '@/src/features/staff/types';
 import { useStaffRoles } from '@/src/features/staff/useStaffRoles';
@@ -55,6 +63,7 @@ export default function AddStaffScreen() {
   const { can } = usePermissions();
   const canWrite = can('finance.write');
   const { data: roles } = useStaffRoles(orgId);
+  const { data: parties } = useParties(orgId || undefined);
 
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -63,42 +72,27 @@ export default function AddStaffScreen() {
   const [payUnit, setPayUnit] = useState<PayUnit>('month');
   const [busy, setBusy] = useState(false);
   const [rolePickerOpen, setRolePickerOpen] = useState(false);
+  /** Set when the user picked or created a party via /select-party.
+   *  When non-null, `onSave` skips `createParty` and uses this id
+   *  directly — avoids creating a duplicate party. */
+  const [pickedPartyId, setPickedPartyId] = useState<string | null>(null);
 
-  const pickContact = useCallback(async () => {
-    Keyboard.dismiss();
-    try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
-        return;
-      }
-      // Let layout settle before presenting the native picker.
-      await new Promise<void>((resolve) => {
-        InteractionManager.runAfterInteractions(() => {
-          setTimeout(resolve, 320);
-        });
-      });
-      const result = await Contacts.presentContactPickerAsync();
-      if (!result) return;
+  // Drain newPartyOutbox after returning from /select-party (or
+  // /add-party, when the user used "+ New Party"). Fills name + phone
+  // from the picked / created party so the form is ready to save.
+  useFocusEffect(
+    useCallback(() => {
+      const next = consumeNewPartyOutbox();
+      if (!next) return;
+      setName(next.name);
+      setPickedPartyId(next.id);
+      const party = parties.find((p) => p.id === next.id);
+      if (party?.phone) setPhone(party.phone);
+    }, [parties]),
+  );
 
-      const contactName =
-        result.name ??
-        [result.firstName, result.lastName].filter(Boolean).join(' ') ??
-        '';
-      if (contactName) setName(contactName);
-
-      const raw =
-        result.phoneNumbers?.find(
-          (p) => (p.number ?? p.digits ?? '').replace(/\D/g, '').length >= 10,
-        ) ?? result.phoneNumbers?.[0];
-      const ph = raw?.number ?? raw?.digits ?? '';
-      if (ph) setPhone(ph.replace(/[^\d+]/g, ''));
-    } catch (e) {
-      Alert.alert(
-        'Contacts',
-        e instanceof Error ? e.message : 'Could not open the contact picker.',
-      );
-    }
+  const openSelectParty = useCallback(() => {
+    router.push('/(app)/select-party' as never);
   }, []);
 
   const onSave = useCallback(async () => {
@@ -121,24 +115,30 @@ export default function AddStaffScreen() {
     }
     setBusy(true);
     try {
-      // Step 1 — create the party (type='staff'). This also normalises
-      // the phone to E.164 and rejects non-Indian mobiles cleanly.
+      // Step 1 — resolve the party id. If the user picked an existing
+      // party via /select-party (or used "+ New Party" which created
+      // one), use that id directly. Otherwise create a new staff-type
+      // party from the typed name + phone.
       let partyId: string;
-      try {
-        partyId = await createParty({
-          orgId,
-          name: name.trim(),
-          phone: phone.trim(),
-          partyType: 'staff',
-          createdBy: user.uid,
-        });
-      } catch (err) {
-        if (err instanceof InvalidPhoneError) {
-          Alert.alert('Invalid phone', err.message);
-          setBusy(false);
-          return;
+      if (pickedPartyId) {
+        partyId = pickedPartyId;
+      } else {
+        try {
+          partyId = await createParty({
+            orgId,
+            name: name.trim(),
+            phone: phone.trim(),
+            partyType: 'staff',
+            createdBy: user.uid,
+          });
+        } catch (err) {
+          if (err instanceof InvalidPhoneError) {
+            Alert.alert('Invalid phone', err.message);
+            setBusy(false);
+            return;
+          }
+          throw err;
         }
-        throw err;
       }
 
       // Step 2 — create the staff doc, linked to the party.
@@ -172,7 +172,7 @@ export default function AddStaffScreen() {
     } finally {
       setBusy(false);
     }
-  }, [user, orgId, canWrite, name, phone, role, salary, payUnit]);
+  }, [user, orgId, canWrite, name, phone, role, salary, payUnit, pickedPartyId]);
 
   if (!canWrite) {
     return (
@@ -219,10 +219,14 @@ export default function AddStaffScreen() {
           keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
         >
-          {/* Pick from Contacts CTA */}
+          {/* Pick from saved or contacts — opens the unified picker.
+              Picking an existing party links the new staff doc to it
+              (no duplicate party); picking a phonebook contact (or
+              tapping "+ New Party") routes through /add-party which
+              hands the new party id back via the outbox. */}
           <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
             <Pressable
-              onPress={pickContact}
+              onPress={openSelectParty}
               style={({ pressed }) => [
                 styles.contactsBtn,
                 {
@@ -245,14 +249,14 @@ export default function AddStaffScreen() {
                   justifyContent: 'center',
                 }}
               >
-                <Ionicons name="person-add" size={17} color="#fff" />
+                <Ionicons name="people" size={17} color="#fff" />
               </View>
               <View style={{ flex: 1 }}>
                 <Text variant="callout" style={{ color: t.palette.blue.base, fontWeight: '700' }}>
-                  Pick from Contacts
+                  Pick from saved or contacts
                 </Text>
                 <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
-                  Auto-fills name + phone in one tap.
+                  Or just type the name + phone below.
                 </Text>
               </View>
               <Ionicons name="chevron-forward" size={16} color={t.palette.blue.base} />

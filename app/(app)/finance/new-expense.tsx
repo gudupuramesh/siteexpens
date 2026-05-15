@@ -13,7 +13,8 @@
  * Member pickers use v2 SelectSheet.
  */
 import { router, Stack } from 'expo-router';
-import { useState } from 'react';
+import { useFocusEffect } from '@react-navigation/native';
+import { useCallback, useState } from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
@@ -24,12 +25,14 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { auth } from '@/src/lib/firebase';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useOrgMembers } from '@/src/features/org/useOrgMembers';
 import { usePermissions } from '@/src/features/org/usePermissions';
 import { createOrgFinance } from '@/src/features/finances/finances';
+import { consumeNewPartyOutbox } from '@/src/features/parties/newPartyOutbox';
 import {
   ORG_FINANCE_CATEGORIES,
   type OrgFinanceCategory,
@@ -74,6 +77,27 @@ export default function NewOrgFinanceScreen() {
   const orgId = userDoc?.primaryOrgId ?? '';
   const { members } = useOrgMembers(orgId || undefined);
   const { can } = usePermissions();
+
+  // After the user creates (or matches an existing) party in the
+  // /add-party form via the dual-button picker below, the new party
+  // id + name lands in `newPartyOutbox`. Drain it on focus and
+  // auto-fill the Payee field so the user doesn't have to re-type.
+  useFocusEffect(
+    useCallback(() => {
+      const next = consumeNewPartyOutbox();
+      if (!next) return;
+      setPayee(next.name);
+      setPayeeUid(null);
+    }, []),
+  );
+
+  // Open the unified Select Party picker — list of saved parties +
+  // device contacts in one screen, with "+ New Party" top-right for
+  // vendors not in the phonebook. Fills the Payee name via outbox
+  // when the user picks/creates a party.
+  const openSelectParty = useCallback(() => {
+    router.push('/(app)/select-party' as never);
+  }, []);
 
   const [kind, setKind] = useState<OrgFinanceKind>('expense');
   const [category, setCategory] = useState<OrgFinanceCategory>('other');
@@ -238,16 +262,47 @@ export default function NewOrgFinanceScreen() {
                 onPress={() => setShowMemberPick(true)}
               />
             ) : (
-              <InputRow
-                label="Payee"
-                value={payee}
-                onChangeText={(v) => {
-                  setPayee(v);
-                  setPayeeUid(null);
-                }}
-                placeholder="Vendor name"
-                autoCapitalize="words"
-              />
+              <>
+                <InputRow
+                  label="Payee"
+                  value={payee}
+                  onChangeText={(v) => {
+                    setPayee(v);
+                    setPayeeUid(null);
+                  }}
+                  placeholder="Vendor name"
+                  autoCapitalize="words"
+                />
+                {/* Single picker link — opens the unified Select Party
+                    screen (saved parties + device contacts + "+ New
+                    Party" top-right). Users who want a true one-off
+                    vendor name (no Party record) can keep typing in
+                    the InputRow above. */}
+                <Pressable
+                  onPress={openSelectParty}
+                  hitSlop={6}
+                  style={({ pressed }) => [
+                    styles.payeePickLink,
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <Ionicons
+                    name="people-outline"
+                    size={14}
+                    color={t.palette.blue.base}
+                  />
+                  <Text
+                    variant="caption1"
+                    style={{
+                      color: t.palette.blue.base,
+                      fontWeight: '600',
+                      marginLeft: 6,
+                    }}
+                  >
+                    Pick from saved or contacts
+                  </Text>
+                </Pressable>
+              </>
             )}
             <InputRow
               label="Amount"
@@ -412,5 +467,14 @@ const styles = StyleSheet.create({
   methodDivider: {
     height: 0.5,
     marginLeft: 16,
+  },
+
+  // Single picker link below the Payee InputRow — opens /select-party
+  payeePickLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 6,
+    paddingBottom: 12,
   },
 });

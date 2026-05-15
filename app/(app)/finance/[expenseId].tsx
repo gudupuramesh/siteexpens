@@ -365,13 +365,15 @@ export default function OrgFinanceDetailScreen() {
 
           {/* Details */}
           <FormGroup header="Details">
-            <InputRow
+            {/* Payee is read-only on edit — once an entry is saved
+                with a payee, the payee can't be changed (preserves
+                the ledger attribution). Delete + re-add to
+                re-attribute. */}
+            <Row
               label="Payee"
-              value={payee}
-              onChangeText={setPayee}
-              placeholder="e.g. Ramesh"
-              autoCapitalize="words"
+              value={payee || '—'}
             />
+
             <InputRow
               label={`Amount (₹)`}
               value={amount}

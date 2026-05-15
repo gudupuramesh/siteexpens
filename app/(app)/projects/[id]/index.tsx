@@ -114,7 +114,6 @@ export default function ProjectDetailScreen() {
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
   const { data: parties } = useParties(orgId);
-  const { rooms: lamRooms, data: lamData } = useLaminates(id);
 
   const visibleTabs = useVisibleProjectTabs();
   const visibleTABS = useMemo(
@@ -138,6 +137,11 @@ export default function ProjectDetailScreen() {
       setTabDataRefreshKey((k) => k + 1);
     }, []),
   );
+
+  // Re-subscribed via the same focus key the tabs use, so the PDF
+  // button enable state stays in lock-step with the laminate list
+  // after pop-back from add/edit-laminate.
+  const { rooms: lamRooms, data: lamData } = useLaminates(id, tabDataRefreshKey);
 
   // If the active tab is no longer visible (role changed mid-session,
   // e.g. demotion), snap to the first available one.

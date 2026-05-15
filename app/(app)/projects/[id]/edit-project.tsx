@@ -14,14 +14,16 @@
  *   • Save calls `updateProject` with only the changed fields; the
  *     helper handles per-field clearing via `FieldValue.delete()`.
  *
- * Layout (top → bottom) — identical to new.tsx:
+ * Layout (top → bottom) — covers every editable field. Create flow
+ * (`new.tsx`) is the lean 5-field version; this is where the user
+ * tops up the rest after the project exists.
  *   1. SheetHeader: Cancel · "Edit project" · Save
  *   2. Cover photo card (preview / replace / remove)
  *   3. FormGroup "Details"  — Name · Client · Location · Site
  *   4. FormGroup "Type"     — Typology · Sub-type (conditional)
  *   5. FormGroup "Status"   — Status · Progress slider
  *   6. FormGroup "Timeline" — Start date · Target handover
- *   7. FormGroup "Budget"   — Project value · Team size
+ *   7. FormGroup "Budget"   — Project value
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
@@ -81,7 +83,6 @@ const schema = z
     startDate: z.date(),
     endDate: z.date().nullable(),
     value: z.string().trim().regex(/^\d+$/, 'Enter a number'),
-    team: z.string().trim().regex(/^\d*$/, 'Enter a number').optional(),
   })
   .refine((d) => !d.endDate || d.endDate >= d.startDate, {
     message: 'Handover must be on or after the project start date',
@@ -171,7 +172,6 @@ export default function EditProjectScreen() {
       startDate: initialStartDate,
       endDate: null,
       value: '',
-      team: '',
     },
   });
 
@@ -196,7 +196,6 @@ export default function EditProjectScreen() {
       startDate: project.startDate ? project.startDate.toDate() : initialStartDate,
       endDate: project.endDate ? project.endDate.toDate() : null,
       value: project.value != null ? String(project.value) : '',
-      team: project.team != null ? String(project.team) : '',
     });
     setExistingPhotoUri(project.photoUri ?? null);
     setExistingPhotoKey(project.photoR2Key ?? null);
@@ -322,10 +321,6 @@ export default function EditProjectScreen() {
 
       // Step 2 — patch the project doc.
       setSavePhase('Saving project…');
-      const teamNum =
-        values.team && values.team.trim().length > 0
-          ? parseInt(values.team, 10)
-          : undefined;
 
       const patch: Parameters<typeof updateProject>[0] = {
         projectId: id,
@@ -340,7 +335,6 @@ export default function EditProjectScreen() {
         startDate: values.startDate,
         endDate: values.endDate,
         value: parseInt(values.value, 10),
-        team: teamNum,
       };
       if (newPhotoUri !== undefined) patch.photoUri = newPhotoUri;
       if (newPhotoKey !== undefined) patch.photoR2Key = newPhotoKey;
@@ -772,28 +766,13 @@ export default function EditProjectScreen() {
                   placeholder="₹0"
                   keyboardType="number-pad"
                   autoCapitalize="none"
-                />
-              )}
-            />
-            <Controller
-              control={control}
-              name="team"
-              render={({ field: { onChange, onBlur, value } }) => (
-                <InputRow
-                  label="Team size"
-                  value={value ?? ''}
-                  onChangeText={(txt) => onChange(txt.replace(/\D/g, ''))}
-                  onBlur={onBlur}
-                  placeholder="e.g. 4"
-                  keyboardType="number-pad"
-                  autoCapitalize="none"
                   divider={false}
                 />
               )}
             />
           </FormGroup>
-          {(errors.value?.message || errors.team?.message) ? (
-            <FieldError text={errors.value?.message ?? errors.team?.message ?? ''} />
+          {errors.value?.message ? (
+            <FieldError text={errors.value.message} />
           ) : null}
 
           {submitError ? <FieldError text={submitError} /> : null}

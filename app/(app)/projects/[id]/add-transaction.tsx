@@ -189,10 +189,8 @@ export default function AddTransactionScreen() {
   const { data: transactions } = useTransactions(projectId);
 
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [showPartyPicker, setShowPartyPicker] = useState(false);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [showMoreDetail, setShowMoreDetail] = useState(false);
-  const [partySearch, setPartySearch] = useState('');
   const [submitError, setSubmitError] = useState<string>();
   const [stagedReceipt, setStagedReceipt] = useState<StagedFile | null>(null);
   const [savePhase, setSavePhase] = useState<string>();
@@ -248,24 +246,6 @@ export default function AddTransactionScreen() {
     }
   }, [permLoading, postsTxnDirectly, selectedType, setValue]);
 
-  const partySections = useMemo(() => {
-    const projectPartyNames = new Set(
-      transactions.map((tx) => tx.partyName).filter(Boolean),
-    );
-    const projectParties: Party[] = [];
-    const otherParties: Party[] = [];
-    const search = partySearch.toLowerCase();
-    for (const p of allParties) {
-      if (search && !p.name.toLowerCase().includes(search)) continue;
-      if (projectPartyNames.has(p.name)) projectParties.push(p);
-      else otherParties.push(p);
-    }
-    const sections: { title: string; data: Party[] }[] = [];
-    if (projectParties.length > 0) sections.push({ title: 'Project parties', data: projectParties });
-    if (otherParties.length > 0) sections.push({ title: 'All parties', data: otherParties });
-    return sections;
-  }, [allParties, transactions, partySearch]);
-
   const categoryLabel = TRANSACTION_CATEGORIES.find((c) => c.key === selectedCategory)?.label;
   const categoryOptions = useMemo(
     () => TRANSACTION_CATEGORIES.map((c) => ({ key: c.key, label: c.label })),
@@ -273,91 +253,6 @@ export default function AddTransactionScreen() {
   );
 
   // ── Handlers ──
-
-  const selectParty = useCallback((party: Party) => {
-    setValue('partyName', party.name, { shouldValidate: true });
-    setValue('partyId', party.id);
-    setShowPartyPicker(false);
-    setPartySearch('');
-  }, [setValue]);
-
-  const pickContactAndAdd = useCallback(async () => {
-    Keyboard.dismiss();
-    setShowPartyPicker(false);
-    try {
-      await new Promise<void>((resolve) => {
-        InteractionManager.runAfterInteractions(() => setTimeout(resolve, 500));
-      });
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
-        return;
-      }
-      const result = await Contacts.presentContactPickerAsync();
-      if (!result) return;
-
-      const contactName =
-        (result.name ?? '').trim()
-        || [result.firstName, result.lastName].filter(Boolean).join(' ').trim()
-        || (result.company ?? '').trim()
-        || '';
-      const rawNumbers =
-        result.phoneNumbers?.map((p) => p.number ?? p.digits ?? '') ?? [];
-      let normalizedPhone: string | null = null;
-      for (const candidate of rawNumbers) {
-        const n = normalizeIndianPhoneE164(candidate);
-        if (n) {
-          normalizedPhone = n;
-          break;
-        }
-      }
-      if (!contactName) {
-        Alert.alert(
-          'Missing name',
-          'That contact has no name or company. Add a name in Contacts and try again.',
-        );
-        return;
-      }
-      if (!normalizedPhone) {
-        Alert.alert(
-          'Phone not supported',
-          'That contact needs a 10-digit Indian mobile number (we currently support +91 only).',
-        );
-        return;
-      }
-
-      // One phone = one party in this org. If this contact's phone
-      // already matches a saved party, just select that party for
-      // this transaction and tell the user — no need to walk them
-      // through the add-party form.
-      const existing = allParties.find((p) => p.phone === normalizedPhone);
-      if (existing) {
-        selectParty(existing);
-        Alert.alert(
-          'Already saved',
-          `${existing.name} is already a ${getPartyTypeLabel(existing.partyType)}. Selected for this transaction.`,
-        );
-        return;
-      }
-
-      // New contact — open the full add-party form prefilled with
-      // name + phone. On save (or duplicate match) the form pops
-      // back and the focus effect below auto-selects the new party.
-      router.push({
-        pathname: '/(app)/add-party',
-        params: {
-          prefillName: contactName,
-          prefillPhone: normalizedPhone,
-          returnSelection: '1',
-        },
-      });
-    } catch (e) {
-      Alert.alert(
-        'Contacts',
-        e instanceof Error ? e.message : 'Could not open the contact picker.',
-      );
-    }
-  }, [allParties, selectParty]);
 
   // After a successful new-party creation (or duplicate match) in the
   // add-party form, drain the outbox and auto-select the resulting
@@ -659,11 +554,7 @@ export default function AddTransactionScreen() {
               value={selectedPartyName || 'Pick a party'}
               valueColor={selectedPartyName ? undefined : t.colors.tertiary}
               chevron
-              onPress={() => {
-                Keyboard.dismiss();
-                setPartySearch('');
-                setShowPartyPicker(true);
-              }}
+              onPress={() => router.push('/(app)/select-party' as never)}
               divider={false}
             />
           </FormGroup>
@@ -989,36 +880,6 @@ export default function AddTransactionScreen() {
         onClose={() => setShowCategoryPicker(false)}
       />
 
-      {/* ── Party picker ── */}
-      <PartyPickerSheet
-        open={showPartyPicker}
-        partySearch={partySearch}
-        setPartySearch={setPartySearch}
-        sections={partySections}
-        selectedPartyName={selectedPartyName}
-        onSelectParty={selectParty}
-        onClose={() => setShowPartyPicker(false)}
-        onAddFromContact={pickContactAndAdd}
-        onAddManual={() => {
-          // Hand the user off to the full add-party form. If they
-          // typed a name in the search box we prefill it; otherwise
-          // the form opens blank. The form returns the new party id
-          // via the outbox and `useFocusEffect` above auto-selects
-          // it on our return.
-          const name = partySearch.trim();
-          Keyboard.dismiss();
-          setShowPartyPicker(false);
-          setPartySearch('');
-          router.push({
-            pathname: '/(app)/add-party',
-            params: {
-              ...(name ? { prefillName: name } : {}),
-              returnSelection: '1',
-            },
-          });
-        }}
-      />
-
       <SubmitProgressOverlay
         visible={isSubmitting}
         intent="submitTransaction"
@@ -1097,271 +958,6 @@ function KindOption({
         {desc}
       </Text>
     </Pressable>
-  );
-}
-
-// ── Party picker sheet ────────────────────────────────────────────────
-
-function PartyPickerSheet({
-  open,
-  partySearch,
-  setPartySearch,
-  sections,
-  selectedPartyName,
-  onSelectParty,
-  onClose,
-  onAddFromContact,
-  onAddManual,
-}: {
-  open: boolean;
-  partySearch: string;
-  setPartySearch: (v: string) => void;
-  sections: { title: string; data: Party[] }[];
-  selectedPartyName: string;
-  onSelectParty: (p: Party) => void;
-  onClose: () => void;
-  onAddFromContact: () => void;
-  onAddManual: () => void;
-}) {
-  const t = useThemeV2();
-  const insets = useSafeAreaInsets();
-  return (
-    <Modal
-      visible={open}
-      transparent
-      animationType="slide"
-      presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
-      onRequestClose={onClose}
-      statusBarTranslucent
-    >
-      <KeyboardAvoidingView
-        style={{ flex: 1, justifyContent: 'flex-end' }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View
-          style={[
-            styles.sheet,
-            {
-              backgroundColor: t.colors.surface,
-              borderTopLeftRadius: t.radii.sheet,
-              borderTopRightRadius: t.radii.sheet,
-              paddingBottom: insets.bottom + 8,
-              maxHeight: '85%',
-            },
-          ]}
-        >
-          <View style={[styles.grabber, { backgroundColor: t.colors.tertiary }]} />
-          <View
-            style={[
-              styles.sheetHeader,
-              {
-                borderBottomColor: t.colors.separator,
-                borderBottomWidth: t.hairline,
-              },
-            ]}
-          >
-            <Pressable onPress={onClose} hitSlop={8} style={styles.sheetSideBtn}>
-              <Text variant="body" style={{ color: t.palette.blue.base }}>Cancel</Text>
-            </Pressable>
-            <Text
-              variant="headline"
-              color="label"
-              style={[styles.sheetTitle, { fontWeight: '600' }]}
-            >
-              Select party
-            </Text>
-            <View style={styles.sheetSideBtn} />
-          </View>
-
-          {/* Search */}
-          <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
-            <View
-              style={[
-                styles.searchBar,
-                {
-                  backgroundColor: t.colors.fill3,
-                  borderRadius: t.radii.field,
-                },
-              ]}
-            >
-              <Ionicons name="search" size={16} color={t.colors.tertiary} />
-              <TextInput
-                placeholder="Search party name…"
-                placeholderTextColor={t.colors.tertiary}
-                value={partySearch}
-                onChangeText={setPartySearch}
-                style={[styles.searchInput, { color: t.colors.label, ...t.type.callout }]}
-                autoFocus={Platform.OS !== 'ios'}
-                returnKeyType="search"
-              />
-              {partySearch ? (
-                <Pressable onPress={() => setPartySearch('')} hitSlop={8}>
-                  <Ionicons name="close-circle" size={16} color={t.colors.tertiary} />
-                </Pressable>
-              ) : null}
-            </View>
-          </View>
-
-          <SectionList
-            keyboardShouldPersistTaps="handled"
-            sections={sections}
-            keyExtractor={(p) => p.id}
-            renderSectionHeader={({ section: { title } }) => (
-              <View style={styles.sectionHeader}>
-                <Text
-                  variant="caption2"
-                  color="secondary"
-                  style={{ letterSpacing: 0.5 }}
-                >
-                  {title.toUpperCase()}
-                </Text>
-              </View>
-            )}
-            renderItem={({ item }) => {
-              const typeLabel = item.partyType ? getPartyTypeLabel(item.partyType) : null;
-              const selected = selectedPartyName === item.name;
-              return (
-                <Pressable
-                  onPress={() => onSelectParty(item)}
-                  style={({ pressed }) => [
-                    styles.partyOption,
-                    pressed && { backgroundColor: t.colors.fill3 },
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.partyAvatar,
-                      {
-                        backgroundColor:
-                          t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
-                      },
-                    ]}
-                  >
-                    <Text
-                      variant="footnote"
-                      style={{ color: t.palette.blue.base, fontWeight: '700' }}
-                    >
-                      {item.name.charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <View style={styles.partyRowTop}>
-                      <Text
-                        variant="callout"
-                        color="label"
-                        style={{ flex: 1, fontWeight: '600' }}
-                        numberOfLines={1}
-                      >
-                        {item.name}
-                      </Text>
-                      {typeLabel ? (
-                        <View
-                          style={[
-                            styles.partyTypeTag,
-                            {
-                              backgroundColor: t.colors.fill3,
-                              borderRadius: 999,
-                            },
-                          ]}
-                        >
-                          <Text
-                            variant="caption2"
-                            color="secondary"
-                            style={{ fontWeight: '700', letterSpacing: 0.3 }}
-                          >
-                            {typeLabel.toUpperCase()}
-                          </Text>
-                        </View>
-                      ) : null}
-                    </View>
-                    {item.phone ? (
-                      <Text
-                        variant="caption1"
-                        color="secondary"
-                        style={{ marginTop: 2 }}
-                      >
-                        {item.phone}
-                      </Text>
-                    ) : null}
-                  </View>
-                  {selected ? (
-                    <Ionicons name="checkmark-circle" size={18} color={t.palette.blue.base} />
-                  ) : null}
-                </Pressable>
-              );
-            }}
-            ListEmptyComponent={
-              <View style={{ paddingTop: 40, alignItems: 'center' }}>
-                <Text variant="footnote" color="secondary">
-                  {partySearch ? 'No matching parties' : 'No parties added yet'}
-                </Text>
-              </View>
-            }
-            showsVerticalScrollIndicator={false}
-            contentContainerStyle={{ paddingBottom: 12 }}
-          />
-
-          {/* Bottom actions */}
-          <View
-            style={[
-              styles.partyActions,
-              {
-                borderTopColor: t.colors.separator,
-                borderTopWidth: t.hairline,
-                paddingHorizontal: 16,
-                paddingTop: 10,
-                gap: 8,
-              },
-            ]}
-          >
-            <Pressable
-              onPress={onAddFromContact}
-              hitSlop={6}
-              style={({ pressed }) => [
-                styles.partyActionBtn,
-                {
-                  backgroundColor:
-                    t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
-                  borderRadius: t.radii.field,
-                },
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Ionicons name="person-add-outline" size={16} color={t.palette.blue.base} />
-              <Text
-                variant="footnote"
-                style={{ color: t.palette.blue.base, fontWeight: '700', marginLeft: 6 }}
-              >
-                From contacts
-              </Text>
-            </Pressable>
-            <Pressable
-              onPress={onAddManual}
-              hitSlop={6}
-              style={({ pressed }) => [
-                styles.partyActionBtn,
-                {
-                  backgroundColor: t.colors.fill3,
-                  borderRadius: t.radii.field,
-                },
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Ionicons name="add-circle-outline" size={16} color={t.colors.label} />
-              <Text
-                variant="footnote"
-                color="label"
-                style={{ fontWeight: '700', marginLeft: 6 }}
-                numberOfLines={1}
-              >
-                Add party
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-      </KeyboardAvoidingView>
-    </Modal>
   );
 }
 

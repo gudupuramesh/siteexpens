@@ -66,14 +66,21 @@ export function tierIsActive(org: Record<string, unknown> | undefined): boolean 
 
 /** Effective limits for an org. If the subscription is past_due,
  *  cancelled (after expiry), or expired, we return Free limits — the
- *  caller treats them as if they had no subscription. */
+ *  caller treats them as if they had no subscription.
+ *
+ *  Pass the live `system/planConfig` doc (via `getPlanConfig()` from
+ *  `planConfigCache.ts`) to honour the App Owner's edits. When omitted
+ *  or when the doc lacks an entry for the tier, we fall back to the
+ *  hardcoded `PLAN_LIMITS` constant — the app is unbreakable by a bad
+ *  admin save. */
 export function effectiveLimits(
   org: Record<string, unknown> | undefined,
+  planConfig?: Partial<Record<PlanTier, PlanLimits>> | null,
 ): { tier: PlanTier; limits: PlanLimits } {
   const tier = tierOf(org);
   const active = tierIsActive(org);
-  if (!active && tier !== 'free') {
-    return { tier: 'free', limits: PLAN_LIMITS.free };
-  }
-  return { tier, limits: PLAN_LIMITS[tier] };
+  const resolvedTier: PlanTier = !active && tier !== 'free' ? 'free' : tier;
+  const limits =
+    planConfig?.[resolvedTier] ?? PLAN_LIMITS[resolvedTier];
+  return { tier: resolvedTier, limits };
 }

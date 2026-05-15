@@ -30,6 +30,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { deleteAppointment, updateAppointment } from '@/src/features/crm/appointments';
+import { shareAppointment } from '@/src/features/crm/share';
 import {
   APPOINTMENT_STATUSES,
   type AppointmentStatus,
@@ -339,7 +340,7 @@ export default function AppointmentDetailScreen() {
           </View>
         ) : null}
 
-        {/* Quick actions — Call · Directions · Status */}
+        {/* Quick actions — Call · Directions · Share · Status */}
         <View style={styles.actionsRow}>
           <ActionButton
             icon="call"
@@ -356,6 +357,13 @@ export default function AppointmentDetailScreen() {
             tintBg={t.palette.blue.soft}
             disabled={!hasMapTarget}
             onPress={openMap}
+          />
+          <ActionButton
+            icon="share-outline"
+            label="Share"
+            tint={t.palette.blue.base}
+            tintBg={t.palette.blue.soft}
+            onPress={() => void shareAppointment(appt)}
           />
           <ActionButton
             icon="flag"

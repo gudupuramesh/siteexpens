@@ -19,15 +19,13 @@
  * dismissing one Modal while presenting another causes the second one
  * to silently never appear (see `pendingProjectsStep`).
  */
-import * as Contacts from 'expo-contacts';
 import { router, Stack } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  InteractionManager,
-  Keyboard,
   Pressable,
   RefreshControl,
   ScrollView,
@@ -49,6 +47,8 @@ import {
   ROLE_LABELS,
   type AssignableRole,
 } from '@/src/features/org/permissions';
+import { ManualMemberEntryModal } from '@/src/features/org/ManualMemberEntryModal';
+import { consumeNewTeamMemberOutbox } from '@/src/features/org/newTeamMemberOutbox';
 import { ProjectAccessSheet } from '@/src/features/org/ProjectAccessSheet';
 import { RolePickerSheet } from '@/src/features/org/RolePickerSheet';
 import type { RoleKey } from '@/src/features/org/types';
@@ -60,6 +60,7 @@ import type { Project } from '@/src/features/projects/types';
 import { db, firestore } from '@/src/lib/firebase';
 
 import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { ProgressOverlay } from '@/src/ui/v2/ProgressOverlay';
 import { Text } from '@/src/ui/v2/Text';
 import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
 import { useThemeV2 } from '@/src/theme/v2';
@@ -286,7 +287,18 @@ export default function TeamAndRolesScreen() {
   const { openPaywall } = usePaywall();
 
   const [step, setStep] = useState<Step>({ kind: 'idle' });
+  const [manualOpen, setManualOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  // When non-null, mounts the full-screen ProgressOverlay (titled by
+  // `title`, with optional `subtitle` for context — e.g. the invitee
+  // phone or member name). Set before each await on a server callable
+  // and cleared in the matching `finally`. Lets the user know the
+  // 1–2 s round-trip (`inviteMember`, `setMemberRole`, `removeMember`,
+  // `reconcileProjectAccess`) is in flight.
+  const [savingProgress, setSavingProgress] = useState<{
+    title: string;
+    subtitle?: string;
+  } | null>(null);
 
   // See original implementation comment — iOS modal-swap workaround.
   const [pendingProjectsStep, setPendingProjectsStep] = useState<
@@ -327,7 +339,12 @@ export default function TeamAndRolesScreen() {
       return {
         kind: 'member',
         uid: m.uid,
-        displayName: m.displayName?.trim() || m.phoneNumber || m.uid,
+        // When the member hasn't set a display name yet, show a
+        // placeholder instead of their phone — the phone is already
+        // rendered as the subtitle below the name in every list row,
+        // so duplicating it as the title makes the row read like a
+        // bare phone number ("+919999900000 (you)").
+        displayName: m.displayName?.trim() || 'Unnamed member',
         phoneNumber: m.phoneNumber ?? '',
         role,
         isSelf: m.uid === user?.uid,
@@ -338,7 +355,9 @@ export default function TeamAndRolesScreen() {
       .map((p) => ({
         kind: 'pending',
         phoneNumber: p.phoneNumber,
-        displayName: p.displayName?.trim() || p.phoneNumber,
+        // Same placeholder for invited-but-not-joined members — the
+        // phone shows as the subtitle.
+        displayName: p.displayName?.trim() || 'Pending invite',
         role: p.role,
         projectIds: p.projectIds,
       }));
@@ -380,52 +399,41 @@ export default function TeamAndRolesScreen() {
     return { joined, pending: pendingCount, owner };
   }, [rows]);
 
-  const openContactPicker = useCallback(async (): Promise<{
-    phone: string;
-    name?: string;
-  } | null> => {
-    Keyboard.dismiss();
-    try {
-      const { status } = await Contacts.requestPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission needed', 'Allow contacts access to invite a member.');
-        return null;
-      }
-      await new Promise<void>((resolve) => {
-        InteractionManager.runAfterInteractions(() => {
-          setTimeout(resolve, 320);
-        });
-      });
-      const result = await Contacts.presentContactPickerAsync();
-      if (!result) return null;
-
-      const name =
-        result.name ?? [result.firstName, result.lastName].filter(Boolean).join(' ');
-      const raw =
-        result.phoneNumbers?.find(
-          (p) => (p.number ?? p.digits ?? '').replace(/\D/g, '').length >= 10,
-        ) ?? result.phoneNumbers?.[0];
-      const phone = (raw?.number ?? raw?.digits ?? '').replace(/[^\d+]/g, '');
-      if (!phone) {
-        Alert.alert('No phone number', 'That contact has no phone number to invite.');
-        return null;
-      }
-      return { phone, name: name || undefined };
-    } catch (e) {
-      Alert.alert(
-        'Contacts',
-        e instanceof Error ? e.message : 'Could not open the picker.',
-      );
-      return null;
-    }
-  }, []);
-
-  const startInvite = useCallback(async () => {
+  // "Add team member" → opens the unified picker in team mode.
+  // /select-party returns via newTeamMemberOutbox: existing org
+  // member (alert), phonebook contact (→ role picker), or "+ New
+  // Member" (→ small manual-entry modal → role picker).
+  const startInvite = useCallback(() => {
     if (!orgId || !isAdminish) return;
-    const picked = await openContactPicker();
-    if (!picked) return;
-    setStep({ kind: 'invite-role', contact: picked });
-  }, [orgId, isAdminish, openContactPicker]);
+    router.push('/(app)/select-party?mode=team' as never);
+  }, [orgId, isAdminish]);
+
+  // Drain the outbox after returning from /select-party.
+  useFocusEffect(
+    useCallback(() => {
+      const next = consumeNewTeamMemberOutbox();
+      if (!next) return;
+      if (next.kind === 'existing') {
+        // They already have an org membership. Editing their role
+        // is done by tapping their row in the list — point the user
+        // there.
+        Alert.alert(
+          'Already a team member',
+          `${next.displayName} is already in this organisation. Tap their row in the list below to change their role or project access.`,
+        );
+        return;
+      }
+      if (next.kind === 'contact') {
+        setStep({
+          kind: 'invite-role',
+          contact: { phone: next.phoneE164, name: next.displayName },
+        });
+        return;
+      }
+      // 'manual' — open the small name+phone entry modal.
+      setManualOpen(true);
+    }, []),
+  );
 
   const onInviteRoleSave = useCallback((role: AssignableRole) => {
     setStep((s) => {
@@ -443,6 +451,12 @@ export default function TeamAndRolesScreen() {
     async (newRole: AssignableRole) => {
       if (!orgId || step.kind !== 'edit-role') return;
       const row = step.row;
+      // Show the blocking spinner so the user sees something is happening
+      // during the inviteMember / setMemberRole round-trip (~1 s).
+      setSavingProgress({
+        title: 'Updating role',
+        subtitle: row.displayName || undefined,
+      });
       try {
         if (row.kind === 'pending') {
           await inviteMember({
@@ -463,6 +477,8 @@ export default function TeamAndRolesScreen() {
           return;
         }
         Alert.alert('Could not save role', (e as Error).message);
+      } finally {
+        setSavingProgress(null);
       }
     },
     [orgId, step, openPaywall],
@@ -471,6 +487,19 @@ export default function TeamAndRolesScreen() {
   const onProjectsSave = useCallback(
     async (projectIds: string[]) => {
       if (!orgId) return;
+      // Inline-derive the overlay copy from the current step so the
+      // user sees who/what the round-trip is for (e.g. invitee phone
+      // for new invites, member name for edits).
+      let progressTitle = 'Saving';
+      let progressSubtitle: string | undefined;
+      if (step.kind === 'invite-projects') {
+        progressTitle = 'Sending invite';
+        progressSubtitle = step.contact.name || step.contact.phone;
+      } else if (step.kind === 'edit-projects') {
+        progressTitle = 'Updating access';
+        progressSubtitle = step.row.displayName || undefined;
+      }
+      setSavingProgress({ title: progressTitle, subtitle: progressSubtitle });
       try {
         if (step.kind === 'invite-projects') {
           const { contact, role } = step;
@@ -518,6 +547,8 @@ export default function TeamAndRolesScreen() {
           return;
         }
         Alert.alert('Could not save', (e as Error).message);
+      } finally {
+        setSavingProgress(null);
       }
     },
     [orgId, step, projects, openPaywall],
@@ -535,6 +566,10 @@ export default function TeamAndRolesScreen() {
           text: 'Remove',
           style: 'destructive',
           onPress: async () => {
+            setSavingProgress({
+              title: 'Removing member',
+              subtitle: target.displayName || undefined,
+            });
             try {
               if (target.kind === 'member') {
                 await removeMember({ orgId, uid: target.uid });
@@ -544,6 +579,8 @@ export default function TeamAndRolesScreen() {
               setStep({ kind: 'idle' });
             } catch (e) {
               Alert.alert('Could not remove', (e as Error).message);
+            } finally {
+              setSavingProgress(null);
             }
           },
         },
@@ -902,6 +939,31 @@ export default function TeamAndRolesScreen() {
             ? 1
             : 0
         }
+      />
+
+      {/* Manual entry — opens when user picked "+ New Member" in
+          /select-party for someone not in their phonebook. After
+          they type name + phone we kick off the role picker. */}
+      <ManualMemberEntryModal
+        state={{ open: manualOpen }}
+        onClose={() => setManualOpen(false)}
+        onContinue={(name, phoneE164) => {
+          setManualOpen(false);
+          setStep({
+            kind: 'invite-role',
+            contact: { phone: phoneE164, name },
+          });
+        }}
+        hint="Type the person's name + phone. We'll send them an OTP invite to join the organisation after you pick their role."
+      />
+
+      {/* Full-screen blocking spinner during invite / role-change /
+          remove round-trips so the user sees clear progress instead
+          of a "did anything happen?" dead beat. */}
+      <ProgressOverlay
+        visible={savingProgress !== null}
+        title={savingProgress?.title ?? 'Saving'}
+        subtitle={savingProgress?.subtitle}
       />
     </View>
   );

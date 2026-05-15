@@ -42,6 +42,7 @@ import { PlanBadge } from '@/src/ui/PlanBadge';
 import { StudioAvatar } from '@/src/ui/StudioAvatar';
 
 import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { ProgressOverlay } from '@/src/ui/v2/ProgressOverlay';
 import { Text } from '@/src/ui/v2/Text';
 import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
 import { useThemeV2 } from '@/src/theme/v2';
@@ -196,7 +197,8 @@ export default function SelectCompanyScreen() {
               </Text>
               <ActiveCard
                 row={activeRow}
-                onSettings={() => router.push('/(app)/team-roles' as never)}
+                onCardPress={() => router.push('/(app)/profile' as never)}
+                onTeamPress={() => router.push('/(app)/team-roles' as never)}
               />
             </View>
           ) : null}
@@ -335,16 +337,35 @@ export default function SelectCompanyScreen() {
           ) : null}
         </ScrollView>
       )}
+
+      {/* Full-screen blocking overlay during the switch — the per-row
+          spinner above stays visible underneath via the dimmed
+          backdrop, but this gives the user a clearer "yes, something
+          IS happening" signal during the ~1-2 s claim refresh +
+          snapshot wait + redirect. */}
+      <ProgressOverlay
+        visible={busy}
+        title="Switching studio"
+        subtitle={
+          orgs.find((o) => o.id === pendingTargetId)?.name ?? undefined
+        }
+      />
     </View>
   );
 }
 
 function ActiveCard({
   row,
-  onSettings,
+  onCardPress,
+  onTeamPress,
 }: {
   row: MyOrgRow;
-  onSettings: () => void;
+  /** Tap on the card body → studio profile screen. */
+  onCardPress: () => void;
+  /** Tap on the small person-add chip → team & roles screen.
+   *  Wrapped in its own Pressable so the tap doesn't bubble up to
+   *  `onCardPress`. */
+  onTeamPress: () => void;
 }) {
   const t = useThemeV2();
   const tone = roleTone(row.roleLabel, t);
@@ -354,8 +375,9 @@ function ActiveCard({
   const ownerLine = row.isYourStudio ? 'You' : row.ownerName || '—';
 
   return (
-    <View
-      style={[
+    <Pressable
+      onPress={onCardPress}
+      style={({ pressed }) => [
         styles.activeCard,
         {
           backgroundColor: cardBg,
@@ -363,7 +385,10 @@ function ActiveCard({
           borderColor: t.palette.blue.base + '33',
           borderWidth: 1.5,
         },
+        pressed && { opacity: 0.92 },
       ]}
+      accessibilityRole="button"
+      accessibilityLabel={`${row.name}, open studio profile`}
     >
       {/* Top row: avatar + name + plan badge */}
       <View style={styles.activeTop}>
@@ -387,7 +412,7 @@ function ActiveCard({
           </Text>
         </View>
         <Pressable
-          onPress={onSettings}
+          onPress={onTeamPress}
           hitSlop={10}
           style={({ pressed }) => [
             styles.gearBtn,
@@ -398,11 +423,12 @@ function ActiveCard({
             },
             pressed && { opacity: 0.7 },
           ]}
+          accessibilityRole="button"
           accessibilityLabel="Manage team & roles"
         >
-          {/* person-add reads as "add a teammate" — clearer than a
-              gear here since this jumps straight into Team & Roles
-              where the user can invite a new member. */}
+          {/* person-add reads as "add a teammate" — opens Team &
+              Roles in one tap. The outer card Pressable handles the
+              "open studio profile" intent. */}
           <Ionicons
             name="person-add"
             size={15}
@@ -466,7 +492,7 @@ function ActiveCard({
         <View style={{ flex: 1 }} />
         <PlanBadge tier={row.tier} size="sm" />
       </View>
-    </View>
+    </Pressable>
   );
 }
 

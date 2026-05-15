@@ -19,6 +19,7 @@
 import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 
+import { invalidatePlanConfigCache } from '../billing/planConfigCache';
 import { assertAppOwner } from './auth';
 import { logAdminAction } from './audit';
 
@@ -92,6 +93,12 @@ export const adminUpdatePlanConfig = onCall<Request, Promise<Response>>(
       },
       { merge: false },
     );
+
+    // Bust the in-memory cache so the very next `getPlanConfig()` call
+    // on THIS function instance hits Firestore and reads our fresh
+    // write — eliminates the worst-case lag for the admin's own
+    // follow-up actions. Other warm instances still respect the TTL.
+    invalidatePlanConfigCache();
 
     await logAdminAction({
       actorUid,

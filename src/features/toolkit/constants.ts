@@ -21,6 +21,12 @@ export const PLYWOOD_SHEET_FT = { length: 8, width: 4 } as const;
 export const PLYWOOD_SHEET_AREA_SQFT =
   PLYWOOD_SHEET_FT.length * PLYWOOD_SHEET_FT.width; // 32 sq ft
 
+/** Saw kerf (blade thickness) — used by the cutlist optimizer to add
+ *  gap between neighbouring placements. 3 mm is typical for a 7¼" /
+ *  184 mm circular-saw blade with carbide teeth. Hand-saw users
+ *  should drop this to ~1 mm; heavy panel saws can reach ~3.2 mm. */
+export const DEFAULT_KERF_MM = 3;
+
 /** Length conversions — single source of truth for the unit converter. */
 export const LENGTH = {
   ftToMm: 304.8,

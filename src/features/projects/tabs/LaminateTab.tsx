@@ -14,6 +14,7 @@ import * as Haptics from 'expo-haptics';
 
 import { useLaminates } from '@/src/features/laminates/useLaminates';
 import type { Laminate, RoomLaminates } from '@/src/features/laminates/types';
+import { useProjectTabRefreshKey } from '@/src/features/projects/ProjectTabRefreshContext';
 import { Can } from '@/src/ui/Can';
 
 import { FAB } from '@/src/ui/v2/FAB';
@@ -168,7 +169,12 @@ export function LaminateTab() {
   const t = useThemeV2();
   const refresh = usePullToRefresh();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
-  const { rooms, data, loading } = useLaminates(projectId);
+  // Bumps every time the parent project screen regains focus, forcing
+  // `useLaminates` to re-subscribe its Firestore listener. Closes the
+  // "added a laminate but it doesn't appear until I leave + come back"
+  // bug caused by stack-push freezing the snapshot callback.
+  const focusRefresh = useProjectTabRefreshKey();
+  const { rooms, data, loading } = useLaminates(projectId, focusRefresh);
   const brands = new Set(data.map((l) => l.brand));
 
   return (

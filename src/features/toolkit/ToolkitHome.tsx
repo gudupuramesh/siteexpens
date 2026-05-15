@@ -28,6 +28,7 @@ import { UnitConverter } from './modules/UnitConverter';
 import { TileCalculator } from './modules/TileCalculator';
 import { PaintCalculator } from './modules/PaintCalculator';
 import { PlywoodCalculator } from './modules/PlywoodCalculator';
+import { CutlistOptimizer } from './modules/CutlistOptimizer';
 import { LightingCalculator } from './modules/LightingCalculator';
 import { AcTonnageCalculator } from './modules/AcTonnageCalculator';
 import { WallpaperCalculator } from './modules/WallpaperCalculator';
@@ -43,6 +44,7 @@ type ModuleKey =
   | 'tile'
   | 'paint'
   | 'plywood'
+  | 'cutlist'
   | 'lighting'
   | 'ac'
   | 'wallpaper'
@@ -101,6 +103,14 @@ const MODULES: ModuleDef[] = [
     subtitle: 'Face area → 8×4 ft sheets to order',
     icon: 'albums-outline',
     Component: PlywoodCalculator,
+  },
+  {
+    key: 'cutlist',
+    group: 'Estimate',
+    title: 'Cutlist optimizer',
+    subtitle: 'Pack cuts onto sheets — layout + waste % + PDF',
+    icon: 'apps-outline',
+    Component: CutlistOptimizer,
   },
   {
     key: 'lighting',

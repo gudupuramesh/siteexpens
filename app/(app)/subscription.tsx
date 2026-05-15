@@ -43,30 +43,18 @@ import {
 } from '@/src/features/billing/limits';
 import { ENTITLEMENT_ID, productIdFor } from '@/src/features/billing/productIds';
 import { useSubscription } from '@/src/features/billing/useSubscription';
+import { usePlanConfig } from '@/src/features/billing/usePlanConfig';
 import { usePermissions } from '@/src/features/org/usePermissions';
 import type { PlanTier, SubscriptionPeriod, SubscriptionStatus } from '@/src/features/billing/types';
+import { formatBytes, formatDate } from '@/src/lib/format';
 import { openLegalUrl } from '@/src/lib/openLegalUrl';
 import { Text } from '@/src/ui/v2/Text';
 import { color, fontFamily, screenInset, space } from '@/src/theme/tokens';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-function formatBytes(b: number): string {
-  if (b >= 1024 ** 3) return `${(b / 1024 ** 3).toFixed(b >= 10 * 1024 ** 3 ? 0 : 1)} GB`;
-  if (b >= 1024 ** 2) return `${Math.round(b / 1024 ** 2)} MB`;
-  return `${Math.max(0, b)} B`;
-}
-
 function formatINR(n: number): string {
   return `₹${n.toLocaleString('en-IN')}`;
-}
-
-function formatDate(d: Date): string {
-  return d.toLocaleDateString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-  });
 }
 
 /** Annual savings vs. 12 × monthly, rounded to nearest %. */
@@ -547,7 +535,12 @@ function PlanCard({
   disabled = false,
   onUpgrade,
 }: PlanCardProps) {
-  const limits = PLAN_LIMITS[tier];
+  // Live `system/planConfig` overrides the hardcoded `PLAN_LIMITS` so
+  // edits in the App Owner web admin show up here without a deploy.
+  // `useSyncExternalStore` keeps the listener count to ONE across all
+  // mounted PlanCards.
+  const planConfig = usePlanConfig();
+  const limits = planConfig?.[tier] ?? PLAN_LIMITS[tier];
   const pricing = PLAN_PRICING_INR[tier];
   const features = FEATURE_MATRIX[tier];
 

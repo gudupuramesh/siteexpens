@@ -1,25 +1,27 @@
 /**
  * v2 StudioProfileCard — single-panel hero card.
  *
- * NEW layout per latest user feedback:
- *
- *   ┌──────────────────────────────────────────────────┐
- *   │  [AS]  Studio Name                  ✦ AGENCY PLAN│
- *   │        +91 9876543210                             │
- *   │                                                   │
- *   │  [● 12 Projects] [● 8 Members] [📅 Renews May 12] │
- *   └──────────────────────────────────────────────────┘
+ *   ┌─────────────────────────────────────────────────────────────────┐
+ *   │  [AS]  Studio Name                                ✦ STUDIO PLAN │
+ *   │        +91 9876543210                                            │
+ *   │                                                                  │
+ *   │  [● 2/6  ][● 3/6  ][● 1.2GB/5GB][● 12 May ]                      │
+ *   │   PROJECTS MEMBERS  STORAGE       RENEWS                         │
+ *   └─────────────────────────────────────────────────────────────────┘
  *
  *   • Plan badge is on the RIGHT, in line with the studio name
  *   • Phone number is the subline beneath the studio name
- *   • Bottom is a 3-pill row: Projects · Members · Expiry
- *   • No internal dividers — hierarchy via spacing only
+ *   • Stat strip is a SINGLE ROW of 4 quiet cells with hairline
+ *     dividers between. Cell value uses `adjustsFontSizeToFit` so the
+ *     longer "1.2 GB / 5 GB" string shrinks to fit on narrow screens.
+ *   • Each stat is a `{ value, label }` string pair — caller formats
+ *     "2 / 6" or "1.2 GB / 5 GB" so the card stays presentational.
  *   • No edit pen (the OrgSwitcher in the top header handles studio-switching;
  *     row destinations below handle profile editing)
  */
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { StyleSheet, View } from 'react-native';
+import { Image, StyleSheet, View } from 'react-native';
 
 import { useThemeV2 } from '@/src/theme/v2';
 
@@ -41,16 +43,25 @@ export type StudioProfileCardProps = {
   subline?: string;
   /** Subscription tier for the plan badge. */
   tier: TierKey;
-  /** Short value shown in the Expiry block, e.g. "May 12". Pass
+  /** Studio logo URL (e.g. R2 public URL). When provided, replaces
+   *  the auto-generated initials gradient. Pass `null` / `undefined`
+   *  for the gradient fallback. */
+  logoUrl?: string | null;
+  /** Short value shown in the Expiry block, e.g. "12 May". Pass
    *  undefined for Free plan to skip the block. */
   expiryValue?: string;
   /** Label under the expiry value: "Renews" or "Expires" depending
    *  on `subscription.willRenew`. */
   expiryLabel?: string;
-  /** Stat values for the bottom shaded blocks. */
+  /** Stat values for the bottom shaded blocks. Each is a free-form
+   *  string the caller has already formatted (e.g. "2 / 6", "∞",
+   *  "1.2 GB / 5 GB"). */
   stats: {
     projects: string;
     members: string;
+    /** Optional — when omitted (or on plans without a meaningful
+     *  storage cap to display), the storage cell collapses. */
+    storage?: string;
   };
 };
 
@@ -58,6 +69,7 @@ export function StudioProfileCard({
   studioName,
   subline,
   tier,
+  logoUrl,
   expiryValue,
   expiryLabel,
   stats,
@@ -91,25 +103,36 @@ export function StudioProfileCard({
         t.shadows.resting,
       ]}
     >
-      {/* Identity — avatar + (name + plan badge inline) + phone */}
+      {/* Identity — avatar + (name + plan badge inline) + phone.
+          Uploaded logo wins; falls back to the iOS-warm gradient with
+          the studio's initials when no logo has been set. */}
       <View style={styles.identityRow}>
-        <LinearGradient
-          colors={['#FF9F0A', '#FF453A', '#BF5AF2']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.avatar}
-        >
-          <Text
-            style={{
-              color: '#FFFFFF',
-              fontSize: 16,
-              fontWeight: '700',
-              letterSpacing: 0.2,
-            }}
+        {logoUrl ? (
+          <Image
+            source={{ uri: logoUrl }}
+            style={[styles.avatar, { backgroundColor: t.colors.fill3 }]}
+            resizeMode="cover"
+            accessibilityIgnoresInvertColors
+          />
+        ) : (
+          <LinearGradient
+            colors={['#FF9F0A', '#FF453A', '#BF5AF2']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.avatar}
           >
-            {initials}
-          </Text>
-        </LinearGradient>
+            <Text
+              style={{
+                color: '#FFFFFF',
+                fontSize: 16,
+                fontWeight: '700',
+                letterSpacing: 0.2,
+              }}
+            >
+              {initials}
+            </Text>
+          </LinearGradient>
+        )}
 
         <View style={styles.nameBlock}>
           <View style={styles.nameLine}>
@@ -162,12 +185,11 @@ export function StudioProfileCard({
         </View>
       </View>
 
-      {/* Stat strip — Projects · Members · Expiry.
-          Single quiet surface (fill3) with hairline dividers between
-          cells. Color shows up only as a tiny accent dot before each
-          label, not as a candy-bright background fill — keeps the
-          card reading as a calm executive dashboard rather than a
-          dashboard for kids' apps. */}
+      {/* Stat strip — single horizontal row of 4 quiet cells.
+          Projects · Members · Storage · Expiry, hairline dividers
+          between. The value text uses `adjustsFontSizeToFit` so the
+          longer "1.2 GB / 5 GB" string shrinks to fit its cell on
+          narrow screens without forcing a card-wide wrap. */}
       <View
         style={[
           styles.statStrip,
@@ -193,19 +215,23 @@ export function StudioProfileCard({
         <View
           style={[styles.statDivider, { backgroundColor: t.colors.separator }]}
         />
-        {expiryValue ? (
-          <StatCell
-            value={expiryValue}
-            label={expiryLabel ?? 'Expires'}
-            dot={t.palette.orange.base}
-          />
-        ) : (
-          <StatCell
-            value="—"
-            label="No expiry"
-            dot={t.colors.tertiary}
-          />
-        )}
+        <StatCell
+          value={stats.storage ?? '—'}
+          label="Storage"
+          dot={
+            stats.storage
+              ? t.palette.purple?.base ?? t.palette.blue.base
+              : t.colors.tertiary
+          }
+        />
+        <View
+          style={[styles.statDivider, { backgroundColor: t.colors.separator }]}
+        />
+        <StatCell
+          value={expiryValue ?? '—'}
+          label={expiryValue ? expiryLabel ?? 'Expires' : 'No expiry'}
+          dot={expiryValue ? t.palette.orange.base : t.colors.tertiary}
+        />
       </View>
     </View>
   );
@@ -228,12 +254,12 @@ function StatCell({
   return (
     <View style={blockStyles.cell}>
       <Text
-        variant="title3"
+        variant="footnote"
         color="label"
-        style={{ fontWeight: '700', letterSpacing: -0.3 }}
+        style={{ fontWeight: '700', letterSpacing: -0.2, fontSize: 14 }}
         numberOfLines={1}
         adjustsFontSizeToFit
-        minimumFontScale={0.7}
+        minimumFontScale={0.6}
       >
         {value}
       </Text>
@@ -247,7 +273,7 @@ function StatCell({
         <Text
           variant="caption2"
           color="secondary"
-          style={{ letterSpacing: 0.4, marginLeft: 4 }}
+          style={{ letterSpacing: 0.3, marginLeft: 3, fontSize: 9 }}
           numberOfLines={1}
         >
           {label.toUpperCase()}
@@ -295,18 +321,18 @@ const styles = StyleSheet.create({
     flexShrink: 0,
   },
 
-  // Quiet 3-up stat strip — Projects · Members · Expiry on one
-  // surface with hairline dividers between.
+  // Quiet 4-up stat strip — Projects · Members · Storage · Expiry on
+  // one surface with hairline dividers between each cell.
   statStrip: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
+    alignItems: 'stretch',
+    paddingVertical: 10,
     marginTop: 12,
   },
   statDivider: {
     width: StyleSheet.hairlineWidth,
     alignSelf: 'stretch',
-    marginHorizontal: 4,
+    marginHorizontal: 2,
   },
 });
 
@@ -314,17 +340,17 @@ const blockStyles = StyleSheet.create({
   cell: {
     flex: 1,
     minWidth: 0,
-    paddingHorizontal: 8,
+    paddingHorizontal: 4,
     alignItems: 'center',
   },
   cellLabelRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
+    marginTop: 3,
   },
   cellDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
+    width: 4,
+    height: 4,
+    borderRadius: 2,
   },
 });

@@ -8,8 +8,21 @@
  * use `StyleSheet.hairlineWidth` and an explicit border color in light
  * mode (subtle inset glow in dark mode is approximated via a lighter
  * border).
+ *
+ * **Android elevation policy.** Android renders `elevation` via a
+ * hardware shadow (RenderNode) that flickers / re-rasterises during
+ * transitions — most visibly when swiping between tabs (LeadCard,
+ * KpiCard, StudioProfileCard, project rows, etc.). Since the design
+ * intent is hairline-border-driven depth and the iOS shadow is already
+ * almost invisible (`shadowOpacity: 0.03`), we set `elevation: 0` on
+ * Android for `resting` and `lifted`. iOS keeps its subtle drop
+ * shadow; Android relies on the hairline border + surface tint to read
+ * as a card. `glass` (the floating tab bar) keeps its elevation
+ * because that surface doesn't move during transitions.
  */
-import { StyleSheet, type ViewStyle } from 'react-native';
+import { Platform, StyleSheet, type ViewStyle } from 'react-native';
+
+const isAndroid = Platform.OS === 'android';
 
 /** Resting card on bg. Almost no shadow — relies on the hairline border. */
 export const restingShadow = (mode: 'light' | 'dark'): ViewStyle =>
@@ -19,7 +32,8 @@ export const restingShadow = (mode: 'light' | 'dark'): ViewStyle =>
         shadowOpacity: 0.03,
         shadowRadius: 2,
         shadowOffset: { width: 0, height: 1 },
-        elevation: 1,
+        // Android: skip elevation to avoid transition shadow artefacts.
+        elevation: isAndroid ? 0 : 1,
       }
     : {
         // dark mode resting cards rely on a subtle inner highlight
@@ -39,14 +53,15 @@ export const liftedShadow = (mode: 'light' | 'dark'): ViewStyle =>
         shadowOpacity: 0.04,
         shadowRadius: 3,
         shadowOffset: { width: 0, height: 1 },
-        elevation: 2,
+        // Android: skip elevation here too — same flicker pattern.
+        elevation: isAndroid ? 0 : 2,
       }
     : {
         shadowColor: '#000',
         shadowOpacity: 0.4,
         shadowRadius: 8,
         shadowOffset: { width: 0, height: 4 },
-        elevation: 4,
+        elevation: isAndroid ? 0 : 4,
       };
 
 /** Liquid-glass surface (nav pill, tab bar). Used UNDER a <BlurView>. */

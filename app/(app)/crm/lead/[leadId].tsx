@@ -30,6 +30,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { deleteLead, updateLead } from '@/src/features/crm/leads';
+import { shareLead } from '@/src/features/crm/share';
 import {
   LEAD_PRIORITIES,
   LEAD_STATUSES,
@@ -427,7 +428,7 @@ export default function LeadDetailScreen() {
           </View>
         ) : null}
 
-        {/* Quick actions — Call (blue) · WhatsApp (green brand) · Status (blue) */}
+        {/* Quick actions — Call · WhatsApp · Share · Status */}
         <View style={styles.actionsRow}>
           <ActionButton
             icon="call"
@@ -442,6 +443,20 @@ export default function LeadDetailScreen() {
             tint={t.palette.green.base}
             tintBg={t.palette.green.soft}
             onPress={openWhatsApp}
+          />
+          <ActionButton
+            icon="share-outline"
+            label="Share"
+            tint={t.palette.blue.base}
+            tintBg={t.palette.blue.soft}
+            onPress={() =>
+              void shareLead(lead, {
+                // Don't surface the placeholder "—" when no team
+                // member is assigned — pass undefined instead so the
+                // helper omits the "Assigned to" line entirely.
+                assignedName: assignedName === '—' ? undefined : assignedName,
+              })
+            }
           />
           <ActionButton
             icon="flag"

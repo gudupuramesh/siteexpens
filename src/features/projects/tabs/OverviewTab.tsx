@@ -407,6 +407,7 @@ export function OverviewTab() {
           label="Status"
           chevron
           onPress={() => setStatusPickerOpen(true)}
+          divider={false}
           trailing={
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               {savingStatus ? (
@@ -448,15 +449,6 @@ export function OverviewTab() {
               </View>
             </View>
           }
-        />
-        <Row
-          label="Team size"
-          value={
-            project.team !== undefined && project.team > 0
-              ? `${project.team} ${project.team === 1 ? 'person' : 'people'}`
-              : '—'
-          }
-          divider={false}
         />
       </FormGroup>
 

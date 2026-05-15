@@ -2,18 +2,32 @@
  * RolePickerSheet — v2 design.
  *
  * Full-height bottom sheet that lets a Studio Admin / Owner pick a
- * role for a teammate or invite. Each role card shows a compact 2-up
- * module access matrix so the picker can compare roles at a glance.
+ * role for a teammate or invite. Every role renders as its own card
+ * with the full module-access matrix inline — five cards, five
+ * matrices, side-by-side comparable in one scroll. The user wanted
+ * the original "full card with matrix" structure preserved; this
+ * iteration keeps that but trades the boxes-within-boxes visual for
+ * a much cleaner styling vocabulary:
+ *
+ *   - The inner gray-tile matrix is gone. Module rows render flush
+ *     inside the card with no nested surface.
+ *   - Heavy checkmark / dash / cross icons replaced by small 7 px
+ *     tone dots (green / orange / muted) — same information at a
+ *     fraction of the visual weight.
+ *   - Module labels render in small-caps caption type (caption2
+ *     letterspacing 0.4) so they read as labels rather than copy.
+ *   - The access tag is text-only ("· FULL ACCESS" inline next to the
+ *     role name), no coloured pill chip — keeps the role header
+ *     visually quiet so the matrix doesn't have to compete for attention.
+ *   - Selected state: thin blue ring + faint blue tint + small filled
+ *     blue checkmark. Not a saturated blue background.
  *
  * Layout:
  *   1. Sheet header (grabber + Cancel · "Pick role" title + Done)
  *   2. Identity strip (target's name + phone subtitle)
- *   3. List of selectable role cards:
- *      - Tone-tinted dot + role label + access tag (Full / Limited / Read-only)
- *      - Selected card → blue border + blue.soft fill + checkmark
- *      - Description line
- *      - 2-col matrix of all 12 modules with full / partial / none icons
- *   4. Footer with optional red.soft Remove pill + blue Save pill
+ *   3. List of selectable role cards — each shows label + access
+ *      tag + description + 2-col module access matrix
+ *   4. Optional Remove-from-studio footer (edit flow only)
  *
  * Used in two flows:
  *   - Invite: pickContact → open sheet → pick role → "Continue" → opens
@@ -44,6 +58,7 @@ import {
   ROLE_MODULE_ACCESS,
   type AccessLevel,
   type AssignableRole,
+  type ModuleKey,
 } from './permissions';
 import type { RoleKey } from './types';
 
@@ -275,153 +290,26 @@ export function RolePickerSheet({
             </View>
           ) : null}
 
-          {/* Role cards */}
+          {/* Role cards — every role shows its full module-access
+              matrix inline so the user can compare side-by-side. */}
           <ScrollView
             style={{ flex: 1 }}
             contentContainerStyle={{
               paddingHorizontal: 16,
               paddingTop: 16,
               paddingBottom: 16,
-              gap: 10,
+              gap: 12,
             }}
             showsVerticalScrollIndicator={false}
           >
-            {assignable.map((role) => {
-              const isSelected = selected === role;
-              const tone = roleTone(role, t);
-              const tag = accessTagFor(role);
-              const tagTone = t.palette[tag.tone];
-
-              return (
-                <Pressable
-                  key={role}
-                  onPress={() => setSelected(role)}
-                  style={({ pressed }) => [
-                    styles.card,
-                    {
-                      backgroundColor: isSelected
-                        ? t.mode === 'dark'
-                          ? t.palette.blue.softDark
-                          : t.palette.blue.soft
-                        : cardBg,
-                      borderRadius: t.radii.card,
-                      borderColor: isSelected
-                        ? t.palette.blue.base + '55'
-                        : cardBorder,
-                      borderWidth: isSelected ? 1.5 : t.hairline,
-                    },
-                    pressed && { opacity: 0.92 },
-                  ]}
-                >
-                  {/* Header row — dot + label + access tag + checkmark */}
-                  <View style={styles.cardHeader}>
-                    <View
-                      style={[
-                        styles.roleDot,
-                        { backgroundColor: tone.base },
-                      ]}
-                    />
-                    <Text
-                      variant="headline"
-                      color="label"
-                      style={{ marginLeft: 8, fontWeight: '700' }}
-                    >
-                      {ROLE_LABELS[role]}
-                    </Text>
-                    <View
-                      style={[
-                        styles.tagPill,
-                        {
-                          backgroundColor:
-                            t.mode === 'dark' ? tagTone.softDark : tagTone.soft,
-                          borderRadius: 999,
-                          marginLeft: 8,
-                        },
-                      ]}
-                    >
-                      <Text
-                        variant="caption2"
-                        style={{
-                          color: tagTone.base,
-                          fontWeight: '700',
-                          letterSpacing: 0.4,
-                        }}
-                      >
-                        {tag.label.toUpperCase()}
-                      </Text>
-                    </View>
-                    <View style={{ flex: 1 }} />
-                    <Ionicons
-                      name={isSelected ? 'checkmark-circle' : 'ellipse-outline'}
-                      size={20}
-                      color={
-                        isSelected ? t.palette.blue.base : t.colors.tertiary
-                      }
-                    />
-                  </View>
-
-                  {/* Description */}
-                  <Text
-                    variant="footnote"
-                    color="secondary"
-                    style={{ marginTop: 6 }}
-                  >
-                    {ROLE_DESCRIPTIONS[role]}
-                  </Text>
-
-                  {/* Module access matrix */}
-                  <View
-                    style={[
-                      styles.matrix,
-                      {
-                        backgroundColor: isSelected
-                          ? t.colors.surface + '00' // already on tinted bg
-                          : t.colors.fill3,
-                        borderRadius: t.radii.tile,
-                        marginTop: 12,
-                      },
-                    ]}
-                  >
-                    {pairsOf(MODULE_KEYS).map(([a, b], i) => (
-                      <View key={i} style={styles.matrixRow}>
-                        <ModuleCell role={role} moduleKey={a} t={t} />
-                        <ModuleCell role={role} moduleKey={b} t={t} />
-                      </View>
-                    ))}
-                  </View>
-                </Pressable>
-              );
-            })}
-
-            {/* Legend */}
-            <View
-              style={[
-                styles.legend,
-                {
-                  backgroundColor: cardBg,
-                  borderRadius: t.radii.card,
-                  borderColor: cardBorder,
-                  borderWidth: t.hairline,
-                  marginTop: 4,
-                },
-              ]}
-            >
-              <LegendItem
-                icon="checkmark"
-                color={t.palette.green.base}
-                label="Full"
+            {assignable.map((role) => (
+              <RoleCard
+                key={role}
+                role={role}
+                isSelected={selected === role}
+                onPress={() => setSelected(role)}
               />
-              <LegendItem
-                icon="remove"
-                color={t.palette.orange.base}
-                label="Partial"
-              />
-              <LegendItem
-                icon="close"
-                color={t.colors.tertiary}
-                label="None"
-              />
-            </View>
+            ))}
           </ScrollView>
 
           {/* Footer — Remove Access (when editing) */}
@@ -485,71 +373,174 @@ export function RolePickerSheet({
   );
 }
 
+/**
+ * RoleCard — selectable card with the full module-access matrix
+ * inline. Visual vocabulary:
+ *   - Header: role name (heavy) · "FULL ACCESS" / "LIMITED ACCESS"
+ *     in tone-coloured caption (no pill chip).
+ *   - Description: 1-line secondary copy.
+ *   - Matrix: 2-col flush layout, module label in caption2 small-caps,
+ *     7 px tone dot at the right of each cell. Green = full, orange
+ *     = partial, neutral grey = none.
+ *   - Selected: thin 1.5 px blue ring + faint blue tint + filled blue
+ *     check in top-right corner. Subtle, not loud.
+ */
+function RoleCard({
+  role,
+  isSelected,
+  onPress,
+}: {
+  role: AssignableRole;
+  isSelected: boolean;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  const tag = accessTagFor(role);
+  const tagTone = t.palette[tag.tone];
+
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+  // Faint tint when selected — 14 % opacity of blue.soft so the row
+  // reads as "lit" without overpowering the matrix beneath.
+  const selectedTint =
+    t.mode === 'dark'
+      ? 'rgba(10,132,255,0.12)'
+      : 'rgba(10,132,255,0.06)';
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.card,
+        {
+          backgroundColor: isSelected ? selectedTint : cardBg,
+          borderRadius: t.radii.card,
+          borderColor: isSelected ? t.palette.blue.base : cardBorder,
+          borderWidth: isSelected ? 1.5 : t.hairline,
+        },
+        pressed && { opacity: 0.94 },
+      ]}
+      accessibilityRole="radio"
+      accessibilityState={{ selected: isSelected }}
+      accessibilityLabel={`${ROLE_LABELS[role]}, ${tag.label}`}
+    >
+      {/* Header — name + access tag (left) + check (right) */}
+      <View style={styles.cardHeader}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={styles.headerLine}>
+            <Text
+              variant="headline"
+              color="label"
+              style={{ fontWeight: '700' }}
+              numberOfLines={1}
+            >
+              {ROLE_LABELS[role]}
+            </Text>
+            <Text
+              variant="caption2"
+              style={{
+                color: tagTone.base,
+                fontWeight: '700',
+                letterSpacing: 0.5,
+                marginLeft: 8,
+              }}
+              numberOfLines={1}
+            >
+              {`· ${tag.label.toUpperCase()}`}
+            </Text>
+          </View>
+          <Text
+            variant="footnote"
+            color="secondary"
+            style={{ marginTop: 4 }}
+          >
+            {ROLE_DESCRIPTIONS[role]}
+          </Text>
+        </View>
+        <View style={styles.checkSlot}>
+          {isSelected ? (
+            <View
+              style={[
+                styles.checkFilled,
+                { backgroundColor: t.palette.blue.base },
+              ]}
+            >
+              <Ionicons name="checkmark" size={12} color="#fff" />
+            </View>
+          ) : (
+            <View
+              style={[
+                styles.checkRing,
+                { borderColor: t.colors.tertiary },
+              ]}
+            />
+          )}
+        </View>
+      </View>
+
+      {/* Module access matrix — 2 col, flush inside the card (no
+          inner gray surface). Labels in caption2 small-caps, dots
+          on the right encode access level. */}
+      <View style={styles.matrix}>
+        {pairsOf(MODULE_KEYS).map(([a, b], i) => (
+          <View key={i} style={styles.matrixRow}>
+            <ModuleCell role={role} moduleKey={a} t={t} />
+            <ModuleCell role={role} moduleKey={b} t={t} />
+          </View>
+        ))}
+      </View>
+    </Pressable>
+  );
+}
+
+/** One module label + access dot inside the matrix. */
 function ModuleCell({
   role,
   moduleKey,
   t,
 }: {
   role: RoleKey;
-  moduleKey: (typeof MODULE_KEYS)[number] | null;
+  moduleKey: ModuleKey | null;
   t: ReturnType<typeof useThemeV2>;
 }) {
   if (!moduleKey) return <View style={styles.cell} />;
   const level: AccessLevel = ROLE_MODULE_ACCESS[role][moduleKey];
+  const dotColor =
+    level === 'full'
+      ? t.palette.green.base
+      : level === 'partial'
+        ? t.palette.orange.base
+        : t.colors.tertiary;
+  // "None" gets a hollow ring instead of a filled dot so it reads
+  // as "not granted" rather than "another colour I have to decode".
+  const isNone = level === 'none';
   return (
     <View style={styles.cell}>
       <Text
-        variant="footnote"
-        color="label"
-        style={{ flex: 1 }}
-        numberOfLines={1}
-      >
-        {MODULE_LABELS[moduleKey]}
-      </Text>
-      <AccessIcon level={level} t={t} />
-    </View>
-  );
-}
-
-function AccessIcon({
-  level,
-  t,
-}: {
-  level: AccessLevel;
-  t: ReturnType<typeof useThemeV2>;
-}) {
-  if (level === 'full') {
-    return (
-      <Ionicons name="checkmark" size={14} color={t.palette.green.base} />
-    );
-  }
-  if (level === 'partial') {
-    return (
-      <Ionicons name="remove" size={14} color={t.palette.orange.base} />
-    );
-  }
-  return <Ionicons name="close" size={14} color={t.colors.tertiary} />;
-}
-
-function LegendItem({
-  icon,
-  color,
-  label,
-}: {
-  icon: keyof typeof Ionicons.glyphMap;
-  color: string;
-  label: string;
-}) {
-  return (
-    <View style={styles.legendItem}>
-      <Ionicons name={icon} size={13} color={color} />
-      <Text
         variant="caption2"
         color="secondary"
-        style={{ marginLeft: 4, letterSpacing: 0.4 }}
+        style={{
+          flex: 1,
+          letterSpacing: 0.4,
+          fontWeight: '600',
+        }}
+        numberOfLines={1}
       >
-        {label.toUpperCase()}
+        {MODULE_LABELS[moduleKey].toUpperCase()}
       </Text>
+      <View
+        style={[
+          styles.accessDot,
+          isNone
+            ? {
+                borderColor: dotColor,
+                borderWidth: 1,
+                backgroundColor: 'transparent',
+              }
+            : { backgroundColor: dotColor },
+        ]}
+      />
     </View>
   );
 }
@@ -562,6 +553,7 @@ function pairsOf<T>(arr: readonly T[]): [T, T | null][] {
   }
   return out;
 }
+
 
 const styles = StyleSheet.create({
   sheet: {
@@ -602,51 +594,61 @@ const styles = StyleSheet.create({
 
   // Role card
   card: {
-    paddingHorizontal: 14,
-    paddingTop: 12,
-    paddingBottom: 12,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 14,
   },
   cardHeader: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  headerLine: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  roleDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+
+  // Top-right radio indicator slot — fixed size so checked / unchecked
+  // states don't shift the header layout when the user picks.
+  checkSlot: {
+    width: 22,
+    height: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  tagPill: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+  checkRing: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    borderWidth: 1.5,
+  },
+  checkFilled: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  // Matrix
+  // Module access matrix — flush inside the card, no inner surface.
   matrix: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 4,
+    marginTop: 14,
+    gap: 8,
   },
   matrixRow: {
     flexDirection: 'row',
-    gap: 16,
+    gap: 24,
   },
   cell: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 3,
+    gap: 6,
   },
-
-  // Legend
-  legend: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  accessDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
   },
 
   // Footer

@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 
 import { buildR2Client } from './r2Client';
 import { effectiveLimits } from './billing/limits';
+import { getPlanConfig } from './billing/planConfigCache';
 
 // ── Secrets (resolved at runtime via Secret Manager) ────────────────
 const R2_ACCOUNT_ID = defineSecret('R2_ACCOUNT_ID');
@@ -166,10 +167,13 @@ export const r2PresignedUploadUrl = onCall(
     if (typeof data.orgId === 'string' && data.orgId.length > 0) {
       try {
         const db = getFirestore();
-        const orgSnap = await db.collection('organizations').doc(data.orgId).get();
+        const [orgSnap, planConfig] = await Promise.all([
+          db.collection('organizations').doc(data.orgId).get(),
+          getPlanConfig(),
+        ]);
         if (orgSnap.exists) {
           const org = orgSnap.data() as Record<string, unknown>;
-          const { tier, limits } = effectiveLimits(org);
+          const { tier, limits } = effectiveLimits(org, planConfig);
           const counters =
             (org.counters as { storageBytes?: unknown } | undefined) ?? {};
           const currentBytes =

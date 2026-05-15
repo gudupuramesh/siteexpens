@@ -1,10 +1,12 @@
 import { Redirect, Stack } from 'expo-router';
 import { useEffect } from 'react';
+import { View } from 'react-native';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { identifyOrgWithRevenueCat } from '@/src/features/billing/initRevenueCat';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { TutorialsProvider } from '@/src/features/tutorials/TutorialsContext';
+import { DailyFeedbackPrompt } from '@/src/ui/v2/DailyFeedbackPrompt';
 
 export default function AppLayout() {
   const { user, loading: authLoading } = useAuth();
@@ -32,12 +34,18 @@ export default function AppLayout() {
     // TutorialsProvider performs a single onSnapshot on system/tutorialVideos
     // so every child screen can call useTutorialVideo(pageKey) for free.
     <TutorialsProvider>
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: '#F7F8FA' },
-        }}
-      />
+      <View style={{ flex: 1 }}>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: '#F7F8FA' },
+          }}
+        />
+        {/* Floats above whatever screen the user is on, after 90s
+            of active usage, once per calendar day. Self-contained
+            (timer + storage gate live inside the component). */}
+        <DailyFeedbackPrompt />
+      </View>
     </TutorialsProvider>
   );
 }

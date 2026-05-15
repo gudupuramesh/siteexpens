@@ -6,8 +6,8 @@
  * memberIds at the moment of creation.
  *
  * v2: extended with InteriorOS-style metadata (client / typology / status
- * picker / manual progress / team size). All new fields are optional so
- * existing Firestore docs continue to load without migration.
+ * picker / manual progress). All new fields are optional so existing
+ * Firestore docs continue to load without migration.
  */
 import type { FirebaseFirestoreTypes } from '@/src/lib/firebase';
 
@@ -124,6 +124,4 @@ export type Project = {
   /** Manual progress override (0–100). When set, takes precedence over
    *  derived task progress shown in OverviewTab. */
   progress?: number;
-  /** Team size (number of people on this project). */
-  team?: number;
 };

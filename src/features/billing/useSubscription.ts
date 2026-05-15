@@ -37,6 +37,7 @@ import { useMemo } from 'react';
 import { useCurrentOrganization } from '@/src/features/org/useCurrentOrganization';
 
 import { PLAN_LIMITS } from './limits';
+import { usePlanConfig } from './usePlanConfig';
 import type {
   OrgCounters,
   PlanLimits,
@@ -55,12 +56,6 @@ const FREE_FALLBACK: Subscription = {
   period: null,
   updatedAt: null,
   source: 'init',
-};
-
-const ZERO_COUNTERS: OrgCounters = {
-  memberCount: 0,
-  projectCount: 0,
-  storageBytes: 0,
 };
 
 export type UseSubscriptionResult = {
@@ -102,21 +97,34 @@ const ACTIVE_STATUSES: ReadonlySet<SubscriptionStatus> = new Set([
 
 export function useSubscription(): UseSubscriptionResult {
   const { data: org, loading } = useCurrentOrganization();
+  // Live `system/planConfig` doc — null until first snapshot, or
+  // when the doc is missing / malformed. We always merge over the
+  // hardcoded constant so a partial admin save can't blank a tier.
+  const planConfig = usePlanConfig();
 
   return useMemo(() => {
+    const rawCounters =
+      (org as unknown as { counters?: Partial<OrgCounters> } | null)?.counters;
     const sub: Subscription =
       (org as unknown as { subscription?: Subscription } | null)?.subscription ??
       FREE_FALLBACK;
-    const counters: OrgCounters =
-      (org as unknown as { counters?: OrgCounters } | null)?.counters ??
-      ZERO_COUNTERS;
+    // Per-field fallback (not just whole-object). Fixes "STORAGE NaN B"
+    // for orgs whose counter triggers haven't populated `storageBytes`
+    // yet but DO have the parent `counters` object.
+    const counters: OrgCounters = {
+      memberCount: rawCounters?.memberCount ?? 0,
+      projectCount: rawCounters?.projectCount ?? 0,
+      storageBytes: rawCounters?.storageBytes ?? 0,
+    };
 
     // Effective tier downgrades to Free when status is expired /
     // cancelled (after expiry) / past_due. This matches the server's
     // `effectiveLimits()` so client + server agree.
     const isActive = ACTIVE_STATUSES.has(sub.status);
     const effectiveTier: PlanTier = isActive ? sub.tier : 'free';
-    const limits: PlanLimits = PLAN_LIMITS[effectiveTier];
+    // Live planConfig wins, hardcoded constant is the bootstrap floor.
+    const limits: PlanLimits =
+      planConfig?.[effectiveTier] ?? PLAN_LIMITS[effectiveTier];
 
     const canAddMember = counters.memberCount + 1 <= limits.maxMembers;
     const canAddProject = counters.projectCount + 1 <= limits.maxProjects;
@@ -144,5 +152,5 @@ export function useSubscription(): UseSubscriptionResult {
       storageUsagePercent,
       loading,
     };
-  }, [org, loading]);
+  }, [org, loading, planConfig]);
 }

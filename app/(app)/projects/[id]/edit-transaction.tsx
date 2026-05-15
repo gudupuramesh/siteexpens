@@ -556,27 +556,17 @@ export default function EditTransactionScreen() {
             </View>
           </View>
 
-          {/* Party */}
+          {/* Party — read-only on edit. Once a transaction is saved
+              with a party, the party can't be changed (it would
+              break the ledger linkage). To re-attribute the entry
+              to someone else, the user should delete + re-add. */}
           <FormGroup header="Party">
-            <Controller
-              control={control}
-              name="partyName"
-              render={({ field: { onChange, onBlur, value } }) => (
-                <InputRow
-                  label="Name"
-                  value={value}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  placeholder="Party name"
-                  autoCapitalize="words"
-                  divider={false}
-                />
-              )}
+            <Row
+              label="Name"
+              value={watch('partyName') || '—'}
+              divider={false}
             />
           </FormGroup>
-          {errors.partyName?.message ? (
-            <FieldNote text={errors.partyName.message} tone={t.palette.red.base} />
-          ) : null}
 
           {/* Details */}
           <FormGroup header="Details">

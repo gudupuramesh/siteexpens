@@ -27,6 +27,7 @@ import { onCall, HttpsError } from 'firebase-functions/v2/https';
 import { FieldValue, getFirestore, Timestamp } from 'firebase-admin/firestore';
 
 import { effectiveLimits } from './limits';
+import { getPlanConfig } from './planConfigCache';
 
 const db = getFirestore();
 
@@ -114,6 +115,11 @@ export const createProject = onCall<
 
   const orgRef = db.collection('organizations').doc(data.orgId);
 
+  // Resolve live tier limits OUTSIDE the transaction — `getPlanConfig`
+  // is a 60s-cached Firestore read; we don't want it inside the tx
+  // body where it could trigger a contention retry.
+  const planConfig = await getPlanConfig();
+
   // Run inside a transaction so the read of `counters.projectCount`
   // and the increment-via-create are linearised — two concurrent
   // creates can't both squeak past a Free-tier 1-project limit.
@@ -143,7 +149,7 @@ export const createProject = onCall<
     }
 
     // ── Tier / limit check ──
-    const { tier, limits } = effectiveLimits(org);
+    const { tier, limits } = effectiveLimits(org, planConfig);
     const counters = (org.counters as { projectCount?: unknown } | undefined) ?? {};
     const currentProjectCount =
       typeof counters.projectCount === 'number' ? counters.projectCount : 0;

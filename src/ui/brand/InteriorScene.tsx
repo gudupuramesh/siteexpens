@@ -1,26 +1,41 @@
 /**
- * InteriorScene — full-bleed background illustration for the auth screens.
+ * InteriorScene — minimalist line-art interior on a clean white field.
  *
  * Drawn against a 390×844 viewBox and scaled with
  * `preserveAspectRatio="xMidYMid slice"` so it fills any device.
+ *
+ * Composition (bottom-anchored so the form sits on a clean white area):
+ *   • Wood-floor perspective lines fanning to a vanishing point above
+ *     the sofa — gives the scene depth without clutter
+ *   • Centered sofa with two cushions, tufting buttons, and small legs
+ *   • Tall potted plant on the left with sword-like leaves; two leaves
+ *     pick up a brand-red accent
+ *   • Arching floor lamp on the right with a dome shade and a single
+ *     red bulb glowing inside — the visual focal point
+ *
+ * Stroke is thin and quiet (#CAD0DA at ~1px) so the illustration
+ * recedes behind the form. Red accents are kept tiny — exactly two
+ * leaves and the lamp bulb — so they read as "carefully considered"
+ * rather than decorative noise.
  */
 import { StyleSheet, type ViewStyle } from 'react-native';
 import Svg, {
   Circle,
-  Defs,
   Ellipse,
   G,
   Line,
-  LinearGradient,
   Path,
   Rect,
-  Stop,
 } from 'react-native-svg';
 
 export type InteriorSceneProps = {
   opacity?: number;
   style?: ViewStyle;
 };
+
+const STROKE = '#CAD0DA';
+const ACCENT = '#E63946';
+const STROKE_W = 1.1;
 
 export function InteriorScene({ opacity = 1, style }: InteriorSceneProps) {
   return (
@@ -33,165 +48,85 @@ export function InteriorScene({ opacity = 1, style }: InteriorSceneProps) {
       preserveAspectRatio="xMidYMid slice"
       opacity={opacity}
     >
-      <Defs>
-        <LinearGradient id="topFade" x1="0" y1="0" x2="0" y2="1">
-          <Stop offset="0%" stopColor="#FFFFFF" stopOpacity={0.7} />
-          <Stop offset="100%" stopColor="#FFFFFF" stopOpacity={0} />
-        </LinearGradient>
-      </Defs>
-
-      {/* Pure white base */}
+      {/* Pure white field */}
       <Rect width={390} height={844} fill="#FFFFFF" />
 
-      {/* Floor */}
-      <Rect x={0} y={580} width={390} height={264} fill="#E6DBC9" opacity={0.5} />
-      <Line x1={0} y1={580} x2={390} y2={580} stroke="#BFC4D2" strokeWidth={0.7} opacity={0.4} />
-
-      {/* Herringbone floor pattern */}
-      <G opacity={0.14} stroke="#7C6E55" strokeWidth={0.6}>
-        <Line x1={40} y1={600} x2={60} y2={620} />
-        <Line x1={60} y1={620} x2={80} y2={600} />
-        <Line x1={80} y1={600} x2={100} y2={620} />
-        <Line x1={100} y1={620} x2={120} y2={600} />
-        <Line x1={120} y1={600} x2={140} y2={620} />
-        <Line x1={140} y1={620} x2={160} y2={600} />
-        <Line x1={160} y1={600} x2={180} y2={620} />
-        <Line x1={180} y1={620} x2={200} y2={600} />
-        <Line x1={200} y1={600} x2={220} y2={620} />
-        <Line x1={220} y1={620} x2={240} y2={600} />
-        <Line x1={240} y1={600} x2={260} y2={620} />
-        <Line x1={260} y1={620} x2={280} y2={600} />
-        <Line x1={280} y1={600} x2={300} y2={620} />
-        <Line x1={300} y1={620} x2={320} y2={600} />
-        <Line x1={320} y1={600} x2={340} y2={620} />
-        <Line x1={340} y1={620} x2={360} y2={600} />
-
-        <Line x1={20} y1={630} x2={40} y2={650} />
-        <Line x1={40} y1={650} x2={60} y2={630} />
-        <Line x1={60} y1={630} x2={80} y2={650} />
-        <Line x1={80} y1={650} x2={100} y2={630} />
-        <Line x1={100} y1={630} x2={120} y2={650} />
-        <Line x1={120} y1={650} x2={140} y2={630} />
-        <Line x1={140} y1={630} x2={160} y2={650} />
-        <Line x1={160} y1={650} x2={180} y2={630} />
-        <Line x1={180} y1={630} x2={200} y2={650} />
-        <Line x1={200} y1={650} x2={220} y2={630} />
-        <Line x1={220} y1={630} x2={240} y2={650} />
-        <Line x1={240} y1={650} x2={260} y2={630} />
-        <Line x1={260} y1={630} x2={280} y2={650} />
-        <Line x1={280} y1={650} x2={300} y2={630} />
-        <Line x1={300} y1={630} x2={320} y2={650} />
-        <Line x1={320} y1={650} x2={340} y2={630} />
-        <Line x1={340} y1={630} x2={360} y2={650} />
-        <Line x1={360} y1={650} x2={380} y2={630} />
-
-        <Line x1={40} y1={660} x2={60} y2={680} />
-        <Line x1={60} y1={680} x2={80} y2={660} />
-        <Line x1={80} y1={660} x2={100} y2={680} />
-        <Line x1={100} y1={680} x2={120} y2={660} />
-        <Line x1={120} y1={660} x2={140} y2={680} />
-        <Line x1={140} y1={680} x2={160} y2={660} />
-        <Line x1={160} y1={660} x2={180} y2={680} />
-        <Line x1={180} y1={680} x2={200} y2={660} />
-        <Line x1={200} y1={660} x2={220} y2={680} />
-        <Line x1={220} y1={680} x2={240} y2={660} />
-        <Line x1={240} y1={660} x2={260} y2={680} />
-        <Line x1={260} y1={680} x2={280} y2={660} />
-        <Line x1={280} y1={660} x2={300} y2={680} />
-        <Line x1={300} y1={680} x2={320} y2={660} />
-        <Line x1={320} y1={660} x2={340} y2={680} />
-        <Line x1={340} y1={680} x2={360} y2={660} />
+      {/* Wood-floor perspective — lines fan from VP at (195, 540) down
+          to the bottom edge. Only the bottom band of the canvas is
+          inked, so the upper white area stays clear for the form. */}
+      <G stroke="#DEE2EA" strokeWidth={0.7} fill="none">
+        <Line x1={-60} y1={780} x2={195} y2={540} />
+        <Line x1={-10} y1={780} x2={195} y2={540} />
+        <Line x1={45} y1={780} x2={195} y2={540} />
+        <Line x1={100} y1={780} x2={195} y2={540} />
+        <Line x1={150} y1={780} x2={195} y2={540} />
+        <Line x1={195} y1={780} x2={195} y2={540} />
+        <Line x1={240} y1={780} x2={195} y2={540} />
+        <Line x1={290} y1={780} x2={195} y2={540} />
+        <Line x1={345} y1={780} x2={195} y2={540} />
+        <Line x1={400} y1={780} x2={195} y2={540} />
+        <Line x1={450} y1={780} x2={195} y2={540} />
+        {/* Faint horizontal "floor edge" where wall meets floor */}
+        <Line x1={0} y1={715} x2={390} y2={715} stroke="#D1D6DE" strokeWidth={0.6} />
       </G>
 
-      {/* Arched doorway — right side */}
-      <Path
-        d="M 260 580 L 260 320 Q 260 240 325 240 Q 390 240 390 320 L 390 580 Z"
-        fill="#D6D8EE"
-        opacity={0.5}
-      />
-      <Path
-        d="M 260 580 L 260 320 Q 260 240 325 240 Q 390 240 390 320 L 390 580"
-        fill="none"
-        stroke="#A6A8DC"
-        strokeWidth={1.4}
-        opacity={0.4}
-      />
-      <Path
-        d="M 270 580 L 270 328 Q 270 255 325 255 Q 380 255 380 328 L 380 580 Z"
-        fill="#E0E2F0"
-        opacity={0.35}
-      />
-      {/* Window in the arch */}
-      <Rect x={300} y={300} width={50} height={80} rx={4} fill="#D8E1F2" opacity={0.55} />
-      <Line x1={325} y1={300} x2={325} y2={380} stroke="#9BA8C5" strokeWidth={0.9} opacity={0.45} />
-      <Line x1={300} y1={340} x2={350} y2={340} stroke="#9BA8C5" strokeWidth={0.9} opacity={0.45} />
-
-      {/* Pendant light */}
-      <Line x1={120} y1={0} x2={120} y2={150} stroke="#9D8B6E" strokeWidth={1.2} opacity={0.35} />
-      <Path
-        d="M 100 150 Q 100 133 120 133 Q 140 133 140 150 L 134 178 Q 134 186 120 186 Q 106 186 106 178 Z"
-        fill="#E6D7B5"
-        opacity={0.5}
-        stroke="#B8A77E"
-        strokeWidth={1}
-      />
-      <Ellipse cx={120} cy={195} rx={50} ry={36} fill="#F5EBC8" opacity={0.22} />
-
-      {/* Tall potted plant — left side */}
-      <G opacity={0.4}>
-        <Path d="M 30 580 L 35 520 L 65 520 L 70 580 Z" fill="#C49A6E" opacity={0.6} />
-        <Rect x={32} y={515} width={36} height={8} rx={2} fill="#B5895E" opacity={0.6} />
-        <Path d="M 50 515 Q 44 455 32 410" fill="none" stroke="#5C8A4E" strokeWidth={1.8} />
-        <Path d="M 50 515 Q 56 445 68 400" fill="none" stroke="#5C8A4E" strokeWidth={1.8} />
-        <Path d="M 50 515 Q 47 465 28 430" fill="none" stroke="#557F47" strokeWidth={1.3} />
-        <Path d="M 50 515 Q 53 455 72 425" fill="none" stroke="#557F47" strokeWidth={1.3} />
-        <Ellipse cx={29} cy={405} rx={20} ry={9} transform="rotate(-30 29 405)" fill="#6FA15A" opacity={0.6} />
-        <Ellipse cx={71} cy={395} rx={20} ry={9} transform="rotate(25 71 395)" fill="#699D55" opacity={0.6} />
-        <Ellipse cx={24} cy={428} rx={16} ry={7} transform="rotate(-50 24 428)" fill="#73A95F" opacity={0.55} />
-        <Ellipse cx={75} cy={420} rx={16} ry={7} transform="rotate(45 75 420)" fill="#65985C" opacity={0.5} />
-        <Ellipse cx={50} cy={385} rx={16} ry={8} transform="rotate(-10 50 385)" fill="#65985C" opacity={0.5} />
-        <Ellipse cx={38} cy={370} rx={14} ry={7} transform="rotate(-20 38 370)" fill="#6FA15A" opacity={0.45} />
+      {/* Plant — tall vase with sword-like leaves on the left */}
+      <G stroke={STROKE} strokeWidth={STROKE_W} fill="none" strokeLinecap="round" strokeLinejoin="round">
+        {/* Vase: narrow neck, gently flared body */}
+        <Path d="M 58 632 L 60 700 Q 63 712 75 712 L 92 712 Q 104 712 107 700 L 109 632 Z" />
+        <Line x1={60} y1={645} x2={107} y2={645} />
+        {/* Grey leaves pointing up (slight variation in angle/length) */}
+        <Path d="M 80 632 Q 76 580 70 530" />
+        <Path d="M 84 632 Q 86 575 90 525" />
+        <Path d="M 88 632 Q 96 580 108 540" />
+        <Path d="M 76 632 Q 68 585 56 545" />
+        <Path d="M 72 632 Q 60 590 46 565" />
+      </G>
+      {/* Brand-red accent leaves — only two, kept restrained */}
+      <G stroke={ACCENT} strokeWidth={STROKE_W} fill="none" strokeLinecap="round">
+        <Path d="M 78 632 Q 73 575 64 530" />
+        <Path d="M 86 632 Q 92 580 102 538" />
       </G>
 
-      {/* Side table with cross brace + vase */}
-      <G opacity={0.3}>
-        <Rect x={195} y={530} width={55} height={4} rx={2} fill="#7A6B50" />
-        <Rect x={200} y={534} width={2} height={46} fill="#7A6B50" />
-        <Rect x={245} y={534} width={2} height={46} fill="#7A6B50" />
-        <Line x1={202} y1={545} x2={245} y2={568} stroke="#8A7B60" strokeWidth={0.8} />
-        <Line x1={245} y1={545} x2={202} y2={568} stroke="#8A7B60" strokeWidth={0.8} />
-        <Path
-          d="M 215 530 Q 213 515 217 505 Q 222 498 228 498 Q 234 498 238 505 Q 242 515 240 530 Z"
-          fill="#A6A8DC"
-          opacity={0.7}
-        />
-        <Line x1={228} y1={498} x2={226} y2={472} stroke="#5C8A4E" strokeWidth={1.2} />
-        <Ellipse cx={222} cy={468} rx={12} ry={6} transform="rotate(-15 222 468)" fill="#6FA15A" opacity={0.5} />
-        <Ellipse cx={232} cy={475} rx={10} ry={5} transform="rotate(20 232 475)" fill="#5C8A4E" opacity={0.45} />
+      {/* Sofa — centered on the floor, two cushions, tufted buttons */}
+      <G stroke={STROKE} strokeWidth={STROKE_W + 0.15} fill="none" strokeLinecap="round" strokeLinejoin="round">
+        {/* Outline: arms + back */}
+        <Path d="M 110 705 L 110 615 Q 110 600 125 600 L 265 600 Q 280 600 280 615 L 280 705" />
+        {/* Seat top */}
+        <Path d="M 110 660 Q 110 655 116 655 L 274 655 Q 280 655 280 660" />
+        {/* Cushion divider */}
+        <Line x1={195} y1={600} x2={195} y2={655} />
+        {/* Tufting buttons — tiny, like the reference */}
+        <Circle cx={140} cy={622} r={1.6} />
+        <Circle cx={170} cy={622} r={1.6} />
+        <Circle cx={220} cy={622} r={1.6} />
+        <Circle cx={250} cy={622} r={1.6} />
+        {/* Front edge of seat (gives the cushion depth) */}
+        <Line x1={120} y1={695} x2={270} y2={695} />
+        {/* Legs */}
+        <Line x1={122} y1={705} x2={117} y2={720} />
+        <Line x1={268} y1={705} x2={273} y2={720} />
       </G>
 
-      {/* Wall shelf with books — upper right */}
-      <G opacity={0.25}>
-        <Rect x={300} y={160} width={70} height={3} rx={1} fill="#7A6B50" />
-        <Path d="M 310 163 L 310 175 L 315 175" fill="none" stroke="#7A6B50" strokeWidth={1} />
-        <Path d="M 360 163 L 360 175 L 355 175" fill="none" stroke="#7A6B50" strokeWidth={1} />
-        <Rect x={305} y={135} width={8} height={25} rx={1} fill="#3B6BC9" opacity={0.6} />
-        <Rect x={314} y={138} width={6} height={22} rx={1} fill="#C87840" opacity={0.5} />
-        <Rect x={321} y={133} width={9} height={27} rx={1} fill="#4A7A4E" opacity={0.5} />
-        <Rect x={331} y={140} width={6} height={20} rx={1} fill="#8A8DC0" opacity={0.5} />
-        <Rect x={338} y={136} width={8} height={24} rx={1} fill="#9D7A45" opacity={0.5} />
-        <Circle cx={356} cy={148} r={6} fill="#5C8A4E" opacity={0.4} />
-        <Rect x={353} y={153} width={6} height={7} rx={1} fill="#9D7A45" opacity={0.5} />
+      {/* Floor lamp — base, arching pole, dome shade, red bulb.
+          Lamp head is positioned so the dome opening + bulb sit just
+          below where the Send OTP button lands on screen — the button
+          reads as "exactly at the end of the light". */}
+      <G stroke={STROKE} strokeWidth={STROKE_W} fill="none" strokeLinecap="round" strokeLinejoin="round">
+        {/* Disc base */}
+        <Ellipse cx={335} cy={705} rx={22} ry={5} />
+        <Line x1={335} y1={700} x2={335} y2={710} />
+        {/* Pole rises, then arcs left toward the shade. Whole head
+            is shifted ~114 units upward to track the now-higher CTA. */}
+        <Path d="M 335 700 L 335 491 Q 335 414 285 414 L 268 414" />
+        {/* Dome shade */}
+        <Path d="M 248 414 L 244 446 Q 260 456 286 456 Q 296 456 296 446 L 290 414 Z" />
+        {/* Filament suggestion line */}
+        <Line x1={258} y1={429} x2={282} y2={429} />
       </G>
-
-      {/* Wainscoting */}
-      <G opacity={0.1} stroke="#8A8FA4" strokeWidth={0.6}>
-        <Line x1={0} y1={450} x2={260} y2={450} />
-        <Line x1={0} y1={452} x2={260} y2={452} />
-      </G>
-
-      {/* Top fade */}
-      <Rect x={0} y={0} width={390} height={160} fill="url(#topFade)" />
+      {/* Single red bulb — the warm focal point of the scene */}
+      <Circle cx={272} cy={449} r={5} fill={ACCENT} />
+      <Circle cx={272} cy={449} r={5} stroke="#B7232E" strokeWidth={0.6} fill="none" />
     </Svg>
   );
 }
