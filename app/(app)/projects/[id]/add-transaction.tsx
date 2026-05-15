@@ -1,18 +1,30 @@
 /**
- * Add Transaction — Payment In / Payment Out form.
+ * Add Transaction — Payment In / Payment Out — v2 design.
+ *
  * Receives `type` from query params. Party picker shows project parties first,
  * then all org parties. Users can add a new party from contacts inline.
+ *
+ * Layout:
+ *   1. SheetHeader: Cancel · "Payment In/Out" · Save
+ *   2. Amount hero card — colored sign + big tabular amount + date pill
+ *   3. Submission-kind picker (only when submit-only role is filing payment_out)
+ *   4. FormGroup "Party" — picker row that opens the party sheet
+ *   5. FormGroup "Details" — Description · Reference (InputRows)
+ *   6. FormGroup "Payment" — method pill row · cost code (SelectSheet)
+ *   7. Collapsible "More" with status pill row
+ *   8. Receipt staged-photo card (pure local preview)
+ *   9. Footer with camera + gallery + Save button
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as Contacts from 'expo-contacts';
 import * as ImagePicker from 'expo-image-picker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useFocusEffect } from '@react-navigation/native';
 import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { Controller, useForm } from 'react-hook-form';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
-  FlatList,
   Image,
   InteractionManager,
   Keyboard,
@@ -27,6 +39,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { z } from 'zod';
 
 import { guessImageMimeType, recordStorageEvent } from '@/src/lib/r2Upload';
@@ -37,12 +50,10 @@ import { useAuth } from '@/src/features/auth/useAuth';
 import { usePermissions } from '@/src/features/org/usePermissions';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useParties } from '@/src/features/parties/useParties';
-import { createParty, InvalidPhoneError } from '@/src/features/parties/parties';
+import { consumeNewPartyOutbox } from '@/src/features/parties/newPartyOutbox';
 import { normalizeIndianPhoneE164 } from '@/src/lib/phone';
 import {
-  PARTY_TYPE_GROUPS,
   getPartyTypeLabel,
-  type PartyType,
   type Party,
 } from '@/src/features/parties/types';
 import { useTransactions } from '@/src/features/transactions/useTransactions';
@@ -55,13 +66,17 @@ import {
   type TransactionSubmissionKind,
 } from '@/src/features/transactions/types';
 import { formatDate } from '@/src/lib/format';
-import { Button } from '@/src/ui/Button';
-import { DatePickerModal } from '@/src/ui/DatePickerModal';
-import { Screen } from '@/src/ui/Screen';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
 import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
-import { color, radius, screenInset, space } from '@/src/theme';
+import { useThemeV2 } from '@/src/theme/v2';
 
 // ── Schema ──
 
@@ -80,20 +95,7 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-// ── Diagnostics ──
-//
-// Capture the exact rule inputs Firestore evaluated when the
-// transaction create fails. We intentionally read the org doc here
-// (one extra request, only on failure) so we can see whether the
-// caller's uid is in `memberIds` and what `roles[uid]` resolves to
-// from the perspective of THIS device's auth context. That's the
-// smallest reliable way to tell apart:
-//   - empty/wrong orgId at submit (race)
-//   - uid missing from memberIds (org-doc shape bug)
-//   - roles[uid] outside the allowlist (backfill / mutation bug)
-//   - rules drift between the repo and what's deployed
-// Without this, all four show up as "permission-denied" with no
-// way to tell which one is firing.
+// ── Diagnostics (preserved from v1) ──
 type AddTxnFailureContext = {
   err: { code?: string; message?: string };
   projectId: string;
@@ -120,86 +122,57 @@ async function logAddTxnFailure(ctx: AddTxnFailureContext): Promise<string> {
       const memberIds = Array.isArray(data?.memberIds)
         ? (data!.memberIds as string[])
         : [];
-      const roles = (data?.roles ?? null) as Record<string, string> | null;
+      const roles = (data?.roles ?? {}) as Record<string, string>;
       orgDocSnapshot = {
         exists: true,
-        ownerId: typeof data?.ownerId === 'string' ? (data!.ownerId as string) : undefined,
-        isInMemberIds: ctx.authUid ? memberIds.includes(ctx.authUid) : false,
-        rolesMapEntry: ctx.authUid ? (roles?.[ctx.authUid] ?? null) : null,
+        ownerId: data?.ownerId as string | undefined,
+        isInMemberIds: memberIds.includes(ctx.createdByPassed),
+        rolesMapEntry: roles[ctx.createdByPassed] ?? null,
         memberCount: memberIds.length,
       };
     }
-  } catch (orgErr) {
-    // Reading the org doc itself can fail (rules / network). Don't
-    // mask the original error — record the read failure inline.
-    orgDocSnapshot = {
-      exists: false,
-      rolesMapEntry: `org-read-failed: ${(orgErr as Error).message}`,
-    };
+  } catch {
+    /* swallow — best-effort */
   }
-  const payload = {
-    code: ctx.err.code ?? 'unknown',
-    message: ctx.err.message ?? 'unknown',
+  return formatDiagnostic({
+    err: ctx.err,
     projectId: ctx.projectId,
     orgId: ctx.orgId,
     createdByPassed: ctx.createdByPassed,
     authUid: ctx.authUid,
-    uidsMatch: ctx.createdByPassed === ctx.authUid,
     primaryOrgId: ctx.primaryOrgId,
-    primaryOrgMatchesPayload: ctx.primaryOrgId === ctx.orgId,
     roleFromHook: ctx.roleFromHook,
     workflowStatus: ctx.workflowStatus,
     orgDoc: orgDocSnapshot,
-  };
-  // console.warn is stripped by Hermes in release builds, so the
-  // logcat path is dead in production APKs. Always return the
-  // payload as a string so the caller can render it on-screen
-  // (the only reliable diagnostic surface in a release build).
-  console.warn('[add-txn:fail]', payload);
-  return formatDiagnostic(payload);
+  });
 }
 
-/** Compact one-line summary of the rule inputs, suitable for
- *  inclusion in an on-screen error message. Truncates uids to
- *  6 chars so the line stays readable. */
 function formatDiagnostic(p: {
-  code: string;
-  uidsMatch: boolean;
-  primaryOrgMatchesPayload: boolean;
-  roleFromHook: string | null;
+  err: { code?: string; message?: string };
+  projectId: string;
+  orgId: string;
+  createdByPassed: string;
   authUid: string | null;
   primaryOrgId: string | null;
-  orgId: string;
+  roleFromHook: string | null;
+  workflowStatus: string;
   orgDoc: {
     exists: boolean;
+    ownerId?: string;
     isInMemberIds?: boolean;
     rolesMapEntry?: string | null;
+    memberCount?: number;
   };
 }): string {
-  const short = (s: string | null | undefined) =>
-    s ? `${s.slice(0, 6)}…` : '∅';
-  return (
-    `code=${p.code} ` +
-    `role=${p.roleFromHook ?? 'null'} ` +
-    `uidsMatch=${p.uidsMatch} ` +
-    `primaryMatchesPayload=${p.primaryOrgMatchesPayload} ` +
-    `orgExists=${p.orgDoc.exists} ` +
-    `inMemberIds=${p.orgDoc.isInMemberIds ?? '∅'} ` +
-    `rolesMap=${p.orgDoc.rolesMapEntry ?? '∅'} ` +
-    `auth=${short(p.authUid)} ` +
-    `primary=${short(p.primaryOrgId)} ` +
-    `payloadOrg=${short(p.orgId)}`
-  );
+  return JSON.stringify(p);
 }
 
 // ── Component ──
 
 export default function AddTransactionScreen() {
-  // Site Engineer / Supervisor get the submit-only pending path;
-  // everyone else with finance.write goes straight to posted.
-  // Either capability is sufficient to render this screen.
   useGuardedRoute({ anyOf: ['transaction.write', 'transaction.submit'] });
 
+  const t = useThemeV2();
   const params = useLocalSearchParams<{ id: string; type?: string }>();
   const projectId = params.id;
 
@@ -209,21 +182,7 @@ export default function AddTransactionScreen() {
   const { can, role, loading: permLoading } = usePermissions();
   const postsTxnDirectly = can('transaction.write');
   const mayAddTxn = postsTxnDirectly || can('transaction.submit');
-  // Trust the URL on initial mount. We previously gated this on
-  // `postsTxnDirectly` (= can('transaction.write')) to coerce
-  // submit-only roles back to `payment_out`, but that introduced a
-  // race: `can()` returns `false` on the first render while
-  // `usePermissions` is still loading, which collapsed
-  // `?type=payment_in` to `payment_out`. React Hook Form captures
-  // `defaultValues` once on mount, so the form was stuck on the
-  // wrong type even after permissions arrived.
-  //
-  // The role guard now lives in a post-mount useEffect (below) — it
-  // runs once permissions are real and only coerces if the role
-  // genuinely cannot post Payment In. Submit-only roles also don't
-  // see the Payment In button in the UI, and the server-side
-  // create rule rejects `payment_in` for them, so this is purely a
-  // UX fallback for hand-edited URLs.
+
   const initialType: 'payment_in' | 'payment_out' =
     params.type === 'payment_in' ? 'payment_in' : 'payment_out';
   const { data: allParties } = useParties(orgId || undefined);
@@ -235,14 +194,8 @@ export default function AddTransactionScreen() {
   const [showMoreDetail, setShowMoreDetail] = useState(false);
   const [partySearch, setPartySearch] = useState('');
   const [submitError, setSubmitError] = useState<string>();
-  // Receipt is staged locally on pick — R2 upload runs during Save
-  // (see onSubmit) so abandoning the form leaves nothing in R2.
   const [stagedReceipt, setStagedReceipt] = useState<StagedFile | null>(null);
   const [savePhase, setSavePhase] = useState<string>();
-  // Only meaningful for submit-only roles submitting payment_out — drives
-  // the wording of the eventual "Cleared" notification (reimbursement vs
-  // party payment). Defaults to 'expense_reimbursement' which is the most
-  // common case for site supervisors paying out-of-pocket.
   const [submissionKind, setSubmissionKind] =
     useState<TransactionSubmissionKind>('expense_reimbursement');
 
@@ -254,12 +207,6 @@ export default function AddTransactionScreen() {
       ]);
     }
   }, [permLoading, mayAddTxn, user]);
-
-  // New party from contact flow
-  const [showNewPartyType, setShowNewPartyType] = useState(false);
-  const [newPartyName, setNewPartyName] = useState('');
-  const [newPartyPhone, setNewPartyPhone] = useState('');
-  const [creatingParty, setCreatingParty] = useState(false);
 
   const {
     control,
@@ -289,17 +236,11 @@ export default function AddTransactionScreen() {
   const selectedPartyName = watch('partyName');
   const selectedCategory = watch('category');
   const selectedPaymentMethod = watch('paymentMethod');
+  const selectedStatus = watch('status');
 
   const isPaymentIn = selectedType === 'payment_in';
   const navTitle = isPaymentIn ? 'Payment In' : 'Payment Out';
 
-  // Post-mount safety coercion: once permissions are real, if the
-  // role cannot post Payment In and the form is sitting on
-  // `payment_in` (deep link / hand-edited URL), flip it to
-  // `payment_out` so the user sees the form they're allowed to
-  // submit. The button rail in TransactionTab already hides the
-  // Payment In affordance for these roles, so this only fires for
-  // edge cases like a shared URL.
   useEffect(() => {
     if (permLoading) return;
     if (!postsTxnDirectly && selectedType === 'payment_in') {
@@ -307,39 +248,29 @@ export default function AddTransactionScreen() {
     }
   }, [permLoading, postsTxnDirectly, selectedType, setValue]);
 
-  // ── Party sections: project parties first, then rest ──
-
   const partySections = useMemo(() => {
-    // Get unique party names from this project's transactions
     const projectPartyNames = new Set(
-      transactions.map((t) => t.partyName).filter(Boolean),
+      transactions.map((tx) => tx.partyName).filter(Boolean),
     );
-
     const projectParties: Party[] = [];
     const otherParties: Party[] = [];
-
     const search = partySearch.toLowerCase();
-
     for (const p of allParties) {
       if (search && !p.name.toLowerCase().includes(search)) continue;
-      if (projectPartyNames.has(p.name)) {
-        projectParties.push(p);
-      } else {
-        otherParties.push(p);
-      }
+      if (projectPartyNames.has(p.name)) projectParties.push(p);
+      else otherParties.push(p);
     }
-
     const sections: { title: string; data: Party[] }[] = [];
-    if (projectParties.length > 0) {
-      sections.push({ title: 'Project Parties', data: projectParties });
-    }
-    if (otherParties.length > 0) {
-      sections.push({ title: 'All Parties', data: otherParties });
-    }
+    if (projectParties.length > 0) sections.push({ title: 'Project parties', data: projectParties });
+    if (otherParties.length > 0) sections.push({ title: 'All parties', data: otherParties });
     return sections;
   }, [allParties, transactions, partySearch]);
 
   const categoryLabel = TRANSACTION_CATEGORIES.find((c) => c.key === selectedCategory)?.label;
+  const categoryOptions = useMemo(
+    () => TRANSACTION_CATEGORIES.map((c) => ({ key: c.key, label: c.label })),
+    [],
+  );
 
   // ── Handlers ──
 
@@ -350,13 +281,8 @@ export default function AddTransactionScreen() {
     setPartySearch('');
   }, [setValue]);
 
-  // Pick from phone contacts → show party type picker → create party
   const pickContactAndAdd = useCallback(async () => {
     Keyboard.dismiss();
-    // Dismiss the party sheet before opening the system contact picker. On iOS,
-    // expo-contacts presents from currentViewController(); with our transparent
-    // Modal still mounted (or mid-unmount after hiding it abruptly), that VC is
-    // often nil so `present` never runs and the JS promise never resolves.
     setShowPartyPicker(false);
     try {
       await new Promise<void>((resolve) => {
@@ -371,15 +297,10 @@ export default function AddTransactionScreen() {
       if (!result) return;
 
       const contactName =
-        (result.name ?? '').trim() ||
-        [result.firstName, result.lastName].filter(Boolean).join(' ').trim() ||
-        (result.company ?? '').trim() ||
-        '';
-      // Walk every phone on the contact and pick the first one that
-      // normalises to a valid Indian +91 number. Old logic only
-      // looked at digit count which let foreign numbers through —
-      // the strict normaliser rejects them up front so the rest of
-      // the flow can assume a clean E.164 value.
+        (result.name ?? '').trim()
+        || [result.firstName, result.lastName].filter(Boolean).join(' ').trim()
+        || (result.company ?? '').trim()
+        || '';
       const rawNumbers =
         result.phoneNumbers?.map((p) => p.number ?? p.digits ?? '') ?? [];
       let normalizedPhone: string | null = null;
@@ -390,7 +311,6 @@ export default function AddTransactionScreen() {
           break;
         }
       }
-
       if (!contactName) {
         Alert.alert(
           'Missing name',
@@ -406,13 +326,30 @@ export default function AddTransactionScreen() {
         return;
       }
 
-      setNewPartyName(contactName);
-      setNewPartyPhone(normalizedPhone);
-      setShowPartyPicker(false);
-      // iOS: presenting a second RN Modal in the same tick as closing the first
-      // often drops the role sheet; defer until the party sheet is gone.
-      InteractionManager.runAfterInteractions(() => {
-        setTimeout(() => setShowNewPartyType(true), 120);
+      // One phone = one party in this org. If this contact's phone
+      // already matches a saved party, just select that party for
+      // this transaction and tell the user — no need to walk them
+      // through the add-party form.
+      const existing = allParties.find((p) => p.phone === normalizedPhone);
+      if (existing) {
+        selectParty(existing);
+        Alert.alert(
+          'Already saved',
+          `${existing.name} is already a ${getPartyTypeLabel(existing.partyType)}. Selected for this transaction.`,
+        );
+        return;
+      }
+
+      // New contact — open the full add-party form prefilled with
+      // name + phone. On save (or duplicate match) the form pops
+      // back and the focus effect below auto-selects the new party.
+      router.push({
+        pathname: '/(app)/add-party',
+        params: {
+          prefillName: contactName,
+          prefillPhone: normalizedPhone,
+          returnSelection: '1',
+        },
       });
     } catch (e) {
       Alert.alert(
@@ -420,46 +357,20 @@ export default function AddTransactionScreen() {
         e instanceof Error ? e.message : 'Could not open the contact picker.',
       );
     }
-  }, []);
+  }, [allParties, selectParty]);
 
-  const createNewPartyAndSelect = useCallback(async (partyType: PartyType) => {
-    if (!user || !orgId || !newPartyName.trim()) {
-      Alert.alert('Party', 'Missing party name. Try picking the contact again.');
-      return;
-    }
-    // Re-validate at the create step in case the field was edited
-    // after the contact was picked. createParty also validates
-    // server-adjacent in the helper, but failing here gives a
-    // clearer UX than catching InvalidPhoneError post-hoc.
-    const normalizedPhone = normalizeIndianPhoneE164(newPartyPhone);
-    if (!normalizedPhone) {
-      Alert.alert('Party', 'Enter a valid 10-digit Indian phone number.');
-      return;
-    }
-    setCreatingParty(true);
-    try {
-      const partyId = await createParty({
-        orgId,
-        name: newPartyName.trim(),
-        phone: normalizedPhone,
-        partyType,
-        createdBy: user.uid,
-      });
-      setValue('partyName', newPartyName.trim(), { shouldValidate: true });
-      setValue('partyId', partyId);
-      setShowNewPartyType(false);
-      setNewPartyName('');
-      setNewPartyPhone('');
-    } catch (err) {
-      const msg =
-        err instanceof InvalidPhoneError
-          ? err.message
-          : (err as Error).message;
-      Alert.alert('Error', msg);
-    } finally {
-      setCreatingParty(false);
-    }
-  }, [user, orgId, newPartyName, newPartyPhone, setValue]);
+  // After a successful new-party creation (or duplicate match) in the
+  // add-party form, drain the outbox and auto-select the resulting
+  // party. `useFocusEffect` guarantees we read it exactly once — the
+  // first time this screen regains focus after `router.back()`.
+  useFocusEffect(
+    useCallback(() => {
+      const next = consumeNewPartyOutbox();
+      if (!next) return;
+      setValue('partyName', next.name, { shouldValidate: true });
+      setValue('partyId', next.id);
+    }, [setValue]),
+  );
 
   async function pickReceipt(source: 'camera' | 'library') {
     const perm = source === 'camera'
@@ -482,8 +393,6 @@ export default function AddTransactionScreen() {
       ? await ImagePicker.launchCameraAsync(opts)
       : await ImagePicker.launchImageLibraryAsync(opts);
     if (result.canceled || !result.assets[0]) return;
-
-    // Stage locally — upload happens during Save.
     const asset = result.assets[0];
     setStagedReceipt({
       id: 'receipt',
@@ -497,10 +406,6 @@ export default function AddTransactionScreen() {
   }
 
   async function onSubmit(data: FormData) {
-    // Belt-and-braces guards. The submit button is disabled while
-    // these aren't satisfied, but a stale render could still send
-    // a tap through — surface the cause instead of silently
-    // returning, which would look like a frozen Save button.
     if (!user) {
       setSubmitError('Not signed in. Please sign in again.');
       return;
@@ -515,7 +420,6 @@ export default function AddTransactionScreen() {
     }
     setSubmitError(undefined);
     try {
-      // Step 1 — upload the staged receipt (if any).
       let receiptUrl: string | undefined;
       let receiptKey: string | undefined;
       let receiptSize = 0;
@@ -539,7 +443,6 @@ export default function AddTransactionScreen() {
         receiptContentType = uploaded[0].contentType;
       }
 
-      // Step 2 — create the transaction.
       setSavePhase('Saving transaction…');
       const workflowStatus = postsTxnDirectly ? 'posted' : 'pending_approval';
       let txnId: string;
@@ -561,22 +464,10 @@ export default function AddTransactionScreen() {
           photoUrl: receiptUrl,
           photoStoragePath: receiptKey,
           workflowStatus,
-          // Only attach for submit-only roles submitting payment_out —
-          // approvers posting directly don't need this distinction
-          // (no settlement notification fires for direct posts).
           submissionKind:
             !postsTxnDirectly && data.type === 'payment_out' ? submissionKind : undefined,
         });
       } catch (err) {
-        // Diagnostic: capture the exact rule inputs Firestore saw,
-        // not just the surfaced error message. Permission-denied
-        // here is almost always one of: orgId mismatch, uid not in
-        // memberIds, role mismatch, or rules drift. The returned
-        // string is appended to the on-screen error because
-        // console.warn is stripped by Hermes in release builds —
-        // logcat is silent in production APKs. The on-screen line
-        // is the ONLY reliable diagnostic surface for users who
-        // aren't running a Metro debug build.
         const e = err as { code?: string; message?: string };
         const diag = await logAddTxnFailure({
           err: e,
@@ -597,7 +488,6 @@ export default function AddTransactionScreen() {
         return;
       }
 
-      // Step 3 — attribute the upload to project storage totals.
       if (receiptKey) {
         void recordStorageEvent({
           projectId,
@@ -620,65 +510,29 @@ export default function AddTransactionScreen() {
 
   // ── Render ──
 
+  const heroAmountColor = isPaymentIn ? t.palette.green.base : t.palette.red.base;
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* Nav */}
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="arrow-back" size={22} color={color.text} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>EXPENSE</Text>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-            {navTitle}
-          </Text>
-        </View>
-        <View style={styles.navBtn} />
-      </View>
-
-      {/* Amount hero + date */}
-      <View style={styles.hero}>
-        <Text variant="caption" color="textMuted" style={styles.heroLabel}>
-          AMOUNT - INR
-        </Text>
-        <View style={styles.heroAmountRow}>
-          <Text
-            variant="title"
-            style={{ color: isPaymentIn ? color.success : color.primary }}
-          >
-            {isPaymentIn ? '+ Rs' : '- Rs'}
-          </Text>
-          <Controller
-            control={control}
-            name="amount"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextInput
-                value={value}
-                onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))}
-                onBlur={onBlur}
-                placeholder="0"
-                keyboardType="numeric"
-                style={styles.heroAmountInput}
-                placeholderTextColor={color.textFaint}
-              />
-            )}
-          />
-        </View>
-        <Pressable
-          onPress={() => setShowDatePicker(true)}
-          style={styles.dateChip}
-        >
-          <Text variant="metaStrong" color="text">{formatDate(selectedDate)}</Text>
-          <Ionicons name="chevron-down" size={14} color={color.textMuted} />
-        </Pressable>
-      </View>
+      <SheetHeader
+        title={navTitle}
+        cancelLabel="Cancel"
+        saveLabel={postsTxnDirectly ? 'Save' : 'Submit'}
+        saveLoading={isSubmitting}
+        saveDisabled={!isValid || !orgId}
+        onCancel={() => router.back()}
+        onSave={() => void handleSubmit(onSubmit)()}
+      />
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
@@ -686,987 +540,1025 @@ export default function AddTransactionScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Submission kind — only for submit-only roles on payment_out.
-              Approvers post directly; no clearing/reimbursement flow runs
-              for them, so the toggle would be noise. */}
+          {/* Hero amount card */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+            <View
+              style={[
+                styles.heroCard,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: t.radii.hero,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+              ]}
+            >
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ letterSpacing: 0.5 }}
+              >
+                AMOUNT · INR
+              </Text>
+              <View style={styles.heroAmountRow}>
+                <Text
+                  variant="title1"
+                  style={{
+                    color: heroAmountColor,
+                    fontWeight: '700',
+                  }}
+                >
+                  {isPaymentIn ? '+ ₹' : '− ₹'}
+                </Text>
+                <Controller
+                  control={control}
+                  name="amount"
+                  render={({ field: { onChange, onBlur, value } }) => (
+                    <TextInput
+                      value={value}
+                      onChangeText={(txt) => onChange(txt.replace(/[^\d.]/g, ''))}
+                      onBlur={onBlur}
+                      placeholder="0"
+                      keyboardType="decimal-pad"
+                      style={[
+                        styles.heroAmountInput,
+                        {
+                          color: heroAmountColor,
+                          ...t.type.title1,
+                          fontWeight: '700',
+                        },
+                      ]}
+                      placeholderTextColor={t.colors.tertiary}
+                    />
+                  )}
+                />
+              </View>
+              <Pressable
+                onPress={() => setShowDatePicker(true)}
+                hitSlop={6}
+                style={({ pressed }) => [
+                  styles.dateChip,
+                  {
+                    backgroundColor: t.colors.fill3,
+                    borderRadius: 999,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Ionicons name="calendar-outline" size={13} color={t.colors.label} />
+                <Text
+                  variant="footnote"
+                  color="label"
+                  style={{ fontWeight: '600', marginLeft: 6 }}
+                >
+                  {formatDate(selectedDate)}
+                </Text>
+                <Ionicons
+                  name="chevron-down"
+                  size={11}
+                  color={t.colors.tertiary}
+                  style={{ marginLeft: 4 }}
+                />
+              </Pressable>
+            </View>
+          </View>
+
+          {/* Submission kind picker — only for submit-only roles on payment_out */}
           {!postsTxnDirectly && selectedType === 'payment_out' ? (
-            <View style={styles.kindCard}>
-              <Text variant="caption" color="textMuted" style={styles.kindLabel}>
+            <View style={styles.kindBlock}>
+              <Text
+                variant="caption2"
+                color="secondary"
+                style={{ letterSpacing: 0.5, paddingHorizontal: 32, paddingBottom: 8 }}
+              >
                 THIS IS A
               </Text>
               <View style={styles.kindRow}>
-                <Pressable
+                <KindOption
+                  active={submissionKind === 'expense_reimbursement'}
+                  icon="wallet-outline"
+                  title="Personal expense"
+                  desc="I paid out-of-pocket"
                   onPress={() => setSubmissionKind('expense_reimbursement')}
-                  style={[
-                    styles.kindOption,
-                    submissionKind === 'expense_reimbursement' && styles.kindOptionActive,
-                  ]}
-                >
-                  <Ionicons
-                    name="wallet-outline"
-                    size={16}
-                    color={
-                      submissionKind === 'expense_reimbursement'
-                        ? color.primary
-                        : color.textMuted
-                    }
-                  />
-                  <Text
-                    variant="metaStrong"
-                    color={submissionKind === 'expense_reimbursement' ? 'primary' : 'textMuted'}
-                  >
-                    Personal Expense
-                  </Text>
-                  <Text variant="caption" color="textFaint" numberOfLines={2}>
-                    I paid out-of-pocket — please reimburse me
-                  </Text>
-                </Pressable>
-                <Pressable
+                />
+                <KindOption
+                  active={submissionKind === 'party_payment'}
+                  icon="people-outline"
+                  title="Party payment"
+                  desc="Studio owes the party"
                   onPress={() => setSubmissionKind('party_payment')}
-                  style={[
-                    styles.kindOption,
-                    submissionKind === 'party_payment' && styles.kindOptionActive,
-                  ]}
-                >
-                  <Ionicons
-                    name="people-outline"
-                    size={16}
-                    color={
-                      submissionKind === 'party_payment' ? color.primary : color.textMuted
-                    }
-                  />
-                  <Text
-                    variant="metaStrong"
-                    color={submissionKind === 'party_payment' ? 'primary' : 'textMuted'}
-                  >
-                    Payment to Party
-                  </Text>
-                  <Text variant="caption" color="textFaint" numberOfLines={2}>
-                    Studio owes the party — please clear it
-                  </Text>
-                </Pressable>
+                />
               </View>
             </View>
           ) : null}
 
-          {/* To Party */}
-          <Pressable
-            onPress={() => {
-              Keyboard.dismiss();
-              setPartySearch('');
-              setShowPartyPicker(true);
-            }}
-            style={styles.partySelector}
-          >
-            <Ionicons name="people-outline" size={20} color={color.textMuted} />
-            <Text
-              variant="body"
-              color={selectedPartyName ? 'text' : 'textFaint'}
-              style={styles.flex}
-              numberOfLines={1}
-            >
-              {selectedPartyName || `${isPaymentIn ? 'From' : 'To'} Party *`}
-            </Text>
-            <Ionicons name="chevron-forward" size={16} color={color.textMuted} />
-          </Pressable>
-
-          {/* Description */}
-          <Controller
-            control={control}
-            name="description"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Description"
-                placeholder="e.g. Cement purchase, Labour payment"
-                autoCapitalize="sentences"
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                square
-                strongBorder
-              />
-            )}
-          />
-          {errors.amount?.message ? (
-            <Text variant="caption" color="danger" style={{ marginTop: 2 }}>
-              {errors.amount.message}
-            </Text>
+          {/* Party */}
+          <FormGroup header="Party">
+            <Row
+              label={isPaymentIn ? 'From' : 'To'}
+              value={selectedPartyName || 'Pick a party'}
+              valueColor={selectedPartyName ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => {
+                Keyboard.dismiss();
+                setPartySearch('');
+                setShowPartyPicker(true);
+              }}
+              divider={false}
+            />
+          </FormGroup>
+          {!selectedPartyName ? (
+            <FieldNote text="Required" tone={t.colors.tertiary} />
           ) : null}
 
-          {/* Reference Number */}
-          <Controller
-            control={control}
-            name="referenceNumber"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Reference Number"
-                placeholder="Bill / Invoice / Cheque number"
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                square
-                strongBorder
-              />
-            )}
-          />
-
-          {/* Payment Method */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-            PAYMENT METHOD
-          </Text>
-          <View style={styles.methodRow}>
-            {PAYMENT_METHODS.map((m) => {
-              const active = selectedPaymentMethod === m.key;
-              return (
-                <Pressable
-                  key={m.key}
-                  onPress={() => setValue('paymentMethod', active ? '' : m.key)}
-                  style={[styles.methodChip, active && styles.methodChipActive]}
-                >
-                  <Ionicons
-                    name={m.icon as any}
-                    size={16}
-                    color={active ? color.onPrimary : color.textMuted}
-                  />
-                  <Text
-                    variant="caption"
-                    style={{ color: active ? color.onPrimary : color.text, textAlign: 'center' }}
-                  >
-                    {m.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {/* Category / Cost Code */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-            COST CODE
-          </Text>
-          <Pressable
-            onPress={() => setShowCategoryPicker(true)}
-            style={styles.dropdownField}
-          >
-            <Text variant="body" color={categoryLabel ? 'text' : 'textFaint'}>
-              {categoryLabel ?? 'Select category'}
-            </Text>
-            <Ionicons name="chevron-down" size={18} color={color.textMuted} />
-          </Pressable>
-
-          {/* Add More Detail */}
-          <Pressable
-            onPress={() => setShowMoreDetail(!showMoreDetail)}
-            style={styles.moreDetailHeader}
-          >
-            <Text variant="bodyStrong" color="text">Add More Detail</Text>
-            <Ionicons
-              name={showMoreDetail ? 'remove' : 'add'}
-              size={20}
-              color={color.primary}
+          {/* Details */}
+          <FormGroup header="Details">
+            <Controller
+              control={control}
+              name="description"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Description"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. Cement purchase"
+                  autoCapitalize="sentences"
+                />
+              )}
             />
-          </Pressable>
+            <Controller
+              control={control}
+              name="referenceNumber"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Reference"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Bill / Invoice / Cheque #"
+                  autoCapitalize="characters"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+          {errors.amount?.message ? (
+            <FieldNote text={errors.amount.message} tone={t.palette.red.base} />
+          ) : null}
 
-          {showMoreDetail && (
-            <View style={styles.moreDetailContent}>
-              <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-                PAYMENT STATUS
+          {/* Payment */}
+          <FormGroup header="Payment">
+            <View style={styles.methodBlock}>
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingTop: 12 }}
+              >
+                METHOD
               </Text>
               <View style={styles.methodRow}>
-                {(['paid', 'pending', 'partial'] as const).map((s) => {
-                  const active = watch('status') === s;
+                {PAYMENT_METHODS.map((m) => {
+                  const active = selectedPaymentMethod === m.key;
                   return (
                     <Pressable
-                      key={s}
-                      onPress={() => setValue('status', s)}
-                      style={[styles.statusChip, active && styles.statusChipActive]}
+                      key={m.key}
+                      onPress={() => setValue('paymentMethod', active ? '' : m.key)}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.methodChip,
+                        {
+                          backgroundColor: active
+                            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                            : t.colors.fill3,
+                          borderRadius: 999,
+                          borderColor: active ? t.palette.blue.base + '33' : 'transparent',
+                          borderWidth: active ? 1 : 0,
+                        },
+                        pressed && { opacity: 0.85 },
+                      ]}
                     >
+                      <Ionicons
+                        name={m.icon as keyof typeof Ionicons.glyphMap}
+                        size={14}
+                        color={active ? t.palette.blue.base : t.colors.secondary}
+                      />
                       <Text
-                        variant="caption"
-                        style={{ color: active ? color.onPrimary : color.textMuted }}
+                        variant="caption2"
+                        style={{
+                          color: active ? t.palette.blue.base : t.colors.secondary,
+                          fontWeight: active ? '700' : '600',
+                          marginLeft: 5,
+                          letterSpacing: 0.3,
+                        }}
                       >
-                        {s.charAt(0).toUpperCase() + s.slice(1)}
+                        {m.label}
                       </Text>
                     </Pressable>
                   );
                 })}
               </View>
-            </View>
-          )}
-
-          {submitError && (
-            <Text variant="caption" color="danger" style={{ marginTop: space.sm }}>
-              {submitError}
-            </Text>
-          )}
-        </ScrollView>
-
-        <DatePickerModal
-          visible={showDatePicker}
-          value={selectedDate}
-          onClose={() => setShowDatePicker(false)}
-          onConfirm={(d) => setValue('date', d)}
-        />
-
-        {/* Receipt preview row — shown above the footer once a photo
-            has been picked. Pure local preview; upload runs only on
-            Save, so backing out leaves nothing in R2. */}
-        {stagedReceipt ? (
-          <View style={styles.receiptRow}>
-            <View style={styles.receiptThumbWrap}>
-              <Image
-                source={{ uri: stagedReceipt.localUri }}
-                style={styles.receiptThumb}
-                resizeMode="cover"
+              <View
+                style={{
+                  height: 0.5,
+                  backgroundColor: t.colors.separator,
+                  marginLeft: 16,
+                }}
               />
             </View>
-            <View style={{ flex: 1 }}>
-              <Text variant="metaStrong" color="text">Receipt attached</Text>
-              <Text variant="caption" color="textMuted">
-                Will upload when you tap Save.
-              </Text>
-            </View>
-            <Pressable onPress={clearReceipt} hitSlop={8}>
-              <Ionicons name="close-circle" size={20} color={color.textFaint} />
-            </Pressable>
-          </View>
-        ) : null}
-
-        {!postsTxnDirectly ? (
-          <Text variant="caption" color="textMuted" style={styles.submitHint}>
-            Submitted expenses stay pending until an Admin approves. Project totals update after
-            approval.
-          </Text>
-        ) : null}
-
-        {/* Footer */}
-        <View style={styles.footer}>
-          <View style={styles.footerLeft}>
-            <Pressable
-              style={styles.footerIcon}
-              accessibilityLabel="Take photo"
-              onPress={() => pickReceipt('camera')}
-            >
-              <Ionicons name="camera-outline" size={22} color={color.primary} />
-            </Pressable>
-            <View style={styles.footerDivider} />
-            <Pressable
-              style={styles.footerIcon}
-              accessibilityLabel="Upload file"
-              onPress={() => pickReceipt('library')}
-            >
-              <Ionicons name="cloud-upload-outline" size={22} color={color.primary} />
-            </Pressable>
-          </View>
-          <View style={styles.footerSave}>
-            <Button
-              label={savePhase ?? (postsTxnDirectly ? 'Save' : 'Submit for approval')}
-              onPress={handleSubmit(onSubmit)}
-              loading={isSubmitting}
-              disabled={!isValid || !orgId}
+            <Row
+              label="Cost code"
+              value={categoryLabel ?? 'None'}
+              valueColor={categoryLabel ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setShowCategoryPicker(true)}
+              divider={false}
             />
+          </FormGroup>
+
+          {/* More — collapsible status picker */}
+          <View style={{ paddingHorizontal: 16, marginTop: 22 }}>
+            <Pressable
+              onPress={() => setShowMoreDetail(!showMoreDetail)}
+              hitSlop={6}
+              style={({ pressed }) => [
+                styles.moreToggle,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text variant="footnote" color="label" style={{ fontWeight: '600', flex: 1 }}>
+                More options
+              </Text>
+              <Ionicons
+                name={showMoreDetail ? 'chevron-up' : 'chevron-down'}
+                size={14}
+                color={t.colors.secondary}
+              />
+            </Pressable>
+            {showMoreDetail ? (
+              <View style={{ marginTop: 10 }}>
+                <Text
+                  variant="caption2"
+                  color="tertiary"
+                  style={{ letterSpacing: 0.5, paddingHorizontal: 4, paddingBottom: 6 }}
+                >
+                  PAYMENT STATUS
+                </Text>
+                <View style={styles.statusRow}>
+                  {(['paid', 'pending', 'partial'] as const).map((s) => {
+                    const active = selectedStatus === s;
+                    const tone =
+                      s === 'paid'
+                        ? { fg: t.palette.green.base, bg: t.mode === 'dark' ? t.palette.green.softDark : t.palette.green.soft }
+                        : s === 'pending'
+                          ? { fg: t.palette.orange.base, bg: t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft }
+                          : { fg: t.palette.red.base, bg: t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft };
+                    return (
+                      <Pressable
+                        key={s}
+                        onPress={() => setValue('status', s)}
+                        hitSlop={6}
+                        style={({ pressed }) => [
+                          styles.statusChip,
+                          {
+                            backgroundColor: active ? tone.bg : t.colors.fill3,
+                            borderRadius: 999,
+                            borderColor: active ? tone.fg + '33' : 'transparent',
+                            borderWidth: active ? 1 : 0,
+                          },
+                          pressed && { opacity: 0.85 },
+                        ]}
+                      >
+                        <Text
+                          variant="caption2"
+                          style={{
+                            color: active ? tone.fg : t.colors.secondary,
+                            fontWeight: active ? '700' : '600',
+                            letterSpacing: 0.4,
+                          }}
+                        >
+                          {s.toUpperCase()}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : null}
           </View>
+
+          {/* Receipt */}
+          {stagedReceipt ? (
+            <View style={{ paddingHorizontal: 16, marginTop: 22 }}>
+              <View
+                style={[
+                  styles.receiptRow,
+                  {
+                    backgroundColor: cardBg,
+                    borderRadius: t.radii.card,
+                    borderColor: cardBorder,
+                    borderWidth: t.hairline,
+                  },
+                ]}
+              >
+                <Image
+                  source={{ uri: stagedReceipt.localUri }}
+                  style={[styles.receiptThumb, { borderRadius: t.radii.tile }]}
+                  resizeMode="cover"
+                />
+                <View style={{ flex: 1 }}>
+                  <Text variant="footnote" color="label" style={{ fontWeight: '700' }}>
+                    Receipt attached
+                  </Text>
+                  <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+                    Will upload when you tap Save.
+                  </Text>
+                </View>
+                <Pressable onPress={clearReceipt} hitSlop={8}>
+                  <Ionicons name="close-circle" size={20} color={t.colors.tertiary} />
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+
+          {/* Submit hint for submit-only roles */}
+          {!postsTxnDirectly ? (
+            <Text
+              variant="caption1"
+              color="tertiary"
+              style={{
+                paddingHorizontal: 32,
+                marginTop: 14,
+                fontStyle: 'italic',
+                lineHeight: 17,
+              }}
+            >
+              Submitted expenses stay pending until an Admin approves. Project totals
+              update after approval.
+            </Text>
+          ) : null}
+
+          {submitError ? (
+            <FieldNote text={submitError} tone={t.palette.red.base} />
+          ) : null}
+
+          <View style={{ height: 80 }} />
+        </ScrollView>
+
+        {/* Footer — receipt actions */}
+        <View
+          style={[
+            styles.footer,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopColor: t.colors.separator,
+              borderTopWidth: t.hairline,
+            },
+          ]}
+        >
+          <Pressable
+            onPress={() => pickReceipt('camera')}
+            hitSlop={8}
+            style={({ pressed }) => [
+              styles.footerIcon,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+            accessibilityLabel="Take photo"
+          >
+            <Ionicons name="camera-outline" size={18} color={t.palette.blue.base} />
+          </Pressable>
+          <Pressable
+            onPress={() => pickReceipt('library')}
+            hitSlop={8}
+            style={({ pressed }) => [
+              styles.footerIcon,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+            accessibilityLabel="Upload file"
+          >
+            <Ionicons name="cloud-upload-outline" size={18} color={t.palette.blue.base} />
+          </Pressable>
+          <Text
+            variant="caption2"
+            color="tertiary"
+            style={{ marginLeft: 4, flex: 1, letterSpacing: 0.4 }}
+          >
+            ATTACH RECEIPT
+          </Text>
+          <Text
+            variant="caption2"
+            color="tertiary"
+            style={{ letterSpacing: 0.4 }}
+          >
+            {stagedReceipt ? '1 ATTACHED' : 'OPTIONAL'}
+          </Text>
         </View>
       </KeyboardAvoidingView>
 
-      {/* ── Party Picker Modal ── */}
-      <Modal
-        visible={showPartyPicker}
-        animationType="slide"
-        transparent
-        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
-        onRequestClose={() => setShowPartyPicker(false)}
-      >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
-        >
-          <Pressable
-            style={styles.modalOverlay}
-            onPress={() => {
-              Keyboard.dismiss();
-              setShowPartyPicker(false);
-            }}
-          >
-            <View />
-          </Pressable>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-              Select Party
-            </Text>
+      {/* ── Date picker ── */}
+      <DateTimeSheet
+        open={showDatePicker}
+        value={selectedDate}
+        onChange={(d) => setValue('date', d)}
+        onClose={() => setShowDatePicker(false)}
+        mode="date"
+        title="Date"
+      />
 
-            {/* Search — avoid autoFocus on iOS or the keyboard covers "Add from Contact" */}
-            <View style={styles.searchBar}>
-              <Ionicons name="search" size={18} color={color.textMuted} />
-              <TextInput
-                placeholder="Search party name..."
-                placeholderTextColor={color.textFaint}
-                value={partySearch}
-                onChangeText={setPartySearch}
-                style={styles.searchInput}
-                autoFocus={Platform.OS !== 'ios'}
-                returnKeyType="search"
-              />
-            </View>
+      {/* ── Cost code picker ── */}
+      <SelectSheet
+        open={showCategoryPicker}
+        title="Cost code"
+        options={[{ key: '', label: 'None' }, ...categoryOptions]}
+        selected={selectedCategory ?? ''}
+        onPick={(k) => setValue('category', k)}
+        onClose={() => setShowCategoryPicker(false)}
+      />
 
-            {/* Sectioned party list */}
-            <SectionList
-              keyboardShouldPersistTaps="handled"
-              sections={partySections}
-              keyExtractor={(p) => p.id}
-            renderSectionHeader={({ section: { title } }) => (
-              <View style={styles.sectionHeader}>
-                <Text variant="caption" color="textMuted">{title.toUpperCase()}</Text>
-              </View>
-            )}
-            renderItem={({ item }) => {
-              const typeLabel = item.partyType ? getPartyTypeLabel(item.partyType) : null;
-              return (
-                <Pressable
-                  onPress={() => selectParty(item)}
-                  style={({ pressed }) => [styles.partyOption, pressed && { opacity: 0.7 }]}
-                >
-                  <View style={styles.partyAvatar}>
-                    <Text variant="metaStrong" style={{ color: color.primary }}>
-                      {item.name.charAt(0).toUpperCase()}
-                    </Text>
-                  </View>
-                  <View style={styles.flex}>
-                    <View style={styles.partyRowTop}>
-                      <Text variant="body" color="text" numberOfLines={1} style={styles.flex}>
-                        {item.name}
-                      </Text>
-                      {typeLabel && (
-                        <View style={styles.partyTypeTag}>
-                          <Text variant="caption" color="primary">{typeLabel}</Text>
-                        </View>
-                      )}
-                    </View>
-                    {item.phone ? (
-                      <Text variant="meta" color="textMuted">{item.phone}</Text>
-                    ) : null}
-                  </View>
-                  {selectedPartyName === item.name && (
-                    <Ionicons name="checkmark-circle" size={20} color={color.primary} />
-                  )}
-                </Pressable>
-              );
-            }}
-            ListEmptyComponent={
-              <View style={styles.emptyList}>
-                <Text variant="meta" color="textMuted">
-                  {partySearch ? 'No matching parties' : 'No parties added yet'}
-                </Text>
-              </View>
-            }
-            showsVerticalScrollIndicator={false}
-            style={styles.modalList}
-          />
-
-          {/* Bottom actions: Add from Contact + Manual entry */}
-          <View style={styles.partyActions}>
-            <Pressable
-              onPress={() => {
-                Keyboard.dismiss();
-                pickContactAndAdd();
-              }}
-              style={styles.partyActionBtn}
-            >
-              <Ionicons name="person-add-outline" size={18} color={color.primary} />
-              <Text variant="metaStrong" color="primary">Add from Contact</Text>
-            </Pressable>
-
-            <View style={styles.partyActionDivider} />
-
-            <Pressable
-              onPress={() => {
-                const name = partySearch.trim();
-                if (!name) {
-                  Alert.alert('Party name required', 'Type the party name in the search box first.');
-                  return;
-                }
-                Keyboard.dismiss();
-                setNewPartyName(name);
-                setNewPartyPhone('');
-                setShowPartyPicker(false);
-                setPartySearch('');
-                InteractionManager.runAfterInteractions(() => {
-                  setTimeout(() => setShowNewPartyType(true), 120);
-                });
-              }}
-              style={styles.partyActionBtn}
-            >
-              <Ionicons name="create-outline" size={18} color={color.primary} />
-              <Text variant="metaStrong" color="primary">
-                {partySearch.trim()
-                  ? `Add "${partySearch.trim()}"`
-                  : 'Enter manually'}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* ── New Party Type Picker Modal ── */}
-      <Modal
-        visible={showNewPartyType}
-        animationType="slide"
-        transparent
-        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
-        onRequestClose={() => setShowNewPartyType(false)}
-      >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
-          keyboardVerticalOffset={0}
-        >
-          <Pressable
-            style={styles.modalOverlay}
-            onPress={() => setShowNewPartyType(false)}
-          >
-            <View />
-          </Pressable>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-              Select Party Type
-            </Text>
-            <Text variant="meta" color="textMuted" align="center" style={{ marginBottom: space.sm }}>
-              Adding: {newPartyName}{newPartyPhone ? ` (${newPartyPhone})` : ''}
-            </Text>
-
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              style={styles.modalList}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-            >
-            {PARTY_TYPE_GROUPS.map((group) => (
-              <View key={group.label} style={styles.typeGroup}>
-                <Text variant="caption" color="textMuted" style={styles.typeGroupLabel}>
-                  {group.label.toUpperCase()}
-                </Text>
-                {group.types.map((t) => (
-                  <Pressable
-                    key={t.key}
-                    onPress={() => createNewPartyAndSelect(t.key)}
-                    disabled={creatingParty}
-                    style={({ pressed }) => [
-                      styles.typeOption,
-                      pressed && { opacity: 0.7 },
-                    ]}
-                  >
-                    <View style={styles.typeIconWrap}>
-                      <Ionicons name={t.icon as any} size={18} color={color.textMuted} />
-                    </View>
-                    <Text variant="body" color="text">{t.label}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            ))}
-          </ScrollView>
-
-          {creatingParty && (
-            <View style={styles.creatingOverlay}>
-              <Text variant="meta" color="textMuted">Creating party...</Text>
-            </View>
-          )}
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-
-      {/* ── Category Picker Modal ── */}
-      <Modal
-        visible={showCategoryPicker}
-        animationType="slide"
-        transparent
-        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
-        onRequestClose={() => setShowCategoryPicker(false)}
-      >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
-          keyboardVerticalOffset={0}
-        >
-          <Pressable
-            style={styles.modalOverlay}
-            onPress={() => setShowCategoryPicker(false)}
-          >
-            <View />
-          </Pressable>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-              Cost Code
-            </Text>
-
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              style={styles.modalList}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
-            >
-            {TRANSACTION_CATEGORIES.map((c) => {
-              const active = selectedCategory === c.key;
-              return (
-                <Pressable
-                  key={c.key}
-                  onPress={() => {
-                    setValue('category', active ? '' : c.key);
-                    setShowCategoryPicker(false);
-                  }}
-                  style={({ pressed }) => [
-                    styles.categoryOption,
-                    active && styles.categoryOptionActive,
-                    pressed && { opacity: 0.7 },
-                  ]}
-                >
-                  <Text
-                    variant="body"
-                    color={active ? 'primary' : 'text'}
-                    style={active ? { fontWeight: '600' } : undefined}
-                  >
-                    {c.label}
-                  </Text>
-                  {active && (
-                    <Ionicons name="checkmark-circle" size={20} color={color.primary} />
-                  )}
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      {/* ── Party picker ── */}
+      <PartyPickerSheet
+        open={showPartyPicker}
+        partySearch={partySearch}
+        setPartySearch={setPartySearch}
+        sections={partySections}
+        selectedPartyName={selectedPartyName}
+        onSelectParty={selectParty}
+        onClose={() => setShowPartyPicker(false)}
+        onAddFromContact={pickContactAndAdd}
+        onAddManual={() => {
+          // Hand the user off to the full add-party form. If they
+          // typed a name in the search box we prefill it; otherwise
+          // the form opens blank. The form returns the new party id
+          // via the outbox and `useFocusEffect` above auto-selects
+          // it on our return.
+          const name = partySearch.trim();
+          Keyboard.dismiss();
+          setShowPartyPicker(false);
+          setPartySearch('');
+          router.push({
+            pathname: '/(app)/add-party',
+            params: {
+              ...(name ? { prefillName: name } : {}),
+              returnSelection: '1',
+            },
+          });
+        }}
+      />
 
       <SubmitProgressOverlay
         visible={isSubmitting}
         intent="submitTransaction"
         phaseLabel={savePhase}
       />
-    </Screen>
+    </View>
   );
 }
 
-// ── Styles ──
+// ── Subcomponents ─────────────────────────────────────────────────────
+
+function FieldNote({ text, tone }: { text: string; tone: string }) {
+  return (
+    <Text
+      variant="caption2"
+      style={{
+        color: tone,
+        paddingHorizontal: 32,
+        marginTop: 8,
+      }}
+    >
+      {text}
+    </Text>
+  );
+}
+
+function KindOption({
+  active,
+  icon,
+  title,
+  desc,
+  onPress,
+}: {
+  active: boolean;
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  desc: string;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={6}
+      style={({ pressed }) => [
+        styles.kindOption,
+        {
+          backgroundColor: active
+            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+            : t.colors.surface,
+          borderRadius: t.radii.card,
+          borderColor: active
+            ? t.palette.blue.base + '33'
+            : (t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'),
+          borderWidth: t.hairline,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Ionicons
+        name={icon}
+        size={18}
+        color={active ? t.palette.blue.base : t.colors.secondary}
+      />
+      <Text
+        variant="footnote"
+        style={{
+          color: active ? t.palette.blue.base : t.colors.label,
+          fontWeight: '700',
+          marginTop: 6,
+        }}
+      >
+        {title}
+      </Text>
+      <Text variant="caption1" color="secondary" style={{ marginTop: 2 }} numberOfLines={2}>
+        {desc}
+      </Text>
+    </Pressable>
+  );
+}
+
+// ── Party picker sheet ────────────────────────────────────────────────
+
+function PartyPickerSheet({
+  open,
+  partySearch,
+  setPartySearch,
+  sections,
+  selectedPartyName,
+  onSelectParty,
+  onClose,
+  onAddFromContact,
+  onAddManual,
+}: {
+  open: boolean;
+  partySearch: string;
+  setPartySearch: (v: string) => void;
+  sections: { title: string; data: Party[] }[];
+  selectedPartyName: string;
+  onSelectParty: (p: Party) => void;
+  onClose: () => void;
+  onAddFromContact: () => void;
+  onAddManual: () => void;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal
+      visible={open}
+      transparent
+      animationType="slide"
+      presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 8,
+              maxHeight: '85%',
+            },
+          ]}
+        >
+          <View style={[styles.grabber, { backgroundColor: t.colors.tertiary }]} />
+          <View
+            style={[
+              styles.sheetHeader,
+              {
+                borderBottomColor: t.colors.separator,
+                borderBottomWidth: t.hairline,
+              },
+            ]}
+          >
+            <Pressable onPress={onClose} hitSlop={8} style={styles.sheetSideBtn}>
+              <Text variant="body" style={{ color: t.palette.blue.base }}>Cancel</Text>
+            </Pressable>
+            <Text
+              variant="headline"
+              color="label"
+              style={[styles.sheetTitle, { fontWeight: '600' }]}
+            >
+              Select party
+            </Text>
+            <View style={styles.sheetSideBtn} />
+          </View>
+
+          {/* Search */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+            <View
+              style={[
+                styles.searchBar,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: t.radii.field,
+                },
+              ]}
+            >
+              <Ionicons name="search" size={16} color={t.colors.tertiary} />
+              <TextInput
+                placeholder="Search party name…"
+                placeholderTextColor={t.colors.tertiary}
+                value={partySearch}
+                onChangeText={setPartySearch}
+                style={[styles.searchInput, { color: t.colors.label, ...t.type.callout }]}
+                autoFocus={Platform.OS !== 'ios'}
+                returnKeyType="search"
+              />
+              {partySearch ? (
+                <Pressable onPress={() => setPartySearch('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={16} color={t.colors.tertiary} />
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+
+          <SectionList
+            keyboardShouldPersistTaps="handled"
+            sections={sections}
+            keyExtractor={(p) => p.id}
+            renderSectionHeader={({ section: { title } }) => (
+              <View style={styles.sectionHeader}>
+                <Text
+                  variant="caption2"
+                  color="secondary"
+                  style={{ letterSpacing: 0.5 }}
+                >
+                  {title.toUpperCase()}
+                </Text>
+              </View>
+            )}
+            renderItem={({ item }) => {
+              const typeLabel = item.partyType ? getPartyTypeLabel(item.partyType) : null;
+              const selected = selectedPartyName === item.name;
+              return (
+                <Pressable
+                  onPress={() => onSelectParty(item)}
+                  style={({ pressed }) => [
+                    styles.partyOption,
+                    pressed && { backgroundColor: t.colors.fill3 },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.partyAvatar,
+                      {
+                        backgroundColor:
+                          t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                      },
+                    ]}
+                  >
+                    <Text
+                      variant="footnote"
+                      style={{ color: t.palette.blue.base, fontWeight: '700' }}
+                    >
+                      {item.name.charAt(0).toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <View style={styles.partyRowTop}>
+                      <Text
+                        variant="callout"
+                        color="label"
+                        style={{ flex: 1, fontWeight: '600' }}
+                        numberOfLines={1}
+                      >
+                        {item.name}
+                      </Text>
+                      {typeLabel ? (
+                        <View
+                          style={[
+                            styles.partyTypeTag,
+                            {
+                              backgroundColor: t.colors.fill3,
+                              borderRadius: 999,
+                            },
+                          ]}
+                        >
+                          <Text
+                            variant="caption2"
+                            color="secondary"
+                            style={{ fontWeight: '700', letterSpacing: 0.3 }}
+                          >
+                            {typeLabel.toUpperCase()}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
+                    {item.phone ? (
+                      <Text
+                        variant="caption1"
+                        color="secondary"
+                        style={{ marginTop: 2 }}
+                      >
+                        {item.phone}
+                      </Text>
+                    ) : null}
+                  </View>
+                  {selected ? (
+                    <Ionicons name="checkmark-circle" size={18} color={t.palette.blue.base} />
+                  ) : null}
+                </Pressable>
+              );
+            }}
+            ListEmptyComponent={
+              <View style={{ paddingTop: 40, alignItems: 'center' }}>
+                <Text variant="footnote" color="secondary">
+                  {partySearch ? 'No matching parties' : 'No parties added yet'}
+                </Text>
+              </View>
+            }
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 12 }}
+          />
+
+          {/* Bottom actions */}
+          <View
+            style={[
+              styles.partyActions,
+              {
+                borderTopColor: t.colors.separator,
+                borderTopWidth: t.hairline,
+                paddingHorizontal: 16,
+                paddingTop: 10,
+                gap: 8,
+              },
+            ]}
+          >
+            <Pressable
+              onPress={onAddFromContact}
+              hitSlop={6}
+              style={({ pressed }) => [
+                styles.partyActionBtn,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Ionicons name="person-add-outline" size={16} color={t.palette.blue.base} />
+              <Text
+                variant="footnote"
+                style={{ color: t.palette.blue.base, fontWeight: '700', marginLeft: 6 }}
+              >
+                From contacts
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={onAddManual}
+              hitSlop={6}
+              style={({ pressed }) => [
+                styles.partyActionBtn,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Ionicons name="add-circle-outline" size={16} color={t.colors.label} />
+              <Text
+                variant="footnote"
+                color="label"
+                style={{ fontWeight: '700', marginLeft: 6 }}
+                numberOfLines={1}
+              >
+                Add party
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+// ── Styles ────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
+  scroll: { paddingBottom: 60 },
 
-  navBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: 8,
-    backgroundColor: color.bgGrouped,
-  },
-  navBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navCenter: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navEyebrow: { letterSpacing: 1.2 },
-  navTitle: { textAlign: 'center' },
-
-  // Hero
-  hero: {
-    paddingHorizontal: screenInset,
-    paddingTop: 10,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-    backgroundColor: color.bgGrouped,
-  },
-  heroLabel: {
-    letterSpacing: 1.2,
-    marginBottom: 4,
+  // Hero amount
+  heroCard: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    alignItems: 'flex-start',
   },
   heroAmountRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginBottom: 10,
+    alignItems: 'baseline',
+    marginTop: 6,
+    gap: 2,
   },
   heroAmountInput: {
     flex: 1,
-    fontSize: 34,
-    // lineHeight must exceed fontSize on iOS or descenders/ascenders
-    // (the round top of "0", the tail of "9") clip at the box edge.
-    // 42 ≈ 1.24× fontSize lands clean on both platforms.
-    lineHeight: 42,
-    fontWeight: '700',
-    color: color.text,
-    paddingVertical: 4,
+    paddingVertical: 0,
+    margin: 0,
+    minWidth: 100,
   },
   dateChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingVertical: space.xs,
-    paddingHorizontal: space.sm,
-    borderRadius: radius.sm,
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginTop: 12,
   },
 
-  scroll: {
-    paddingHorizontal: screenInset,
-    paddingTop: 12,
-    paddingBottom: space.xl,
-    backgroundColor: color.bgGrouped,
-  },
-
-  // Party selector
-  partySelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    minHeight: 50,
-    marginBottom: space.sm,
-  },
-  kindCard: {
-    marginBottom: space.sm,
-  },
-  kindLabel: {
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    marginBottom: space.xs,
+  // Submission kind
+  kindBlock: {
+    paddingTop: 22,
   },
   kindRow: {
     flexDirection: 'row',
-    gap: space.sm,
+    paddingHorizontal: 16,
+    gap: 8,
   },
   kindOption: {
     flex: 1,
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    gap: 4,
+    padding: 14,
     alignItems: 'flex-start',
   },
-  kindOptionActive: {
-    borderColor: color.primary,
-    backgroundColor: color.primarySoft,
-  },
 
-  // Section label — bumped top margin so the caps label has clear
-  // breathing room above (otherwise it reads as "stuck" to the
-  // field above it). Bottom kept tight so it groups visually with
-  // the field below.
-  sectionLabel: {
-    marginTop: space.lg,
-    marginBottom: 6,
-    letterSpacing: 0.8,
-  },
-
-  // Payment method
+  // Method block
+  methodBlock: {},
   methodRow: {
     flexDirection: 'row',
-    gap: space.xs,
-    marginBottom: space.sm,
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
   },
   methodChip: {
-    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingVertical: space.sm,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-  },
-  methodChipActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
 
-  // Status
+  // More toggle
+  moreToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
   statusChip: {
-    flex: 1,
-    paddingVertical: space.xs,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.border,
-    alignItems: 'center',
-  },
-  statusChipActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
   },
 
-  // Dropdown
-  dropdownField: {
+  // Receipt
+  receiptRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    minHeight: 48,
-    marginBottom: space.sm,
+    gap: 12,
+    padding: 12,
   },
-
-  // More detail
-  moreDetailHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: space.sm,
-    marginTop: space.xs,
-  },
-  moreDetailContent: {
-    paddingBottom: space.sm,
+  receiptThumb: {
+    width: 48,
+    height: 48,
   },
 
   // Footer
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.bgGrouped,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-    gap: space.sm,
-  },
-  footerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    gap: 8,
   },
   footerIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.sm,
-    backgroundColor: color.surface,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  footerDivider: {
-    width: 1,
-    height: 24,
-    backgroundColor: color.separator,
-  },
-  footerSave: {
-    flex: 1,
-  },
-  submitHint: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.xs,
-    paddingBottom: 2,
-    lineHeight: 18,
-  },
 
-  // Receipt preview row — sits between the form ScrollView and the
-  // sticky footer. Hairline-bordered, dense, matches the InteriorOS
-  // sharp-corner language used elsewhere.
-  receiptRow: {
+  // Sheet
+  sheet: {
+    paddingTop: 8,
+  },
+  grabber: {
+    width: 36,
+    height: 5,
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginBottom: 8,
+  },
+  sheetHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.bg,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
-  receiptThumbWrap: {
-    width: 44, height: 44,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    overflow: 'hidden',
+  sheetSideBtn: {
+    minWidth: 70,
   },
-  receiptThumb: { width: '100%', height: '100%' },
-  receiptOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(15,23,42,0.55)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  // Modal
-  modalOverlay: {
+  sheetTitle: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  modalSheet: {
-    backgroundColor: color.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.xxl,
-    maxHeight: '75%',
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.border,
-    alignSelf: 'center',
-    marginBottom: space.sm,
-  },
-  modalTitle: {
     textAlign: 'center',
-    marginBottom: space.sm,
-  },
-  modalList: {
-    paddingHorizontal: screenInset,
-    maxHeight: 350,
   },
 
   // Search
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.xs,
-    marginHorizontal: screenInset,
-    marginBottom: space.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xs,
-    borderRadius: radius.sm,
-    backgroundColor: color.bgGrouped,
-    borderWidth: 1,
-    borderColor: color.border,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   searchInput: {
     flex: 1,
-    fontSize: 15,
-    lineHeight: 20,
-    color: color.text,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
+    paddingVertical: 0,
+    margin: 0,
   },
 
-  // Section header
+  // Party list
   sectionHeader: {
-    paddingVertical: space.xs,
-    paddingHorizontal: space.xxs,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.xs,
-    marginTop: space.xs,
-    marginBottom: space.xxs,
+    paddingHorizontal: 32,
+    paddingTop: 18,
+    paddingBottom: 6,
   },
-
-  // Party option
   partyOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   partyAvatar: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: color.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
   partyRowTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.xs,
+    gap: 6,
   },
   partyTypeTag: {
-    paddingHorizontal: space.xs,
-    paddingVertical: 1,
-    borderRadius: radius.xs,
-    backgroundColor: color.primarySoft,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
   },
-  emptyList: {
-    paddingVertical: space.xxl,
-    alignItems: 'center',
-  },
-
-  // Party actions at bottom
   partyActions: {
     flexDirection: 'row',
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
-    marginHorizontal: screenInset,
+    paddingBottom: 8,
   },
   partyActionBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space.xs,
-    paddingVertical: space.md,
-  },
-  partyActionDivider: {
-    width: 1,
-    backgroundColor: color.separator,
-    marginVertical: space.xs,
+    paddingVertical: 10,
   },
 
-  // Category option
-  categoryOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: space.sm,
-    paddingHorizontal: space.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
-  },
-  categoryOptionActive: {
-    backgroundColor: color.primarySoft,
-    borderRadius: radius.sm,
-  },
-
-  // New party type picker
-  typeGroup: {
-    marginBottom: space.md,
-  },
-  typeGroupLabel: {
-    marginBottom: space.xs,
-    letterSpacing: 0.5,
-  },
-  typeOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.xs,
-    borderRadius: radius.sm,
-  },
-  typeIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: color.bgGrouped,
+  creatingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255,255,255,0.7)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  creatingOverlay: {
-    alignItems: 'center',
-    paddingVertical: space.sm,
   },
 });

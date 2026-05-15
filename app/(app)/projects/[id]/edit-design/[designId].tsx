@@ -1,21 +1,18 @@
 /**
- * Edit File — rename, recategorise, or replace the file.
+ * Edit File — v2 design.
  *
- * Two distinct change paths run through one Save button:
- *   - Metadata only (title / category / description): a single
- *     Firestore update, no R2 work.
- *   - Replace file: stage the new pick locally → commit to R2 →
- *     update the doc with the new file fields → delete the OLD R2
- *     key (best-effort). Same pattern as edit-laminate / edit-
- *     transaction.
+ * Same shape as add-design but pre-filled. Two paths through one Save:
+ *   - Metadata only: just updateDesign with title/category/description
+ *   - Replace file: stage → commit to R2 → updateDesign with new fields →
+ *     delete old R2 key (best-effort)
  *
- * If the user saves with no changes at all, we still call
- * updateDesign (it bumps updatedAt only) — small write, simpler logic.
+ * Layout matches add-design.
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
+import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView,
@@ -23,15 +20,11 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 
-/** Same lazy load pattern as add-design.tsx — keeps the screen alive
- *  if the dev client doesn't yet have expo-document-picker compiled
- *  in. Image swap still works without a rebuild. */
 type DocumentPickerModule = typeof import('expo-document-picker');
 let _docPickerCache: DocumentPickerModule | null | undefined;
 function loadDocumentPicker(): DocumentPickerModule | null {
@@ -58,13 +51,17 @@ import {
   type StagedFile,
 } from '@/src/lib/commitStagedFiles';
 import { deleteR2Object } from '@/src/lib/r2Delete';
-import { Button } from '@/src/ui/Button';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 export default function EditDesignScreen() {
   useGuardedRoute({ capability: 'design.write' });
+  const t = useThemeV2();
   const { id: projectId, designId } = useLocalSearchParams<{
     id: string;
     designId: string;
@@ -75,16 +72,12 @@ export default function EditDesignScreen() {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<FileCategory | null>(null);
   const [description, setDescription] = useState('');
-  /** Newly-picked replacement file. null = keep the existing one. */
   const [newFile, setNewFile] = useState<StagedFile | null>(null);
-  /** Once true, hide the existing file preview because the user
-   *  picked a replacement (and `newFile` holds the new staged one). */
   const [hydrated, setHydrated] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [savePhase, setSavePhase] = useState<string>();
   const [submitError, setSubmitError] = useState<string>();
 
-  // Hydrate from the live doc once it loads.
   useEffect(() => {
     if (design && !hydrated) {
       setTitle(design.title);
@@ -100,8 +93,6 @@ export default function EditDesignScreen() {
     if (category === null) return false;
     return true;
   }, [hydrated, submitting, title, category]);
-
-  // ── Pickers — replace the staged file ────────────────────────────
 
   async function pickImage() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -150,37 +141,21 @@ export default function EditDesignScreen() {
     );
   }
 
-  function clearReplacement() {
-    setNewFile(null);
-  }
-
-  // ── Submit ────────────────────────────────────────────────────────
-
   async function onSubmit() {
     if (!projectId || !designId || !design || !category) return;
     setSubmitError(undefined);
     setSubmitting(true);
     try {
-      let uploadedFile: StagedFile | null = newFile;
       let uploadedFields:
-        | {
-            url: string;
-            key: string;
-            contentType: string;
-            sizeBytes: number;
-            name?: string;
-          }
+        | { url: string; key: string; contentType: string; sizeBytes: number; name?: string }
         | undefined;
 
-      // Step 1 — only upload when the user staged a replacement.
-      if (uploadedFile) {
+      if (newFile) {
         setSavePhase('Uploading…');
         const { uploaded, failed } = await commitStagedFiles({
-          files: [uploadedFile],
+          files: [newFile],
           kind: 'design',
           refId: designId,
-          // Pass projectId so the storage event for the NEW upload
-          // fires inside uploadToR2 (we already have the design id).
           projectId,
           compress: 'balanced',
         });
@@ -199,12 +174,9 @@ export default function EditDesignScreen() {
           sizeBytes: up.sizeBytes,
           name: up.name,
         };
-        // recordStorageEvent already fired inside uploadToR2 because
-        // we passed projectId. No need to fire it again here.
         void recordStorageEvent;
       }
 
-      // Step 2 — persist the metadata + (optional) file change.
       setSavePhase('Saving…');
       await updateDesign(designId, {
         title: title.trim(),
@@ -213,7 +185,6 @@ export default function EditDesignScreen() {
         file: uploadedFields,
       });
 
-      // Step 3 — clean up the old R2 key (only when we replaced it).
       if (uploadedFields && design.fileKey) {
         void deleteR2Object({
           projectId,
@@ -227,35 +198,45 @@ export default function EditDesignScreen() {
 
       router.back();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setSubmitError(msg);
+      setSubmitError(e instanceof Error ? e.message : String(e));
     } finally {
       setSubmitting(false);
       setSavePhase(undefined);
     }
   }
 
-  // ── Render ────────────────────────────────────────────────────────
-
   if (loading && !design) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit file"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
         <View style={styles.center}>
-          <Text variant="meta" color="textMuted">Loading…</Text>
+          <ActivityIndicator color={t.palette.blue.base} />
         </View>
-      </Screen>
+      </View>
     );
   }
-
   if (!design) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit file"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
         <View style={styles.center}>
-          <Text variant="meta" color="textMuted">File not found.</Text>
+          <Text variant="body" color="secondary">File not found.</Text>
         </View>
-      </Screen>
+      </View>
     );
   }
 
@@ -268,280 +249,298 @@ export default function EditDesignScreen() {
     ? newFile!.name ?? (previewIsPdf ? 'PDF file' : 'Image')
     : design.fileName ?? (previewIsPdf ? 'PDF file' : 'Image');
 
-  return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
-      <Stack.Screen options={{ headerShown: false }} />
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="close" size={22} color={color.textMuted} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>
-            FILES
-          </Text>
-          <Text variant="bodyStrong" color="text">Edit file</Text>
-        </View>
-        <View style={styles.navBtn} />
-      </View>
+  return (
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
+
+      <SheetHeader
+        title="Edit file"
+        cancelLabel="Cancel"
+        saveLabel={savePhase ?? 'Save'}
+        saveLoading={submitting}
+        saveDisabled={!canSubmit}
+        onCancel={() => router.back()}
+        onSave={onSubmit}
+      />
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
-        behavior="padding"
-        keyboardVerticalOffset={Platform.OS === 'android' ? 24 : 0}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
+          keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text variant="caption" color="textMuted" style={styles.label}>
-            CATEGORY
-          </Text>
-          {/* Horizontal scroll so every chip stays reachable when
-              the row outgrows the screen width. */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipScroll}
-            keyboardShouldPersistTaps="handled"
-          >
-            {FILE_CATEGORIES.map((c) => {
-              const active = c.key === category;
-              return (
-                <Pressable
-                  key={c.key}
-                  onPress={() => setCategory(c.key)}
-                  style={[styles.chip, active && styles.chipActive]}
-                >
-                  <Text
-                    variant="caption"
-                    style={{ color: active ? '#fff' : color.text }}
+          {/* Category chips */}
+          <View style={{ paddingTop: 18 }}>
+            <Text
+              variant="caption2"
+              color="secondary"
+              style={{ letterSpacing: 0.5, paddingHorizontal: 32, paddingBottom: 8 }}
+            >
+              CATEGORY
+            </Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipScroll}
+              keyboardShouldPersistTaps="handled"
+            >
+              {FILE_CATEGORIES.map((c) => {
+                const active = c.key === category;
+                return (
+                  <Pressable
+                    key={c.key}
+                    onPress={() => setCategory(c.key)}
+                    hitSlop={6}
+                    style={({ pressed }) => [
+                      styles.chip,
+                      {
+                        backgroundColor: active
+                          ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                          : t.colors.fill3,
+                        borderRadius: 999,
+                        borderColor: active ? t.palette.blue.base + '33' : 'transparent',
+                        borderWidth: active ? 1 : 0,
+                      },
+                      pressed && { opacity: 0.85 },
+                    ]}
                   >
-                    {c.label.toUpperCase()}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-
-          <Text variant="caption" color="textMuted" style={styles.label}>
-            NAME
-          </Text>
-          <TextInput
-            value={title}
-            onChangeText={setTitle}
-            placeholder="e.g. Electrical Layout"
-            placeholderTextColor={color.textFaint}
-            style={styles.input}
-            maxLength={80}
-          />
-
-          <Text variant="caption" color="textMuted" style={styles.label}>
-            NOTE (OPTIONAL)
-          </Text>
-          <TextInput
-            value={description}
-            onChangeText={setDescription}
-            placeholder="Brief / scope / what's in this file…"
-            placeholderTextColor={color.textFaint}
-            style={[styles.input, styles.inputMultiline]}
-            multiline
-            maxLength={500}
-          />
-
-          <Text variant="caption" color="textMuted" style={styles.label}>
-            FILE
-          </Text>
-          <View style={previewStyles.wrap}>
-            <View style={previewStyles.thumb}>
-              {previewIsPdf ? (
-                <View style={previewStyles.pdfPlaceholder}>
-                  <Ionicons name="document-text-outline" size={32} color={color.danger} />
-                  <Text style={previewStyles.pdfBadge}>PDF</Text>
-                </View>
-              ) : (
-                <Image
-                  source={{ uri: previewUri }}
-                  style={previewStyles.thumbImg}
-                  resizeMode="cover"
-                />
-              )}
-            </View>
-            <View style={previewStyles.info}>
-              <Text variant="bodyStrong" color="text" numberOfLines={1}>
-                {previewName}
-              </Text>
-              <Text variant="caption" color="textMuted">
-                {showingNew ? 'New file (unsaved)' : 'Current file'}
-              </Text>
-              {showingNew ? (
-                <Pressable onPress={clearReplacement} style={previewStyles.removeBtn} hitSlop={6}>
-                  <Ionicons name="arrow-undo" size={14} color={color.textMuted} />
-                  <Text variant="caption" color="textMuted">Keep current</Text>
-                </Pressable>
-              ) : null}
-            </View>
+                    <Text
+                      variant="caption2"
+                      style={{
+                        color: active ? t.palette.blue.base : t.colors.secondary,
+                        fontWeight: '700',
+                        letterSpacing: 0.4,
+                      }}
+                    >
+                      {c.label.toUpperCase()}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           </View>
 
-          <View style={styles.pickerRow}>
-            <Pressable onPress={pickImage} style={styles.pickerBtn}>
-              <Ionicons name="image-outline" size={18} color={color.primary} />
-              <Text variant="metaStrong" style={{ color: color.primary }}>
-                Replace with image
-              </Text>
-            </Pressable>
-            <Pressable onPress={pickPdf} style={styles.pickerBtn}>
-              <Ionicons name="document-outline" size={18} color={color.primary} />
-              <Text variant="metaStrong" style={{ color: color.primary }}>
-                Replace with PDF
-              </Text>
-            </Pressable>
+          {/* Details */}
+          <FormGroup header="Details">
+            <InputRow
+              label="Name"
+              value={title}
+              onChangeText={setTitle}
+              placeholder="e.g. Electrical Layout"
+              autoCapitalize="words"
+            />
+            <InputRow
+              label="Note"
+              value={description}
+              onChangeText={setDescription}
+              placeholder="Brief / scope / what's in this file"
+              multiline
+              divider={false}
+            />
+          </FormGroup>
+
+          {/* File */}
+          <View style={{ paddingHorizontal: 16, marginTop: 22 }}>
+            <Text
+              variant="caption2"
+              color="secondary"
+              style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingBottom: 8 }}
+            >
+              FILE
+            </Text>
+            <View
+              style={[
+                styles.previewWrap,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: t.radii.card,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+              ]}
+            >
+              <View
+                style={[
+                  styles.thumb,
+                  { backgroundColor: t.colors.fill3, borderRadius: t.radii.tile },
+                ]}
+              >
+                {previewIsPdf ? (
+                  <View style={styles.pdfPlaceholder}>
+                    <Ionicons
+                      name="document-text-outline"
+                      size={28}
+                      color={t.palette.red.base}
+                    />
+                    <Text
+                      variant="caption2"
+                      style={{
+                        color: t.palette.red.base,
+                        fontWeight: '700',
+                        letterSpacing: 0.6,
+                        marginTop: 2,
+                      }}
+                    >
+                      PDF
+                    </Text>
+                  </View>
+                ) : (
+                  <Image
+                    source={{ uri: previewUri }}
+                    style={styles.thumbImg}
+                    resizeMode="cover"
+                  />
+                )}
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text variant="footnote" color="label" style={{ fontWeight: '700' }} numberOfLines={1}>
+                  {previewName}
+                </Text>
+                <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+                  {showingNew ? 'New file (unsaved)' : 'Current file'}
+                </Text>
+                {showingNew ? (
+                  <Pressable
+                    onPress={() => setNewFile(null)}
+                    hitSlop={6}
+                    style={styles.revertBtn}
+                  >
+                    <Ionicons name="arrow-undo" size={13} color={t.colors.secondary} />
+                    <Text
+                      variant="caption2"
+                      color="secondary"
+                      style={{ marginLeft: 4, fontWeight: '700', letterSpacing: 0.4 }}
+                    >
+                      KEEP CURRENT
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            </View>
+
+            <View style={styles.pickerRow}>
+              <PickerBtn icon="image-outline" label="Image" onPress={pickImage} />
+              <PickerBtn icon="document-outline" label="PDF" onPress={pickPdf} />
+            </View>
           </View>
 
           {submitError ? (
-            <Text variant="caption" color="danger" style={{ marginTop: space.sm }}>
+            <Text
+              variant="caption2"
+              style={{
+                color: t.palette.red.base,
+                paddingHorizontal: 32,
+                marginTop: 12,
+              }}
+            >
               {submitError}
             </Text>
           ) : null}
-        </ScrollView>
 
-        <View style={styles.footer}>
-          <Button
-            label={savePhase ?? 'Save changes'}
-            onPress={onSubmit}
-            loading={submitting}
-            disabled={!canSubmit}
-          />
-        </View>
+          <View style={{ height: 60 }} />
+        </ScrollView>
       </KeyboardAvoidingView>
-    </Screen>
+    </View>
   );
 }
 
-// ── Styles ───────────────────────────────────────────────────────────
+function PickerBtn({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={6}
+      style={({ pressed }) => [
+        styles.pickerBtn,
+        {
+          backgroundColor:
+            t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+          borderRadius: t.radii.field,
+          borderColor: t.palette.blue.base + '33',
+          borderWidth: t.hairline,
+          borderStyle: 'dashed',
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Ionicons name={icon} size={16} color={t.palette.blue.base} />
+      <Text
+        variant="footnote"
+        style={{ color: t.palette.blue.base, fontWeight: '700', marginLeft: 6 }}
+      >
+        Replace · {label}
+      </Text>
+    </Pressable>
+  );
+}
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  scroll: { paddingBottom: 60 },
 
-  navBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: 8,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-  },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  navEyebrow: { letterSpacing: 1.1 },
-
-  scroll: { padding: screenInset, paddingBottom: 200, gap: 6 },
-  label: { marginTop: space.sm, marginBottom: 4, letterSpacing: 0.6 },
-  input: {
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    color: color.text,
-  },
-  inputMultiline: {
-    minHeight: 70,
-    textAlignVertical: 'top',
-  },
-
-  pickerRow: {
-    flexDirection: 'row',
-    gap: space.sm,
-    marginTop: space.sm,
-  },
-  pickerBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.xs,
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.primary,
-  },
-
-  // Single-line scrollable chip row — see add-design.tsx for the
-  // matching pattern in the create flow.
   chipScroll: {
     flexDirection: 'row',
     gap: 6,
-    paddingVertical: 4,
-    paddingRight: space.sm,
+    paddingHorizontal: 16,
   },
   chip: {
-    paddingHorizontal: space.sm,
+    paddingHorizontal: 11,
     paddingVertical: 6,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-  },
-  chipActive: {
-    borderColor: color.primary,
-    backgroundColor: color.primary,
   },
 
-  footer: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: 18,
-    backgroundColor: color.bgGrouped,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-  },
-});
-
-const previewStyles = StyleSheet.create({
-  wrap: {
+  previewWrap: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    padding: space.sm,
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    marginTop: 4,
+    gap: 12,
+    padding: 12,
   },
   thumb: {
-    width: 72,
-    height: 72,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
+    width: 64,
+    height: 64,
     overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   thumbImg: { width: '100%', height: '100%' },
   pdfPlaceholder: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
   },
-  pdfBadge: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.danger,
-    letterSpacing: 1.2,
-  },
-  info: { flex: 1, gap: 4, minWidth: 0 },
-  removeBtn: {
+  revertBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
     alignSelf: 'flex-start',
-    marginTop: 2,
+    marginTop: 6,
+  },
+
+  pickerRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 10,
+  },
+  pickerBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
   },
 });

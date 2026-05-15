@@ -1,6 +1,21 @@
 /**
- * Transaction detail — fields, receipt preview, workflow (posted / pending / rejected),
- * and Admin approve + settlement when applicable.
+ * Transaction detail / preview — v2 design.
+ *
+ * Layout (top → bottom):
+ *   1. Header — back · "Transaction" + amount · receipt PDF · edit
+ *   2. Hero amount card — large signed amount + status pills + payment method
+ *   3. Workflow ribbon (Posted / Pending / Rejected)
+ *   4. Approve panel (admins only, when pending) — settlement toggle + notes
+ *      + photo + Reject/Approve buttons
+ *   5. Settlement FormGroup (when relevant) — Cleared status, payee, note,
+ *      cleared on/by, attached receipt
+ *   6. Details FormGroup — Party · Date · Description · Reference
+ *   7. Category + Method FormGroup
+ *   8. Bill / Receipt photo (when attached)
+ *   9. Share Receipt button
+ *
+ * Approve sheet + Mark-as-Cleared sheet open from inline buttons. Reject
+ * is a small bottom sheet with a notes field.
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -20,6 +35,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ImageViewer } from '@/src/ui/ImageViewer';
 
@@ -45,18 +61,16 @@ import {
 import { commitStagedFiles, type StagedFile } from '@/src/lib/commitStagedFiles';
 import { guessImageMimeType, recordStorageEvent } from '@/src/lib/r2Upload';
 import { formatDate, formatInr } from '@/src/lib/format';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { Button } from '@/src/ui/Button';
-import { color, radius, screenInset, space } from '@/src/theme';
 
-const STATUS_CFG: Record<string, { bg: string; fg: string; label: string }> = {
-  paid: { bg: color.successSoft, fg: color.success, label: 'Paid' },
-  pending: { bg: color.warningSoft, fg: color.warning, label: 'Pending' },
-  partial: { bg: color.dangerSoft, fg: color.danger, label: 'Partial' },
-};
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { Row } from '@/src/ui/v2/Row';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 export default function TransactionDetailScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const { id: projectId, txnId } = useLocalSearchParams<{ id: string; txnId: string }>();
   const { user } = useAuth();
   const { can } = usePermissions();
@@ -64,28 +78,21 @@ export default function TransactionDetailScreen() {
   const { members } = useOrgMembers(project?.orgId);
   const { data, loading } = useTransactions(projectId);
 
-  const txn = useMemo(() => data.find((t) => t.id === txnId), [data, txnId]);
+  const txn = useMemo(() => data.find((tx) => tx.id === txnId), [data, txnId]);
   const { data: parties } = useParties(project?.orgId);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [settlementPreviewOpen, setSettlementPreviewOpen] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
   const [rejectNote, setRejectNote] = useState('');
-  // `clearedToParty` toggle is initialised from `submissionKind` once the
-  // txn is loaded so admins don't have to remember to flip it for party
-  // payments. The hydration runs in the effect below — initial value is
-  // false to avoid a flash of "yes" before the txn arrives.
   const [clearedToParty, setClearedToParty] = useState(false);
   const [hydratedClearedToParty, setHydratedClearedToParty] = useState(false);
   const [payeeLabel, setPayeeLabel] = useState('');
   const [settlementNote, setSettlementNote] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
   const [generatingReceipt, setGeneratingReceipt] = useState(false);
-  // Approve-and-clear in one tap: when this is on the admin attaches a
-  // payment-out screenshot and the txn is marked cleared at approval time.
   const [markClearedNow, setMarkClearedNow] = useState(false);
   const [stagedSettlementReceipt, setStagedSettlementReceipt] =
     useState<StagedFile | null>(null);
-  // Deferred-clear flow (admin clears later, after the txn is already posted).
   const [clearSheetOpen, setClearSheetOpen] = useState(false);
   const [clearStagedReceipt, setClearStagedReceipt] = useState<StagedFile | null>(null);
   const [clearNote, setClearNote] = useState('');
@@ -101,10 +108,6 @@ export default function TransactionDetailScreen() {
     [membersByUid],
   );
 
-  // Hydrate the approve-sheet `clearedToParty` toggle from `submissionKind`
-  // so admins don't have to remember to flip it for party_payment txns.
-  // Runs once per txn load; never overwrites a manual toggle (the
-  // `hydratedClearedToParty` flag tracks first-pass hydration).
   const txnLoaded = !!txn;
   const txnSubmissionKind = txn?.submissionKind;
   useEffect(() => {
@@ -150,8 +153,8 @@ export default function TransactionDetailScreen() {
   }
 
   const handleApprove = useCallback(() => {
-    const t = data.find((x) => x.id === txnId);
-    if (!user || !t) return;
+    const tt = data.find((x) => x.id === txnId);
+    if (!user || !tt) return;
     Alert.alert(
       'Approve transaction',
       markClearedNow
@@ -172,7 +175,7 @@ export default function TransactionDetailScreen() {
                 const { uploaded, failed } = await commitStagedFiles({
                   files: [stagedSettlementReceipt],
                   kind: 'transaction',
-                  refId: t.projectId,
+                  refId: tt.projectId,
                   compress: 'balanced',
                 });
                 if (failed.length > 0) {
@@ -189,7 +192,7 @@ export default function TransactionDetailScreen() {
                 settlementContentType = uploaded[0].contentType;
               }
 
-              await approveTransaction(t.id, user.uid, {
+              await approveTransaction(tt.id, user.uid, {
                 clearedToParty,
                 payeeLabel: payeeLabel.trim() || undefined,
                 note: settlementNote.trim() || undefined,
@@ -198,14 +201,11 @@ export default function TransactionDetailScreen() {
                 settlementPhotoStoragePath,
               });
 
-              // Attribute the storage event after the txn write succeeds so we
-              // don't credit storage for an approval that failed at the
-              // Firestore step.
               if (settlementPhotoStoragePath) {
                 void recordStorageEvent({
-                  projectId: t.projectId,
+                  projectId: tt.projectId,
                   kind: 'transaction',
-                  refId: t.id,
+                  refId: tt.id,
                   key: settlementPhotoStoragePath,
                   sizeBytes: settlementSize,
                   contentType: settlementContentType,
@@ -237,9 +237,6 @@ export default function TransactionDetailScreen() {
 
   const openClearSheet = useCallback(() => {
     if (!txn) return;
-    // Pre-populate from existing settlement first (preserves admin's
-    // earlier choice). If the txn was approved without any settlement
-    // object, fall back to submissionKind so party_payment defaults to ON.
     if (txn.settlement) {
       setClearToParty(txn.settlement.clearedToParty);
     } else {
@@ -252,13 +249,10 @@ export default function TransactionDetailScreen() {
   }, [txn]);
 
   const handleClearSettlement = useCallback(async () => {
-    const t = data.find((x) => x.id === txnId);
-    if (!user || !t) return;
+    const tt = data.find((x) => x.id === txnId);
+    if (!user || !tt) return;
     setActionLoading(true);
     try {
-      // Photo is optional — many real payments (cash, immediate UPI)
-      // don't have a receipt to attach. Only run the upload pipeline
-      // when the admin actually staged one.
       let settlementPhotoUrl: string | undefined;
       let settlementPhotoStoragePath: string | undefined;
       let uploadedSize = 0;
@@ -267,7 +261,7 @@ export default function TransactionDetailScreen() {
         const { uploaded, failed } = await commitStagedFiles({
           files: [clearStagedReceipt],
           kind: 'transaction',
-          refId: t.projectId,
+          refId: tt.projectId,
           compress: 'balanced',
         });
         if (failed.length > 0) {
@@ -282,7 +276,7 @@ export default function TransactionDetailScreen() {
         uploadedContentType = up.contentType;
       }
 
-      await clearTransactionSettlement(t.id, {
+      await clearTransactionSettlement(tt.id, {
         clearedBy: user.uid,
         settlementPhotoUrl,
         settlementPhotoStoragePath,
@@ -291,12 +285,11 @@ export default function TransactionDetailScreen() {
         clearedToParty: clearToParty,
       });
 
-      // Only attribute storage usage when something was actually uploaded.
       if (settlementPhotoStoragePath) {
         void recordStorageEvent({
-          projectId: t.projectId,
+          projectId: tt.projectId,
           kind: 'transaction',
-          refId: t.id,
+          refId: tt.id,
           key: settlementPhotoStoragePath,
           sizeBytes: uploadedSize,
           contentType: uploadedContentType,
@@ -334,11 +327,11 @@ export default function TransactionDetailScreen() {
   }, [project, txn, parties, uidLabel]);
 
   const handleRejectConfirm = useCallback(async () => {
-    const t = data.find((x) => x.id === txnId);
-    if (!user || !t) return;
+    const tt = data.find((x) => x.id === txnId);
+    if (!user || !tt) return;
     setActionLoading(true);
     try {
-      await rejectTransaction(t.id, user.uid, rejectNote.trim() || 'Rejected');
+      await rejectTransaction(tt.id, user.uid, rejectNote.trim() || 'Rejected');
       setShowRejectModal(false);
       setRejectNote('');
     } catch (err) {
@@ -350,44 +343,34 @@ export default function TransactionDetailScreen() {
 
   if (loading && !txn) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.loading}>
-          <Text variant="meta" color="textMuted">Loading…</Text>
+        <AmbientBackground />
+        <View style={styles.centered}>
+          <ActivityIndicator color={t.palette.blue.base} />
         </View>
-      </Screen>
+      </View>
     );
   }
 
   if (!txn) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.navBar}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="chevron-back" size={22} color={color.text} />
-          </Pressable>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>Transaction</Text>
-          <View style={styles.navBtn} />
+        <AmbientBackground />
+        <Header onBack={() => router.back()} title="Transaction" />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary">Transaction not found.</Text>
         </View>
-        <View style={styles.loading}>
-          <Text variant="meta" color="textMuted">Transaction not found.</Text>
-        </View>
-      </Screen>
+      </View>
     );
   }
 
   const wf = txn.workflowStatus ?? 'posted';
   const txnType = normalizeTransactionType(txn.type);
   const isIn = txnType === 'payment_in';
-  // Settlement card / "Mark as Cleared" CTA only make sense for txns
-  // that went through submission → approval. Direct posts by an owner
-  // / admin ARE the payment moment — there's no separate "clearing"
-  // step to track. Defensive `|| !!txn.settlement` keeps legacy direct
-  // posts that somehow have a settlement attached visible.
   const wasSubmitted = !!txn.submittedAt;
   const showSettlementCard = wf === 'posted' && (wasSubmitted || !!txn.settlement);
-  const statusCfg = STATUS_CFG[txn.status] ?? STATUS_CFG.paid;
   const pmMeta = txn.paymentMethod
     ? PAYMENT_METHODS.find((m) => m.key === txn.paymentMethod)
     : null;
@@ -396,432 +379,280 @@ export default function TransactionDetailScreen() {
   const addedByLabel = addedByOwner ? 'Owner' : addedBySelf ? 'You' : 'Team member';
 
   const canEditTxn =
-    wf !== 'rejected' &&
-    (can('transaction.write') ||
-      (wf === 'pending_approval' &&
-        !!user?.uid &&
-        txn.createdBy === user.uid &&
-        can('transaction.submit')));
+    wf !== 'rejected'
+    && (can('transaction.write')
+      || (wf === 'pending_approval'
+        && !!user?.uid
+        && txn.createdBy === user.uid
+        && can('transaction.submit')));
   const canApproveTxn = wf === 'pending_approval' && can('transaction.approve');
 
-  let workflowHeadline = 'Posted';
-  let workflowSub = `Added by ${addedByLabel}`;
-  let workflowIcon: keyof typeof Ionicons.glyphMap = 'shield-checkmark-outline';
-  let workflowColor: string = color.success;
+  // Workflow tone — 90/10: only the action-required states earn colour.
+  // "POSTED" (the happy default) reads in neutral; the shield icon already
+  // indicates approval.
+  const workflowTone =
+    wf === 'pending_approval'
+      ? { fg: t.palette.orange.base, bg: t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft, label: 'PENDING APPROVAL', icon: 'time-outline' as const }
+      : wf === 'rejected'
+        ? { fg: t.palette.red.base, bg: t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft, label: 'REJECTED', icon: 'close-circle-outline' as const }
+        : { fg: t.colors.secondary, bg: t.colors.fill3, label: 'POSTED', icon: 'shield-checkmark-outline' as const };
 
+  let workflowSub = `Added by ${addedByLabel}`;
   if (wf === 'pending_approval') {
-    workflowHeadline = 'Pending approval';
     workflowSub = 'Waiting for Admin / Super Admin. Totals exclude this entry until approved.';
-    workflowIcon = 'time-outline';
-    workflowColor = color.warning;
   } else if (wf === 'rejected') {
-    workflowHeadline = 'Rejected';
     workflowSub = txn.rejectionNote?.trim() || 'This expense was not approved.';
-    workflowIcon = 'close-circle-outline';
-    workflowColor = color.danger;
   } else if (txn.approvedBy) {
     workflowSub = `Approved by ${uidLabel(txn.approvedBy)}${
       txn.approvedAt ? ` · ${formatDate(txn.approvedAt.toDate())}` : ''
     }`;
   }
 
-  return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
-      <Stack.Screen options={{ headerShown: false }} />
+  // Status pill — 90/10: "Paid" is the default-good state and reads in
+  // neutral. "Pending" earns orange (action needed). "Partial" earns red
+  // because the studio is still owed money.
+  const statusTone =
+    txn.status === 'pending'
+      ? { fg: t.palette.orange.base, bg: t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft, label: 'Pending' }
+      : txn.status === 'partial'
+        ? { fg: t.palette.red.base, bg: t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft, label: 'Partial' }
+        : { fg: t.colors.secondary, bg: t.colors.fill3, label: 'Paid' };
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="arrow-back" size={20} color={color.text} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>EXPENSE</Text>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>Transaction</Text>
-        </View>
-        <Pressable
-          onPress={handleGenerateReceipt}
-          hitSlop={12}
-          disabled={generatingReceipt}
-          style={[styles.navBtn, generatingReceipt && { opacity: 0.5 }]}
-          accessibilityLabel="Generate payment receipt PDF"
-        >
-          {generatingReceipt ? (
-            <ActivityIndicator size="small" color={color.primary} />
-          ) : (
-            <Ionicons name="document-text-outline" size={20} color={color.primary} />
-          )}
-        </Pressable>
-        {canEditTxn ? (
-          <Pressable
-            onPress={() =>
-              router.push(
-                `/(app)/projects/${projectId}/edit-transaction?txnId=${txn.id}` as never,
-              )
-            }
-            hitSlop={12}
-            style={styles.navBtn}
-          >
-            <Ionicons name="create-outline" size={20} color={color.primary} />
-          </Pressable>
-        ) : (
-          <View style={styles.navBtn} />
-        )}
-      </View>
+  // Hero amount picks up the same directional colour as the row amount
+  // in the Transaction tab — green for money in, red for money out.
+  // The amount is the screen's headline signal, so it earns the colour.
+  const heroAmountColor = isIn ? t.palette.green.base : t.palette.red.base;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
+
+      <Header
+        onBack={() => router.back()}
+        title="Transaction"
+        right={
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <CircleBtn
+              icon="document-text-outline"
+              onPress={handleGenerateReceipt}
+              disabled={generatingReceipt}
+              tint={t.palette.blue.base}
+              loading={generatingReceipt}
+            />
+            {canEditTxn ? (
+              <CircleBtn
+                icon="create-outline"
+                onPress={() =>
+                  router.push(
+                    `/(app)/projects/${projectId}/edit-transaction?txnId=${txn.id}` as never,
+                  )
+                }
+                tint={t.palette.blue.base}
+              />
+            ) : null}
+          </View>
+        }
+      />
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Amount hero */}
-        <View style={styles.amountHero}>
-          <Text variant="caption" color="textMuted" style={styles.amountEyebrow}>
-            EXPENSE · {txn.id.toUpperCase()}
-          </Text>
-          <Text variant="largeTitle" color="text" style={styles.amountValue}>
-            {isIn ? '+' : '-'}{formatInr(txn.amount)}
-          </Text>
-          <Text variant="meta" color="textMuted" style={styles.amountSub} numberOfLines={2}>
-            {txn.description || (isIn ? 'Payment received' : 'Expense entry')}
-          </Text>
-          <View style={styles.pillRow}>
-            <View style={[styles.statusPill, { backgroundColor: statusCfg.bg }]}>
-              <Text variant="caption" style={{ color: statusCfg.fg }}>
-                {statusCfg.label}
+        {/* Hero amount card */}
+        <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+          <View
+            style={[
+              styles.heroCard,
+              {
+                backgroundColor: t.colors.surface,
+                borderRadius: t.radii.hero,
+                borderColor: t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                borderWidth: t.hairline,
+              },
+            ]}
+          >
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={{ letterSpacing: 0.5 }}
+            >
+              {isIn ? 'PAYMENT IN' : 'PAYMENT OUT'}
+            </Text>
+            <Text
+              variant="hero"
+              style={{
+                color: heroAmountColor,
+                fontWeight: '700',
+                marginTop: 4,
+                fontVariant: ['tabular-nums'],
+              }}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+            >
+              {isIn ? '+' : '−'}{formatInr(txn.amount)}
+            </Text>
+            {txn.description ? (
+              <Text
+                variant="footnote"
+                color="secondary"
+                style={{ marginTop: 6 }}
+                numberOfLines={2}
+              >
+                {txn.description}
               </Text>
+            ) : null}
+            <View style={styles.pillRow}>
+              <Pill tone={statusTone.fg} bg={statusTone.bg} label={statusTone.label} />
+              {txn.paymentMethod ? (
+                <Pill
+                  tone={t.colors.secondary}
+                  bg={t.colors.fill3}
+                  label={getPaymentMethodLabel(txn.paymentMethod)}
+                />
+              ) : null}
             </View>
-            {wf === 'pending_approval' ? (
-              <View style={[styles.statusPill, { borderColor: workflowColor }]}>
-                <Text variant="caption" style={{ color: workflowColor }}>Pending approval</Text>
-              </View>
-            ) : wf === 'rejected' ? (
-              <View style={[styles.statusPill, { borderColor: workflowColor }]}>
-                <Text variant="caption" style={{ color: workflowColor }}>Rejected</Text>
-              </View>
-            ) : null}
-            {txn.paymentMethod ? (
-              <View style={styles.statusPill}>
-                <Text variant="caption" color="textMuted">
-                  {getPaymentMethodLabel(txn.paymentMethod)}
-                </Text>
-              </View>
-            ) : null}
           </View>
         </View>
 
-        <View style={styles.approvalBar}>
-          <View style={styles.approvalLeft}>
-            <Ionicons name={workflowIcon} size={14} color={workflowColor} />
-            <Text variant="caption" style={[styles.approvalHeadline, { color: workflowColor }]}>
-              {workflowHeadline}
-            </Text>
-          </View>
-        </View>
-        <Text variant="caption" color="textMuted" style={styles.workflowSub}>
-          {workflowSub}
-        </Text>
-
-        {canApproveTxn ? (
-          <View style={styles.approveCard}>
-            <Text variant="caption" color="textMuted" style={styles.sectionLabelInline}>
-              SETTLEMENT (ON APPROVE)
-            </Text>
-            <View style={styles.switchRow}>
-              <Text variant="meta" color="text">Payment cleared to party</Text>
-              <Switch value={clearedToParty} onValueChange={setClearedToParty} />
-            </View>
-            <Text variant="caption" color="textMuted" style={styles.fieldLabel}>Payee label (optional)</Text>
-            <TextInput
-              value={payeeLabel}
-              onChangeText={setPayeeLabel}
-              placeholder="Who was paid?"
-              placeholderTextColor={color.textFaint}
-              style={styles.textInput}
-            />
-            <Text variant="caption" color="textMuted" style={styles.fieldLabel}>Note (optional)</Text>
-            <TextInput
-              value={settlementNote}
-              onChangeText={setSettlementNote}
-              placeholder="Settlement note"
-              placeholderTextColor={color.textFaint}
-              style={styles.textInput}
-              multiline
-            />
-
-            {/* One-tap "approve and pay": admin marks the money out at the
-                same moment as approval. Submitter gets BOTH the approved
-                push and the cleared push (the cloud function fans out
-                both branches in this case). */}
-            <View style={[styles.switchRow, { marginTop: space.sm }]}>
-              <View style={{ flex: 1 }}>
-                <Text variant="meta" color="text">Mark cleared now</Text>
-                <Text variant="caption" color="textMuted">
-                  Optionally attach a payment receipt — supervisor gets a "cleared" notification either way.
-                </Text>
-              </View>
-              <Switch
-                value={markClearedNow}
-                onValueChange={(v) => {
-                  setMarkClearedNow(v);
-                  if (!v) setStagedSettlementReceipt(null);
+        {/* Workflow ribbon */}
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+          <View
+            style={[
+              styles.workflowCard,
+              {
+                backgroundColor: workflowTone.bg,
+                borderRadius: t.radii.card,
+                borderColor: workflowTone.fg + '33',
+                borderWidth: t.hairline,
+              },
+            ]}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <Ionicons name={workflowTone.icon} size={14} color={workflowTone.fg} />
+              <Text
+                variant="caption2"
+                style={{
+                  color: workflowTone.fg,
+                  fontWeight: '700',
+                  letterSpacing: 0.4,
+                  marginLeft: 6,
                 }}
-              />
-            </View>
-            {markClearedNow ? (
-              <View style={styles.receiptStage}>
-                {stagedSettlementReceipt ? (
-                  <View style={styles.stagedReceiptBox}>
-                    <Image
-                      source={{ uri: stagedSettlementReceipt.localUri }}
-                      style={styles.stagedReceiptImg}
-                    />
-                    <Pressable
-                      onPress={() => setStagedSettlementReceipt(null)}
-                      hitSlop={6}
-                      style={styles.stagedReceiptClear}
-                    >
-                      <Ionicons name="close-circle" size={20} color={color.danger} />
-                    </Pressable>
-                  </View>
-                ) : (
-                  <View style={styles.receiptPickRow}>
-                    <Pressable
-                      onPress={() => pickSettlementReceipt('camera', setStagedSettlementReceipt)}
-                      style={styles.receiptPickBtn}
-                    >
-                      <Ionicons name="camera-outline" size={16} color={color.primary} />
-                      <Text variant="caption" color="primary">Camera</Text>
-                    </Pressable>
-                    <Pressable
-                      onPress={() => pickSettlementReceipt('library', setStagedSettlementReceipt)}
-                      style={styles.receiptPickBtn}
-                    >
-                      <Ionicons name="image-outline" size={16} color={color.primary} />
-                      <Text variant="caption" color="primary">Gallery</Text>
-                    </Pressable>
-                  </View>
-                )}
-              </View>
-            ) : null}
-
-            <View style={styles.actionRow}>
-              <Pressable
-                onPress={() => setShowRejectModal(true)}
-                style={[styles.actionBtn, styles.rejectBtn]}
-                disabled={actionLoading}
               >
-                <Text variant="metaStrong" color="danger">Reject</Text>
-              </Pressable>
-              <Pressable
-                onPress={handleApprove}
-                style={[styles.actionBtn, styles.approveBtn]}
-                disabled={actionLoading}
-              >
-                {actionLoading ? (
-                  <ActivityIndicator size="small" color={color.onPrimary} />
-                ) : (
-                  <Text variant="metaStrong" color="onPrimary">
-                    {markClearedNow ? 'Approve & Clear' : 'Approve'}
-                  </Text>
-                )}
-              </Pressable>
+                {workflowTone.label}
+              </Text>
             </View>
+            <Text variant="caption1" color="secondary" style={{ marginTop: 4, lineHeight: 17 }}>
+              {workflowSub}
+            </Text>
           </View>
+        </View>
+
+        {/* Approval panel */}
+        {canApproveTxn ? (
+          <ApprovePanel
+            clearedToParty={clearedToParty}
+            setClearedToParty={setClearedToParty}
+            payeeLabel={payeeLabel}
+            setPayeeLabel={setPayeeLabel}
+            settlementNote={settlementNote}
+            setSettlementNote={setSettlementNote}
+            markClearedNow={markClearedNow}
+            setMarkClearedNow={(v) => {
+              setMarkClearedNow(v);
+              if (!v) setStagedSettlementReceipt(null);
+            }}
+            stagedReceipt={stagedSettlementReceipt}
+            setStagedReceipt={setStagedSettlementReceipt}
+            pickReceipt={(src) => pickSettlementReceipt(src, setStagedSettlementReceipt)}
+            actionLoading={actionLoading}
+            onReject={() => setShowRejectModal(true)}
+            onApprove={handleApprove}
+          />
         ) : null}
 
+        {/* Settlement card */}
         {showSettlementCard ? (
-          <View style={styles.card}>
-            <View style={styles.settlementHeader}>
-              <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-                SETTLEMENT
-              </Text>
-              {isTransactionCleared(txn) ? (
-                <View style={styles.clearedPill}>
-                  <Ionicons name="checkmark-circle" size={12} color={color.success} />
-                  <Text variant="caption" style={{ color: color.success }}>
-                    Cleared
-                  </Text>
-                </View>
-              ) : (
-                <View style={styles.unclearedPill}>
-                  <Ionicons name="time-outline" size={12} color={color.warning} />
-                  <Text variant="caption" style={{ color: color.warning }}>
-                    Awaiting payment
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            {txn.submissionKind ? (
-              <>
-                <DetailRow
-                  icon={
-                    txn.submissionKind === 'expense_reimbursement'
-                      ? 'wallet-outline'
-                      : 'people-outline'
-                  }
-                  label="Type"
-                  value={
-                    txn.submissionKind === 'expense_reimbursement'
-                      ? `Reimbursement to ${uidLabel(txn.createdBy)}`
-                      : `Payment to ${txn.partyName || 'party'}`
-                  }
-                />
-                <Divider />
-              </>
-            ) : null}
-
-            {txn.settlement ? (
-              <>
-                <DetailRow
-                  icon="checkmark-done-outline"
-                  label="Cleared to party"
-                  value={txn.settlement.clearedToParty ? 'Yes' : 'No'}
-                />
-                {txn.settlement.payeeLabel ? (
-                  <>
-                    <Divider />
-                    <DetailRow
-                      icon="person-outline"
-                      label="Payee"
-                      value={txn.settlement.payeeLabel}
-                    />
-                  </>
-                ) : null}
-                {txn.settlement.note ? (
-                  <>
-                    <Divider />
-                    <DetailRow
-                      icon="document-text-outline"
-                      label="Note"
-                      value={txn.settlement.note}
-                      multiline
-                    />
-                  </>
-                ) : null}
-                {txn.settlement.clearedAt ? (
-                  <>
-                    <Divider />
-                    <DetailRow
-                      icon="calendar-outline"
-                      label="Cleared on"
-                      value={formatDate(txn.settlement.clearedAt.toDate())}
-                    />
-                  </>
-                ) : null}
-                {txn.settlement.clearedBy ? (
-                  <>
-                    <Divider />
-                    <DetailRow
-                      icon="shield-checkmark-outline"
-                      label="Cleared by"
-                      value={uidLabel(txn.settlement.clearedBy)}
-                    />
-                  </>
-                ) : null}
-              </>
-            ) : (
-              <Text variant="meta" color="textMuted" style={{ marginTop: space.xs }}>
-                Approved without settlement details.
-              </Text>
-            )}
-
-            {txn.settlement?.settlementPhotoUrl ? (
-              <View style={{ marginTop: space.sm }}>
-                <Text variant="caption" color="textMuted" style={styles.fieldLabel}>
-                  Payment receipt
-                </Text>
-                <Pressable
-                  onPress={() => setSettlementPreviewOpen(true)}
-                  style={({ pressed }) => [pressed && { opacity: 0.85 }]}
-                  accessibilityLabel="Open settlement receipt full-screen"
-                >
-                  <Image
-                    source={{ uri: txn.settlement.settlementPhotoUrl }}
-                    style={styles.photo}
-                    resizeMode="cover"
-                  />
-                  <View style={styles.photoExpandHint}>
-                    <Ionicons name="expand-outline" size={14} color="#fff" />
-                  </View>
-                </Pressable>
-              </View>
-            ) : null}
-
-            {!isTransactionCleared(txn) && can('transaction.approve') ? (
-              <Pressable
-                onPress={openClearSheet}
-                style={({ pressed }) => [
-                  styles.markClearedBtn,
-                  pressed && { opacity: 0.85 },
-                ]}
-              >
-                <Ionicons name="checkmark-done-outline" size={16} color={color.onPrimary} />
-                <Text variant="metaStrong" color="onPrimary">Mark as Cleared</Text>
-              </Pressable>
-            ) : null}
-          </View>
+          <SettlementGroup
+            cleared={isTransactionCleared(txn)}
+            submissionKind={txn.submissionKind}
+            settlement={txn.settlement}
+            partyName={txn.partyName}
+            createdByLabel={uidLabel(txn.createdBy)}
+            uidLabel={uidLabel}
+            onPhotoTap={() => setSettlementPreviewOpen(true)}
+            onMarkCleared={openClearSheet}
+            canMarkCleared={!isTransactionCleared(txn) && can('transaction.approve')}
+          />
         ) : null}
 
-        {/* Details card */}
-        <View style={styles.card}>
-          <DetailRow icon="person-outline" label="Party" value={txn.partyName || '—'} />
-          <Divider />
-          <DetailRow
-            icon="calendar-outline"
+        {/* Details */}
+        <FormGroup header="Details">
+          <Row label="Party" value={txn.partyName || '—'} />
+          <Row
             label="Date"
             value={txn.date ? formatDate(txn.date.toDate()) : '—'}
+            divider={!!txn.description || !!txn.referenceNumber}
           />
-          {!!txn.description && (
-            <>
-              <Divider />
-              <DetailRow
-                icon="document-text-outline"
-                label="Description"
-                value={txn.description}
-                multiline
-              />
-            </>
-          )}
-          {!!txn.referenceNumber && (
-            <>
-              <Divider />
-              <DetailRow
-                icon="pricetag-outline"
-                label="Reference"
-                value={txn.referenceNumber}
-              />
-            </>
-          )}
-        </View>
+          {txn.description ? (
+            <Row
+              label="Description"
+              value={txn.description}
+              divider={!!txn.referenceNumber}
+            />
+          ) : null}
+          {txn.referenceNumber ? (
+            <Row
+              label="Reference"
+              value={txn.referenceNumber}
+              divider={false}
+            />
+          ) : null}
+        </FormGroup>
 
-        {/* Category + Payment Method */}
-        {(txn.category || txn.paymentMethod) && (
-          <View style={styles.card}>
-            {txn.category && (
-              <DetailRow
-                icon="grid-outline"
-                label="Cost Code"
+        {/* Category + Method */}
+        {txn.category || txn.paymentMethod ? (
+          <FormGroup header="Classification">
+            {txn.category ? (
+              <Row
+                label="Cost code"
                 value={getCategoryLabel(txn.category)}
+                divider={!!txn.paymentMethod}
               />
-            )}
-            {txn.category && txn.paymentMethod && <Divider />}
-            {txn.paymentMethod && (
-              <DetailRow
-                icon={(pmMeta?.icon ?? 'wallet-outline') as keyof typeof Ionicons.glyphMap}
-                label="Payment Method"
+            ) : null}
+            {txn.paymentMethod ? (
+              <Row
+                label="Payment method"
                 value={getPaymentMethodLabel(txn.paymentMethod)}
+                divider={false}
               />
-            )}
-          </View>
-        )}
+            ) : null}
+          </FormGroup>
+        ) : null}
 
-        {!!txn.photoUrl && (
-          <View style={styles.card}>
-            <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
+        {/* Bill / Receipt */}
+        {txn.photoUrl ? (
+          <View style={{ paddingHorizontal: 16, marginTop: 22 }}>
+            <Text
+              variant="caption2"
+              color="secondary"
+              style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingBottom: 8 }}
+            >
               BILL / RECEIPT
             </Text>
             <Pressable
               onPress={() => setPreviewOpen(true)}
-              style={({ pressed }) => [pressed && { opacity: 0.85 }]}
+              style={({ pressed }) => [
+                styles.photoWrap,
+                {
+                  backgroundColor: t.colors.surface,
+                  borderRadius: t.radii.card,
+                  borderColor: t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                  borderWidth: t.hairline,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
               accessibilityLabel="Open receipt full-screen"
             >
               <Image
@@ -830,71 +661,61 @@ export default function TransactionDetailScreen() {
                 resizeMode="cover"
               />
               <View style={styles.photoExpandHint}>
-                <Ionicons name="expand-outline" size={14} color="#fff" />
+                <Ionicons name="expand-outline" size={13} color="#fff" />
               </View>
             </Pressable>
           </View>
-        )}
-
-        {wf === 'posted' ? (
-          <Pressable
-            onPress={handleGenerateReceipt}
-            disabled={generatingReceipt}
-            style={({ pressed }) => [
-              styles.receiptCta,
-              pressed && { opacity: 0.85 },
-              generatingReceipt && { opacity: 0.6 },
-            ]}
-            accessibilityLabel={`Generate ${isIn ? 'payment' : 'payment out'} receipt PDF`}
-          >
-            {generatingReceipt ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Ionicons name="share-outline" size={16} color="#fff" />
-            )}
-            <Text variant="metaStrong" color="onPrimary">
-              {generatingReceipt
-                ? 'Generating receipt…'
-                : `Share ${isIn ? 'Payment' : 'Payment Out'} Receipt`}
-            </Text>
-          </Pressable>
         ) : null}
 
-        <View style={{ height: space.xl }} />
+        {/* Share Receipt CTA */}
+        {wf === 'posted' ? (
+          <View style={{ paddingHorizontal: 16, marginTop: 22 }}>
+            <Pressable
+              onPress={handleGenerateReceipt}
+              disabled={generatingReceipt}
+              style={({ pressed }) => [
+                styles.shareCta,
+                {
+                  backgroundColor: t.palette.blue.base,
+                  borderRadius: t.radii.field,
+                  shadowColor: t.palette.blue.base,
+                  shadowOpacity: 0.25,
+                  shadowRadius: 12,
+                  shadowOffset: { width: 0, height: 4 },
+                  elevation: 5,
+                },
+                pressed && { opacity: 0.85 },
+                generatingReceipt && { opacity: 0.6 },
+              ]}
+              accessibilityLabel={`Generate ${isIn ? 'payment' : 'payment out'} receipt PDF`}
+            >
+              {generatingReceipt ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="share-outline" size={16} color="#fff" />
+              )}
+              <Text
+                variant="footnote"
+                style={{ color: '#fff', fontWeight: '700', marginLeft: 6 }}
+              >
+                {generatingReceipt
+                  ? 'Generating receipt…'
+                  : `Share ${isIn ? 'Payment' : 'Payment Out'} Receipt`}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
       </ScrollView>
 
-      <Modal
-        visible={showRejectModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowRejectModal(false)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.rejectOverlay}
-        >
-          <Pressable style={styles.rejectBackdrop} onPress={() => setShowRejectModal(false)} />
-          <View style={styles.rejectSheet}>
-            <Text variant="bodyStrong" color="text">Reject expense</Text>
-            <TextInput
-              value={rejectNote}
-              onChangeText={setRejectNote}
-              placeholder="Reason (optional)"
-              placeholderTextColor={color.textFaint}
-              style={styles.rejectInput}
-              multiline
-            />
-            <View style={styles.rejectActions}>
-              <Button label="Cancel" variant="text" onPress={() => setShowRejectModal(false)} />
-              <Button
-                label={actionLoading ? 'Working…' : 'Reject'}
-                onPress={handleRejectConfirm}
-                loading={actionLoading}
-              />
-            </View>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      {/* Reject sheet */}
+      <RejectSheet
+        open={showRejectModal}
+        note={rejectNote}
+        onChangeNote={setRejectNote}
+        loading={actionLoading}
+        onClose={() => setShowRejectModal(false)}
+        onConfirm={handleRejectConfirm}
+      />
 
       <ImageViewer
         images={txn.photoUrl ? [txn.photoUrl] : []}
@@ -910,463 +731,1070 @@ export default function TransactionDetailScreen() {
         onClose={() => setSettlementPreviewOpen(false)}
       />
 
-      {/* Mark as Cleared sheet — opens when admin taps "Mark as Cleared"
-          on an already-posted transaction. Photo is mandatory; clearedToParty
-          flag + note are optional. */}
-      <Modal
-        visible={clearSheetOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setClearSheetOpen(false)}
-      >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.modalBackdrop}
-        >
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setClearSheetOpen(false)}
-          />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <View style={styles.modalHeader}>
-              <Text variant="bodyStrong" color="text">Mark as Cleared</Text>
-              <Pressable onPress={() => setClearSheetOpen(false)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={color.textMuted} />
-              </Pressable>
-            </View>
-
-            <ScrollView
-              contentContainerStyle={{ padding: space.md, gap: space.sm }}
-              keyboardShouldPersistTaps="handled"
-            >
-              <Text variant="meta" color="textMuted">
-                Attach a payment receipt (optional). Supervisor gets a "cleared" notification either way.
-              </Text>
-
-              {clearStagedReceipt ? (
-                <View style={styles.stagedReceiptBox}>
-                  <Image
-                    source={{ uri: clearStagedReceipt.localUri }}
-                    style={styles.stagedReceiptImg}
-                  />
-                  <Pressable
-                    onPress={() => setClearStagedReceipt(null)}
-                    hitSlop={6}
-                    style={styles.stagedReceiptClear}
-                  >
-                    <Ionicons name="close-circle" size={22} color={color.danger} />
-                  </Pressable>
-                </View>
-              ) : (
-                <View style={styles.receiptPickRow}>
-                  <Pressable
-                    onPress={() => pickSettlementReceipt('camera', setClearStagedReceipt)}
-                    style={styles.receiptPickBtn}
-                  >
-                    <Ionicons name="camera-outline" size={18} color={color.primary} />
-                    <Text variant="meta" color="primary">Camera</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => pickSettlementReceipt('library', setClearStagedReceipt)}
-                    style={styles.receiptPickBtn}
-                  >
-                    <Ionicons name="image-outline" size={18} color={color.primary} />
-                    <Text variant="meta" color="primary">Gallery</Text>
-                  </Pressable>
-                </View>
-              )}
-
-              <View style={styles.switchRow}>
-                <Text variant="meta" color="text">Cleared to party</Text>
-                <Switch value={clearToParty} onValueChange={setClearToParty} />
-              </View>
-
-              <Text variant="caption" color="textMuted" style={styles.fieldLabel}>
-                Payee label (optional)
-              </Text>
-              <TextInput
-                value={clearPayeeLabel}
-                onChangeText={setClearPayeeLabel}
-                placeholder="Who was paid?"
-                placeholderTextColor={color.textFaint}
-                style={styles.textInput}
-              />
-
-              <Text variant="caption" color="textMuted" style={styles.fieldLabel}>
-                Note (optional)
-              </Text>
-              <TextInput
-                value={clearNote}
-                onChangeText={setClearNote}
-                placeholder="UPI ref, bank txn id, etc."
-                placeholderTextColor={color.textFaint}
-                style={styles.textInput}
-                multiline
-              />
-
-              <View style={[styles.actionRow, { marginTop: space.md }]}>
-                <Pressable
-                  onPress={() => setClearSheetOpen(false)}
-                  style={[styles.actionBtn, styles.rejectBtn]}
-                  disabled={actionLoading}
-                >
-                  <Text variant="metaStrong" color="textMuted">Cancel</Text>
-                </Pressable>
-                <Pressable
-                  onPress={handleClearSettlement}
-                  style={[styles.actionBtn, styles.approveBtn]}
-                  disabled={actionLoading}
-                >
-                  {actionLoading ? (
-                    <ActivityIndicator size="small" color={color.onPrimary} />
-                  ) : (
-                    <Text variant="metaStrong" color="onPrimary">
-                      Mark Cleared
-                    </Text>
-                  )}
-                </Pressable>
-              </View>
-            </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-    </Screen>
+      {/* Mark-as-Cleared sheet */}
+      <ClearSheet
+        open={clearSheetOpen}
+        onClose={() => setClearSheetOpen(false)}
+        clearStagedReceipt={clearStagedReceipt}
+        setClearStagedReceipt={setClearStagedReceipt}
+        clearToParty={clearToParty}
+        setClearToParty={setClearToParty}
+        clearPayeeLabel={clearPayeeLabel}
+        setClearPayeeLabel={setClearPayeeLabel}
+        clearNote={clearNote}
+        setClearNote={setClearNote}
+        actionLoading={actionLoading}
+        onConfirm={handleClearSettlement}
+        pickReceipt={(src) => pickSettlementReceipt(src, setClearStagedReceipt)}
+      />
+    </View>
   );
 }
 
-function DetailRow({
+// ── Header ─────────────────────────────────────────────────────────────
+
+function Header({
+  onBack,
+  title,
+  right,
+}: {
+  onBack: () => void;
+  title: string;
+  right?: React.ReactNode;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      style={[
+        styles.header,
+        {
+          paddingTop: insets.top + 8,
+          borderBottomColor: t.colors.separator,
+          borderBottomWidth: t.hairline,
+        },
+      ]}
+    >
+      <CircleBtn
+        icon="chevron-back"
+        onPress={onBack}
+        tint={t.colors.label}
+      />
+      <Text
+        variant="headline"
+        color="label"
+        style={{ flex: 1, textAlign: 'center', fontWeight: '600' }}
+        numberOfLines={1}
+      >
+        {title}
+      </Text>
+      {right ?? <View style={{ width: 32 }} />}
+    </View>
+  );
+}
+
+function CircleBtn({
   icon,
-  label,
-  value,
-  multiline,
+  onPress,
+  disabled,
+  tint,
+  loading,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  disabled?: boolean;
+  tint: string;
+  loading?: boolean;
+}) {
+  const t = useThemeV2();
+  // Soft-fill chip pattern — matches the project detail header and the
+  // overview screen. Action-tinted icons (blue) ride a soft-blue fill;
+  // neutral icons (back, label-coloured) ride the standard grey fill.
+  const isBlueAction = tint === t.palette.blue.base;
+  const bg = isBlueAction
+    ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+    : t.colors.fill3;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled || loading}
+      hitSlop={10}
+      style={({ pressed }) => [
+        styles.circleBtn,
+        {
+          backgroundColor: bg,
+          borderRadius: 999,
+        },
+        (disabled || loading) && { opacity: 0.5 },
+        pressed && { opacity: 0.7 },
+      ]}
+    >
+      {loading ? (
+        <ActivityIndicator size="small" color={tint} />
+      ) : (
+        <Ionicons name={icon} size={16} color={tint} />
+      )}
+    </Pressable>
+  );
+}
+
+function Pill({
+  tone,
+  bg,
+  label,
+}: {
+  tone: string;
+  bg: string;
   label: string;
-  value: string;
-  multiline?: boolean;
 }) {
   return (
-    <View style={[styles.metaRow, multiline && styles.metaRowMultiline]}>
-      <Ionicons name={icon} size={16} color={color.textMuted} />
-      <Text variant="caption" color="textMuted" style={styles.metaLabel}>
-        {label}
-      </Text>
+    <View
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: bg,
+        borderRadius: 999,
+        paddingHorizontal: 9,
+        paddingVertical: 3,
+      }}
+    >
+      <View
+        style={{
+          width: 5,
+          height: 5,
+          borderRadius: 3,
+          backgroundColor: tone,
+          marginRight: 5,
+        }}
+      />
       <Text
-        variant="meta"
-        color="text"
-        style={multiline ? styles.metaValueMultiline : styles.metaValue}
+        variant="caption2"
+        style={{ color: tone, fontWeight: '700', letterSpacing: 0.3 }}
       >
-        {value}
+        {label}
       </Text>
     </View>
   );
 }
 
-function Divider() {
-  return <View style={styles.divider} />;
+// ── Approve panel ──────────────────────────────────────────────────────
+
+function ApprovePanel({
+  clearedToParty,
+  setClearedToParty,
+  payeeLabel,
+  setPayeeLabel,
+  settlementNote,
+  setSettlementNote,
+  markClearedNow,
+  setMarkClearedNow,
+  stagedReceipt,
+  setStagedReceipt,
+  pickReceipt,
+  actionLoading,
+  onReject,
+  onApprove,
+}: {
+  clearedToParty: boolean;
+  setClearedToParty: (v: boolean) => void;
+  payeeLabel: string;
+  setPayeeLabel: (v: string) => void;
+  settlementNote: string;
+  setSettlementNote: (v: string) => void;
+  markClearedNow: boolean;
+  setMarkClearedNow: (v: boolean) => void;
+  stagedReceipt: StagedFile | null;
+  setStagedReceipt: (f: StagedFile | null) => void;
+  pickReceipt: (src: 'camera' | 'library') => void;
+  actionLoading: boolean;
+  onReject: () => void;
+  onApprove: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <View style={{ paddingHorizontal: 16, marginTop: 22 }}>
+      <Text
+        variant="caption2"
+        color="secondary"
+        style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingBottom: 8 }}
+      >
+        SETTLEMENT (ON APPROVE)
+      </Text>
+      <View
+        style={[
+          styles.approveCard,
+          {
+            backgroundColor: t.colors.surface,
+            borderRadius: t.radii.card,
+            borderColor:
+              t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+            borderWidth: t.hairline,
+          },
+        ]}
+      >
+        <View style={styles.switchRow}>
+          <Text variant="callout" color="label">
+            Payment cleared to party
+          </Text>
+          <Switch value={clearedToParty} onValueChange={setClearedToParty} />
+        </View>
+
+        <Text
+          variant="caption2"
+          color="tertiary"
+          style={{ letterSpacing: 0.5, marginTop: 12 }}
+        >
+          PAYEE LABEL (OPTIONAL)
+        </Text>
+        <TextInput
+          value={payeeLabel}
+          onChangeText={setPayeeLabel}
+          placeholder="Who was paid?"
+          placeholderTextColor={t.colors.tertiary}
+          style={[
+            styles.textInput,
+            {
+              backgroundColor: t.colors.fill3,
+              borderRadius: t.radii.field,
+              color: t.colors.label,
+            },
+          ]}
+        />
+
+        <Text
+          variant="caption2"
+          color="tertiary"
+          style={{ letterSpacing: 0.5, marginTop: 12 }}
+        >
+          NOTE (OPTIONAL)
+        </Text>
+        <TextInput
+          value={settlementNote}
+          onChangeText={setSettlementNote}
+          placeholder="Settlement note"
+          placeholderTextColor={t.colors.tertiary}
+          style={[
+            styles.textInput,
+            {
+              backgroundColor: t.colors.fill3,
+              borderRadius: t.radii.field,
+              color: t.colors.label,
+              minHeight: 60,
+              textAlignVertical: 'top',
+            },
+          ]}
+          multiline
+        />
+
+        <View style={[styles.switchRow, { marginTop: 14 }]}>
+          <View style={{ flex: 1 }}>
+            <Text variant="callout" color="label">Mark cleared now</Text>
+            <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+              Optionally attach a payment receipt — supervisor gets a "cleared" notification either way.
+            </Text>
+          </View>
+          <Switch value={markClearedNow} onValueChange={setMarkClearedNow} />
+        </View>
+
+        {markClearedNow ? (
+          <View style={{ marginTop: 10 }}>
+            {stagedReceipt ? (
+              <View style={styles.stagedReceiptBox}>
+                <Image
+                  source={{ uri: stagedReceipt.localUri }}
+                  style={[styles.stagedReceiptImg, { borderRadius: t.radii.field }]}
+                />
+                <Pressable
+                  onPress={() => setStagedReceipt(null)}
+                  hitSlop={6}
+                  style={[
+                    styles.stagedReceiptClear,
+                    { backgroundColor: 'rgba(255,255,255,0.92)' },
+                  ]}
+                >
+                  <Ionicons name="close-circle" size={20} color={t.palette.red.base} />
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.receiptPickRow}>
+                <ReceiptPickBtn
+                  icon="camera-outline"
+                  label="Camera"
+                  onPress={() => pickReceipt('camera')}
+                />
+                <ReceiptPickBtn
+                  icon="image-outline"
+                  label="Gallery"
+                  onPress={() => pickReceipt('library')}
+                />
+              </View>
+            )}
+          </View>
+        ) : null}
+
+        <View style={styles.actionRow}>
+          <Pressable
+            onPress={onReject}
+            disabled={actionLoading}
+            style={({ pressed }) => [
+              styles.actionBtn,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                borderRadius: t.radii.field,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Text variant="footnote" style={{ color: t.palette.red.base, fontWeight: '700' }}>
+              Reject
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={onApprove}
+            disabled={actionLoading}
+            style={({ pressed }) => [
+              styles.actionBtn,
+              {
+                backgroundColor: t.palette.blue.base,
+                borderRadius: t.radii.field,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            {actionLoading ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Text variant="footnote" style={{ color: '#fff', fontWeight: '700' }}>
+                {markClearedNow ? 'Approve & Clear' : 'Approve'}
+              </Text>
+            )}
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function ReceiptPickBtn({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.receiptPickBtn,
+        {
+          backgroundColor:
+            t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+          borderRadius: t.radii.field,
+          borderColor: t.palette.blue.base + '33',
+          borderWidth: t.hairline,
+          borderStyle: 'dashed',
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Ionicons name={icon} size={16} color={t.palette.blue.base} />
+      <Text
+        variant="footnote"
+        style={{ color: t.palette.blue.base, fontWeight: '700', marginLeft: 6 }}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+// ── Settlement group ───────────────────────────────────────────────────
+
+function SettlementGroup({
+  cleared,
+  submissionKind,
+  settlement,
+  partyName,
+  createdByLabel,
+  uidLabel,
+  onPhotoTap,
+  onMarkCleared,
+  canMarkCleared,
+}: {
+  cleared: boolean;
+  submissionKind?: 'expense_reimbursement' | 'party_payment';
+  settlement?: {
+    clearedToParty: boolean;
+    payeeLabel?: string;
+    note?: string;
+    clearedAt?: { toDate: () => Date } | null;
+    clearedBy?: string;
+    settlementPhotoUrl?: string;
+  } | null;
+  partyName?: string;
+  createdByLabel: string;
+  uidLabel: (uid?: string) => string;
+  onPhotoTap: () => void;
+  onMarkCleared: () => void;
+  canMarkCleared: boolean;
+}) {
+  const t = useThemeV2();
+  return (
+    <View style={{ marginTop: 22 }}>
+      <View style={styles.settlementHeaderRow}>
+        <Text
+          variant="caption2"
+          color="secondary"
+          style={{ letterSpacing: 0.5 }}
+        >
+          SETTLEMENT
+        </Text>
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 8,
+            paddingVertical: 3,
+            borderRadius: 999,
+            // 90/10: only the "still uncleared" state earns colour (orange,
+            // pending). Cleared payments read in neutral.
+            backgroundColor: cleared
+              ? t.colors.fill3
+              : (t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft),
+          }}
+        >
+          <Ionicons
+            name={cleared ? 'checkmark-circle' : 'time-outline'}
+            size={11}
+            color={cleared ? t.colors.secondary : t.palette.orange.base}
+          />
+          <Text
+            variant="caption2"
+            style={{
+              color: cleared ? t.colors.secondary : t.palette.orange.base,
+              fontWeight: '700',
+              letterSpacing: 0.4,
+              marginLeft: 4,
+            }}
+          >
+            {cleared ? 'CLEARED' : 'AWAITING'}
+          </Text>
+        </View>
+      </View>
+
+      <FormGroup>
+        {submissionKind ? (
+          <Row
+            label="Type"
+            value={
+              submissionKind === 'expense_reimbursement'
+                ? `Reimburse ${createdByLabel}`
+                : `Payment to ${partyName || 'party'}`
+            }
+            divider={!!settlement}
+          />
+        ) : null}
+        {settlement ? (
+          <>
+            <Row
+              label="To party"
+              value={settlement.clearedToParty ? 'Yes' : 'No'}
+              divider={
+                !!settlement.payeeLabel
+                || !!settlement.note
+                || !!settlement.clearedAt
+                || !!settlement.clearedBy
+              }
+            />
+            {settlement.payeeLabel ? (
+              <Row
+                label="Payee"
+                value={settlement.payeeLabel}
+                divider={!!settlement.note || !!settlement.clearedAt || !!settlement.clearedBy}
+              />
+            ) : null}
+            {settlement.note ? (
+              <Row
+                label="Note"
+                value={settlement.note}
+                divider={!!settlement.clearedAt || !!settlement.clearedBy}
+              />
+            ) : null}
+            {settlement.clearedAt ? (
+              <Row
+                label="Cleared on"
+                value={formatDate(settlement.clearedAt.toDate())}
+                divider={!!settlement.clearedBy}
+              />
+            ) : null}
+            {settlement.clearedBy ? (
+              <Row
+                label="Cleared by"
+                value={uidLabel(settlement.clearedBy)}
+                divider={false}
+              />
+            ) : null}
+          </>
+        ) : (
+          <Row
+            label="Status"
+            value="Approved without settlement details"
+            divider={false}
+          />
+        )}
+      </FormGroup>
+
+      {settlement?.settlementPhotoUrl ? (
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+          <Pressable
+            onPress={onPhotoTap}
+            style={({ pressed }) => [
+              styles.photoWrap,
+              {
+                backgroundColor: t.colors.surface,
+                borderRadius: t.radii.card,
+                borderColor: t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                borderWidth: t.hairline,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Image
+              source={{ uri: settlement.settlementPhotoUrl }}
+              style={styles.photo}
+              resizeMode="cover"
+            />
+            <View style={styles.photoExpandHint}>
+              <Ionicons name="expand-outline" size={13} color="#fff" />
+            </View>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {canMarkCleared ? (
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+          <Pressable
+            onPress={onMarkCleared}
+            style={({ pressed }) => [
+              styles.markClearedBtn,
+              {
+                backgroundColor: t.palette.blue.base,
+                borderRadius: t.radii.field,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Ionicons name="checkmark-done-outline" size={16} color="#fff" />
+            <Text
+              variant="footnote"
+              style={{ color: '#fff', fontWeight: '700', marginLeft: 6 }}
+            >
+              Mark as Cleared
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+// ── Reject sheet ────────────────────────────────────────────────────────
+
+function RejectSheet({
+  open,
+  note,
+  onChangeNote,
+  loading,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  note: string;
+  onChangeNote: (v: string) => void;
+  loading: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal
+      visible={open}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            styles.bottomSheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 16,
+            },
+          ]}
+        >
+          <View style={[styles.grabber, { backgroundColor: t.colors.tertiary }]} />
+          <Text
+            variant="headline"
+            color="label"
+            style={{ paddingHorizontal: 16, fontWeight: '700' }}
+          >
+            Reject expense
+          </Text>
+          <TextInput
+            value={note}
+            onChangeText={onChangeNote}
+            placeholder="Reason (optional)"
+            placeholderTextColor={t.colors.tertiary}
+            style={[
+              styles.rejectInput,
+              {
+                backgroundColor: t.colors.fill3,
+                borderRadius: t.radii.field,
+                color: t.colors.label,
+                minHeight: 80,
+                textAlignVertical: 'top',
+              },
+            ]}
+            multiline
+          />
+          <View style={[styles.actionRow, { paddingHorizontal: 16, marginTop: 14 }]}>
+            <Pressable
+              onPress={onClose}
+              style={({ pressed }) => [
+                styles.actionBtn,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text variant="footnote" color="secondary" style={{ fontWeight: '700' }}>
+                Cancel
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={onConfirm}
+              disabled={loading}
+              style={({ pressed }) => [
+                styles.actionBtn,
+                {
+                  backgroundColor: t.palette.red.base,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text variant="footnote" style={{ color: '#fff', fontWeight: '700' }}>
+                  Reject
+                </Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+// ── Mark as cleared sheet ──────────────────────────────────────────────
+
+function ClearSheet({
+  open,
+  onClose,
+  clearStagedReceipt,
+  setClearStagedReceipt,
+  clearToParty,
+  setClearToParty,
+  clearPayeeLabel,
+  setClearPayeeLabel,
+  clearNote,
+  setClearNote,
+  actionLoading,
+  onConfirm,
+  pickReceipt,
+}: {
+  open: boolean;
+  onClose: () => void;
+  clearStagedReceipt: StagedFile | null;
+  setClearStagedReceipt: (f: StagedFile | null) => void;
+  clearToParty: boolean;
+  setClearToParty: (v: boolean) => void;
+  clearPayeeLabel: string;
+  setClearPayeeLabel: (v: string) => void;
+  clearNote: string;
+  setClearNote: (v: string) => void;
+  actionLoading: boolean;
+  onConfirm: () => void;
+  pickReceipt: (src: 'camera' | 'library') => void;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal
+      visible={open}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            styles.bottomSheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 16,
+              maxHeight: '85%',
+            },
+          ]}
+        >
+          <View style={[styles.grabber, { backgroundColor: t.colors.tertiary }]} />
+          <View
+            style={[
+              styles.sheetHeader,
+              {
+                borderBottomColor: t.colors.separator,
+                borderBottomWidth: t.hairline,
+              },
+            ]}
+          >
+            <Text
+              variant="headline"
+              color="label"
+              style={{ flex: 1, fontWeight: '600' }}
+            >
+              Mark as Cleared
+            </Text>
+            <Pressable onPress={onClose} hitSlop={10}>
+              <Ionicons name="close" size={20} color={t.colors.secondary} />
+            </Pressable>
+          </View>
+
+          <ScrollView
+            contentContainerStyle={{ padding: 16, gap: 12 }}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text variant="caption1" color="secondary">
+              Attach a payment receipt (optional). Supervisor gets a "cleared"
+              notification either way.
+            </Text>
+
+            {clearStagedReceipt ? (
+              <View style={styles.stagedReceiptBox}>
+                <Image
+                  source={{ uri: clearStagedReceipt.localUri }}
+                  style={[styles.stagedReceiptImg, { borderRadius: t.radii.field }]}
+                />
+                <Pressable
+                  onPress={() => setClearStagedReceipt(null)}
+                  hitSlop={6}
+                  style={[
+                    styles.stagedReceiptClear,
+                    { backgroundColor: 'rgba(255,255,255,0.92)' },
+                  ]}
+                >
+                  <Ionicons name="close-circle" size={20} color={t.palette.red.base} />
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.receiptPickRow}>
+                <ReceiptPickBtn
+                  icon="camera-outline"
+                  label="Camera"
+                  onPress={() => pickReceipt('camera')}
+                />
+                <ReceiptPickBtn
+                  icon="image-outline"
+                  label="Gallery"
+                  onPress={() => pickReceipt('library')}
+                />
+              </View>
+            )}
+
+            <View style={styles.switchRow}>
+              <Text variant="callout" color="label">Cleared to party</Text>
+              <Switch value={clearToParty} onValueChange={setClearToParty} />
+            </View>
+
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={{ letterSpacing: 0.5, marginTop: 4 }}
+            >
+              PAYEE LABEL (OPTIONAL)
+            </Text>
+            <TextInput
+              value={clearPayeeLabel}
+              onChangeText={setClearPayeeLabel}
+              placeholder="Who was paid?"
+              placeholderTextColor={t.colors.tertiary}
+              style={[
+                styles.textInput,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: t.radii.field,
+                  color: t.colors.label,
+                  marginTop: 0,
+                },
+              ]}
+            />
+
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={{ letterSpacing: 0.5, marginTop: 4 }}
+            >
+              NOTE (OPTIONAL)
+            </Text>
+            <TextInput
+              value={clearNote}
+              onChangeText={setClearNote}
+              placeholder="UPI ref, bank txn id, etc."
+              placeholderTextColor={t.colors.tertiary}
+              style={[
+                styles.textInput,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: t.radii.field,
+                  color: t.colors.label,
+                  minHeight: 60,
+                  textAlignVertical: 'top',
+                  marginTop: 0,
+                },
+              ]}
+              multiline
+            />
+
+            <View style={[styles.actionRow, { marginTop: 12 }]}>
+              <Pressable
+                onPress={onClose}
+                disabled={actionLoading}
+                style={({ pressed }) => [
+                  styles.actionBtn,
+                  {
+                    backgroundColor: t.colors.fill3,
+                    borderRadius: t.radii.field,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Text variant="footnote" color="secondary" style={{ fontWeight: '700' }}>
+                  Cancel
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={onConfirm}
+                disabled={actionLoading}
+                style={({ pressed }) => [
+                  styles.actionBtn,
+                  {
+                    backgroundColor: t.palette.blue.base,
+                    borderRadius: t.radii.field,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                {actionLoading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text variant="footnote" style={{ color: '#fff', fontWeight: '700' }}>
+                    Mark Cleared
+                  </Text>
+                )}
+              </Pressable>
+            </View>
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
 }
 
 const styles = StyleSheet.create({
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  navBar: {
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: 8,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    gap: 8,
   },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navCenter: {
-    flex: 1,
+  circleBtn: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navEyebrow: { letterSpacing: 1.2 },
-  navTitle: { textAlign: 'center' },
-  scroll: { paddingHorizontal: screenInset, paddingTop: 12, paddingBottom: space.xl, gap: space.sm },
 
-  amountHero: {
-    paddingHorizontal: 4,
-    paddingVertical: 8,
-    alignItems: 'center',
-  },
-  amountEyebrow: {
-    letterSpacing: 1.2,
-  },
-  amountValue: {
-    marginTop: 8,
-    letterSpacing: -0.8,
-  },
-  amountSub: {
-    marginTop: 4,
-    textAlign: 'center',
+  scroll: {},
+
+  // Hero card
+  heroCard: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
   },
   pillRow: {
     flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
     flexWrap: 'wrap',
-    justifyContent: 'center',
+    gap: 6,
+    marginTop: 12,
   },
-  approvalBar: {
-    marginTop: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-    paddingHorizontal: space.sm,
-    paddingVertical: 6,
+
+  // Workflow ribbon
+  workflowCard: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  approvalLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    flex: 1,
-  },
-  approvalHeadline: {
-    letterSpacing: 0.5,
-    fontWeight: '600',
-  },
-  workflowSub: {
-    marginTop: 4,
-    marginBottom: 6,
-    lineHeight: 18,
-    paddingHorizontal: 2,
-  },
+
+  // Approve card
   approveCard: {
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-    padding: space.sm,
-    gap: space.xs,
+    padding: 14,
   },
-  sectionLabelInline: { marginBottom: 4 },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 4,
   },
-  fieldLabel: { marginTop: space.xs },
   textInput: {
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.sm,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 6,
-    color: color.text,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
     marginTop: 4,
   },
-  actionRow: { flexDirection: 'row', gap: space.sm, marginTop: space.sm },
+  actionRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 14,
+  },
   actionBtn: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: space.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-  },
-  rejectBtn: { backgroundColor: color.bgGrouped },
-  approveBtn: { backgroundColor: color.primary, borderColor: color.primary },
-  statusPill: {
-    paddingHorizontal: space.sm,
-    paddingVertical: 2,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-  },
-
-  card: {
-    backgroundColor: color.bg,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: 0,
-  },
-  sectionLabel: { marginTop: space.sm, marginBottom: space.xs, paddingHorizontal: space.md },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
-    paddingVertical: 12,
-    paddingHorizontal: space.md,
-  },
-  metaRowMultiline: { alignItems: 'flex-start' },
-  metaLabel: { width: 110, marginLeft: 4 },
-  metaValue: { flex: 1, textAlign: 'right' },
-  metaValueMultiline: { flex: 1 },
-  divider: {
-    height: 1,
-    backgroundColor: color.borderStrong,
-    marginLeft: space.md,
-  },
-
-  photo: {
-    width: '100%',
-    height: 220,
-    borderRadius: radius.sm,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    marginTop: space.xs,
-    marginBottom: space.sm,
-  },
-  photoExpandHint: {
-    position: 'absolute',
-    top: space.sm + 6,
-    right: space.sm,
-    width: 26, height: 26,
-    borderRadius: radius.pill,
-    backgroundColor: 'rgba(15,23,42,0.6)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  receiptCta: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    backgroundColor: color.primary,
-    paddingVertical: 14,
-    borderRadius: 12,
-    marginTop: space.sm,
+    paddingVertical: 10,
   },
 
-  rejectOverlay: { flex: 1, justifyContent: 'flex-end' },
-  rejectBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.35)' },
-  rejectSheet: {
-    backgroundColor: color.bgGrouped,
-    padding: space.md,
-    borderTopWidth: 1,
-    borderColor: color.borderStrong,
-    gap: space.sm,
-  },
-  rejectInput: {
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    padding: space.sm,
-    minHeight: 80,
-    textAlignVertical: 'top',
-    color: color.text,
-  },
-  rejectActions: { flexDirection: 'row', gap: space.sm, justifyContent: 'flex-end' },
-
-  // ── Settlement & cleared flow ──
-  settlementHeader: {
+  // Settlement
+  settlementHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingRight: space.md,
+    paddingHorizontal: 32,
+    paddingBottom: 8,
   },
-  clearedPill: {
+
+  // Photo
+  photoWrap: {
+    overflow: 'hidden',
+  },
+  photo: {
+    width: '100%',
+    height: 220,
+  },
+  photoExpandHint: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(15,23,42,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Share CTA
+  shareCta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: radius.sm,
-    backgroundColor: color.successSoft,
-    borderWidth: 1,
-    borderColor: color.success,
-    marginTop: space.sm,
+    justifyContent: 'center',
+    paddingVertical: 14,
   },
-  unclearedPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: radius.sm,
-    backgroundColor: color.warningSoft,
-    borderWidth: 1,
-    borderColor: color.warning,
-    marginTop: space.sm,
-  },
+
+  // Mark as cleared CTA
   markClearedBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space.xs,
-    backgroundColor: color.primary,
-    paddingVertical: space.sm,
-    marginHorizontal: space.md,
-    marginTop: space.sm,
-    marginBottom: space.sm,
-    borderRadius: radius.sm,
+    paddingVertical: 12,
   },
-  receiptStage: { marginTop: space.xs },
+
+  // Bottom sheet
+  bottomSheet: {
+    paddingTop: 8,
+  },
+  grabber: {
+    width: 36,
+    height: 5,
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+  },
+
+  // Receipt picker
   receiptPickRow: {
     flexDirection: 'row',
-    gap: space.sm,
+    gap: 8,
   },
   receiptPickBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    paddingVertical: space.sm,
-    borderWidth: 1,
-    borderStyle: 'dashed',
-    borderColor: color.primary,
-    borderRadius: radius.sm,
-    backgroundColor: color.primarySoft,
+    paddingVertical: 12,
   },
   stagedReceiptBox: {
     position: 'relative',
-    alignItems: 'flex-start',
   },
   stagedReceiptImg: {
     width: '100%',
     height: 180,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
   },
   stagedReceiptClear: {
     position: 'absolute',
     top: 6,
     right: 6,
-    backgroundColor: 'rgba(255,255,255,0.92)',
     borderRadius: 12,
   },
 
-  // ── Mark-as-Cleared modal ──
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  modalSheet: {
-    backgroundColor: color.bg,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    paddingTop: 6,
-    paddingBottom: 24,
-    maxHeight: '85%',
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.border,
-    alignSelf: 'center',
-    marginBottom: 8,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.border,
+  // Reject input
+  rejectInput: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 15,
   },
 });

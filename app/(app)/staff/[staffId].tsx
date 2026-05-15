@@ -1,14 +1,16 @@
 /**
- * Staff detail — shows the staff's identity (name / role / salary)
- * and a monthly attendance grid. Tap any day cell to cycle:
+ * Staff detail — v2 design.
+ *
+ * Shows the staff's identity (avatar, name, role, salary) and a monthly
+ * attendance grid. Tap any day cell to cycle:
  *
  *   blank  →  present  →  half  →  absent  →  blank
  *
  * Each tap writes (or deletes) one `staffAttendance` doc keyed by
  * `{staffId}_{YYYY-MM-DD}`. Future days are disabled.
  *
- * Actions in the header kebab:
- *   - Edit details (reuses the same fields Add staff uses)
+ * Header trailing icon opens a native action sheet:
+ *   - Edit details (reuses Add staff form fields in a modal sheet)
  *   - Archive (soft delete — preserves attendance history)
  *
  * Permission: any caller can land here, but write actions
@@ -19,13 +21,16 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { usePermissions } from '@/src/features/org/usePermissions';
@@ -46,8 +51,13 @@ import {
 } from '@/src/features/staff/types';
 import { useStaff } from '@/src/features/staff/useStaff';
 import { useStaffAttendance } from '@/src/features/staff/useStaffAttendance';
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, screenInset, space } from '@/src/theme/tokens';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { inrCompact, useThemeV2 } from '@/src/theme/v2';
 
 const STATUS_CYCLE: (StaffAttendanceStatus | null)[] = [
   null,
@@ -55,23 +65,6 @@ const STATUS_CYCLE: (StaffAttendanceStatus | null)[] = [
   'half',
   'absent',
 ];
-
-const STATUS_TONE: Record<StaffAttendanceStatus, { fg: string; bg: string; label: string }> = {
-  present: { fg: '#fff', bg: color.success, label: 'P' },
-  half:    { fg: '#fff', bg: color.warning, label: 'H' },
-  absent:  { fg: '#fff', bg: color.danger,  label: 'A' },
-};
-
-function inrCompact(n: number): string {
-  if (n >= 1_00_00_000) return `₹${(n / 1_00_00_000).toFixed(1)}Cr`;
-  if (n >= 1_00_000) {
-    const v = n / 1_00_000;
-    const s = v >= 100 ? v.toFixed(0) : v.toFixed(1);
-    return `₹${s.endsWith('.0') ? s.slice(0, -2) : s}L`;
-  }
-  if (n >= 1_000) return `₹${(n / 1_000).toFixed(0)}k`;
-  return `₹${Math.round(n).toLocaleString('en-IN')}`;
-}
 
 function startOfMonth(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -81,6 +74,8 @@ function endOfMonth(d: Date): Date {
 }
 
 export default function StaffDetailScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const { staffId } = useLocalSearchParams<{ staffId: string }>();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? undefined;
@@ -96,21 +91,17 @@ export default function StaffDetailScreen() {
   const [month, setMonth] = useState<Date>(() => startOfMonth(new Date()));
   const { byStaff } = useStaffAttendance(orgId, month);
   const attendance = useMemo(() => byStaff[staffId] ?? [], [byStaff, staffId]);
-  // Real status from Firestore, keyed by date (YYYY-MM-DD).
   const realAttendanceMap = useMemo(() => {
     const m = new Map<string, StaffAttendanceStatus>();
     for (const a of attendance) m.set(a.date, a.status);
     return m;
   }, [attendance]);
 
-  // Optimistic overrides: dateKey → next intended status (or `null` for
-  // "cleared"). Cells render this override immediately on tap so the
-  // user gets feedback before the Firestore write round-trips.
+  // Optimistic overrides: dateKey → next intended status.
   const [optimistic, setOptimistic] = useState<
     Record<string, StaffAttendanceStatus | null>
   >({});
 
-  // Drop overrides that the snapshot has now confirmed.
   useEffect(() => {
     setOptimistic((prev) => {
       let changed = false;
@@ -126,13 +117,10 @@ export default function StaffDetailScreen() {
     });
   }, [realAttendanceMap]);
 
-  // Reset overrides when the user changes month — those taps were for
-  // dates that may not be in the new range.
   useEffect(() => {
     setOptimistic({});
   }, [month]);
 
-  // Display map = real values overlaid with optimistic intentions.
   const attendanceMap = useMemo(() => {
     const m = new Map<string, StaffAttendanceStatus>(realAttendanceMap);
     for (const k of Object.keys(optimistic)) {
@@ -147,16 +135,20 @@ export default function StaffDetailScreen() {
     const start = startOfMonth(month);
     const end = endOfMonth(month);
     const list: Date[] = [];
-    for (let d = new Date(start); d <= end; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+    for (
+      let d = new Date(start);
+      d <= end;
+      d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)
+    ) {
       list.push(new Date(d));
     }
     return list;
   }, [month]);
 
   const today = useMemo(() => {
-    const t = new Date();
-    t.setHours(0, 0, 0, 0);
-    return t;
+    const tt = new Date();
+    tt.setHours(0, 0, 0, 0);
+    return tt;
   }, []);
 
   const tally = useMemo(() => {
@@ -176,6 +168,12 @@ export default function StaffDetailScreen() {
     return computePayroll(staff, tally.present, tally.half);
   }, [staff, tally]);
 
+  const STATUS_TONE: Record<StaffAttendanceStatus, { fg: string; bg: string; label: string }> = {
+    present: { fg: '#fff', bg: t.palette.green.base, label: 'P' },
+    half: { fg: '#fff', bg: t.palette.orange.base, label: 'H' },
+    absent: { fg: '#fff', bg: t.palette.red.base, label: 'A' },
+  };
+
   const onCycleDay = async (d: Date) => {
     if (!staff || !orgId || !canWrite) return;
     if (d > today) return;
@@ -183,9 +181,6 @@ export default function StaffDetailScreen() {
     const cur = attendanceMap.get(k) ?? null;
     const idx = STATUS_CYCLE.indexOf(cur);
     const next = STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length];
-    // Apply optimistic override IMMEDIATELY so the cell flips on tap,
-    // not after a Firestore round-trip. The useEffect above clears the
-    // override once the snapshot listener confirms.
     setOptimistic((prev) => ({ ...prev, [k]: next }));
     try {
       if (next === null) {
@@ -199,7 +194,6 @@ export default function StaffDetailScreen() {
         });
       }
     } catch (e) {
-      // Revert: drop the override so the cell snaps back to truth.
       setOptimistic((prev) => {
         const upd = { ...prev };
         delete upd[k];
@@ -243,24 +237,37 @@ export default function StaffDetailScreen() {
     );
   };
 
+  const onMore = () => {
+    if (!staff) return;
+    Alert.alert(staff.name, 'Choose an action', [
+      { text: 'Edit details', onPress: () => setEditOpen(true) },
+      { text: 'Archive', style: 'destructive', onPress: onArchive },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
   if (loading && !staff) {
     return (
-      <View style={styles.root}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
         <Header onBack={onBack} title="Staff" />
-        <View style={styles.loading}>
-          <ActivityIndicator color={color.primary} />
+        <View style={styles.centered}>
+          <ActivityIndicator color={t.palette.blue.base} />
         </View>
       </View>
     );
   }
   if (!staff) {
     return (
-      <View style={styles.root}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
         <Header onBack={onBack} title="Staff" />
-        <View style={styles.loading}>
-          <Text variant="meta" color="textMuted">Staff not found.</Text>
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary">
+            Staff not found.
+          </Text>
         </View>
       </View>
     );
@@ -268,128 +275,285 @@ export default function StaffDetailScreen() {
 
   const mk = monthKey(month);
   const posted = staff.lastPayrollMonth === mk;
+  const initial = staff.name.charAt(0).toUpperCase() || '?';
 
   return (
-    <View style={styles.root}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
+
       <Header
         onBack={onBack}
         title={staff.name}
         right={
           canWrite ? (
             <Pressable
-              onPress={() =>
-                Alert.alert(staff.name, 'Choose an action', [
-                  { text: 'Edit details', onPress: () => setEditOpen(true) },
-                  { text: 'Archive', style: 'destructive', onPress: onArchive },
-                  { text: 'Cancel', style: 'cancel' },
-                ])
-              }
-              hitSlop={12}
-              style={styles.headerKebab}
+              onPress={onMore}
+              hitSlop={10}
+              style={({ pressed }) => [
+                styles.headerKebab,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: 999,
+                },
+                pressed && { opacity: 0.7 },
+              ]}
             >
-              <Ionicons name="ellipsis-horizontal" size={20} color={color.text} />
+              <Ionicons
+                name="ellipsis-horizontal"
+                size={18}
+                color={t.colors.secondary}
+              />
             </Pressable>
           ) : null
         }
       />
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scroll,
+          { paddingBottom: insets.bottom + 40 },
+        ]}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Identity card */}
-        <View style={styles.idCard}>
-          <View style={styles.idAvatar}>
-            <Text variant="title" color="primary">{staff.name.charAt(0).toUpperCase()}</Text>
-          </View>
-          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-            <Text variant="rowTitle" color="text">{staff.name}</Text>
-            <Text variant="meta" color="textMuted">{staff.role || 'Staff'}</Text>
-            <Text variant="caption" color="textFaint" style={{ marginTop: 4 }}>
-              {staff.payUnit === 'month' ? 'Monthly' : 'Per-day'} · {inrCompact(staff.monthlySalary)}/mo
-            </Text>
-          </View>
-          {posted ? (
-            <View style={styles.postedPill}>
-              <Text style={styles.postedPillText}>{mk} POSTED</Text>
+        <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+          <View
+            style={[
+              styles.idCard,
+              {
+                backgroundColor: t.colors.surface,
+                borderRadius: t.radii.hero,
+                borderColor:
+                  t.mode === 'dark'
+                    ? 'rgba(255,255,255,0.05)'
+                    : 'rgba(0,0,0,0.04)',
+                borderWidth: t.hairline,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.idAvatar,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                },
+              ]}
+            >
+              <Text variant="title2" style={{ color: t.palette.blue.base, fontWeight: '700' }}>
+                {initial}
+              </Text>
             </View>
-          ) : null}
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text variant="headline" color="label" style={{ fontWeight: '700' }} numberOfLines={1}>
+                {staff.name}
+              </Text>
+              <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+                {staff.role || 'Staff'}
+              </Text>
+              <Text
+                variant="footnote"
+                color="label"
+                style={{
+                  marginTop: 6,
+                  fontWeight: '700',
+                  fontVariant: ['tabular-nums'],
+                }}
+              >
+                {inrCompact(staff.monthlySalary)}
+                <Text variant="caption1" color="secondary" style={{ fontWeight: '400' }}>
+                  {' '}
+                  / {staff.payUnit === 'month' ? 'month' : 'month (per-day)'}
+                </Text>
+              </Text>
+            </View>
+            {posted ? (
+              <View
+                style={[
+                  styles.postedPill,
+                  {
+                    // Neutral pill — the label "POSTED" speaks for itself.
+                    backgroundColor: t.colors.fill3,
+                    borderRadius: 999,
+                  },
+                ]}
+              >
+                <View
+                  style={{
+                    width: 5,
+                    height: 5,
+                    borderRadius: 3,
+                    backgroundColor: t.colors.tertiary,
+                  }}
+                />
+                <Text
+                  variant="caption2"
+                  style={{
+                    color: t.colors.secondary,
+                    fontWeight: '700',
+                    letterSpacing: 0.4,
+                    marginLeft: 4,
+                  }}
+                >
+                  POSTED
+                </Text>
+              </View>
+            ) : null}
+          </View>
         </View>
 
-        {/* Tally row */}
-        <View style={styles.tallyCard}>
-          <TallyCell label="PRESENT" value={String(tally.present)} tone={color.success} />
-          <View style={styles.tallyDivider} />
-          <TallyCell label="HALF" value={String(tally.half)} tone={color.warning} />
-          <View style={styles.tallyDivider} />
-          <TallyCell label="ABSENT" value={String(tally.absent)} tone={color.danger} />
-          <View style={styles.tallyDivider} />
-          <TallyCell label="DUE" value={inrCompact(dueAmount)} tone={color.text} />
+        {/* Tally KPI strip */}
+        <View style={[styles.tallyRow, { paddingHorizontal: 16 }]}>
+          <TallyTile
+            label="PRESENT"
+            value={String(tally.present)}
+            tone={t.palette.green.base}
+            bg={t.mode === 'dark' ? t.palette.green.softDark : t.palette.green.soft}
+          />
+          <TallyTile
+            label="HALF"
+            value={String(tally.half)}
+            tone={t.palette.orange.base}
+            bg={t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft}
+          />
+          <TallyTile
+            label="ABSENT"
+            value={String(tally.absent)}
+            tone={t.palette.red.base}
+            bg={t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft}
+          />
+          <TallyTile
+            label="DUE"
+            value={inrCompact(dueAmount)}
+            tone={t.palette.blue.base}
+            bg={t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft}
+          />
         </View>
 
         {/* Month pager */}
-        <View style={styles.monthBar}>
-          <Pressable onPress={goPrevMonth} hitSlop={12} style={styles.monthBtn}>
-            <Ionicons name="chevron-back" size={20} color={color.text} />
+        <View style={[styles.monthBar, { paddingHorizontal: 16 }]}>
+          <Pressable
+            onPress={goPrevMonth}
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.monthBtn,
+              {
+                backgroundColor: t.colors.surface,
+                borderRadius: 999,
+                borderColor:
+                  t.mode === 'dark'
+                    ? 'rgba(255,255,255,0.06)'
+                    : 'rgba(0,0,0,0.05)',
+                borderWidth: t.hairline,
+              },
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Ionicons name="chevron-back" size={18} color={t.colors.label} />
           </Pressable>
-          <Text variant="rowTitle" color="text">
+          <Text variant="headline" color="label" style={{ fontWeight: '700' }}>
             {month.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}
           </Text>
-          <Pressable onPress={goNextMonth} hitSlop={12} style={styles.monthBtn}>
-            <Ionicons name="chevron-forward" size={20} color={color.text} />
+          <Pressable
+            onPress={goNextMonth}
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.monthBtn,
+              {
+                backgroundColor: t.colors.surface,
+                borderRadius: 999,
+                borderColor:
+                  t.mode === 'dark'
+                    ? 'rgba(255,255,255,0.06)'
+                    : 'rgba(0,0,0,0.05)',
+                borderWidth: t.hairline,
+              },
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Ionicons name="chevron-forward" size={18} color={t.colors.label} />
           </Pressable>
         </View>
 
-        {/* Attendance grid — 7-column, days of the month. Tap to
-            cycle through none → present → half → absent → none. */}
-        <View style={styles.gridLabels}>
-          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
-            <Text key={i} style={styles.gridLabel}>{d}</Text>
-          ))}
-        </View>
-        <View style={styles.grid}>
-          {/* Pad cells for the days of the week before the 1st. */}
-          {Array.from({ length: days[0]?.getDay() ?? 0 }).map((_, i) => (
-            <View key={`pad-${i}`} style={[styles.gridCell, styles.gridCellEmpty]} />
-          ))}
-          {days.map((d) => {
-            const k = dateKey(d);
-            const status = attendanceMap.get(k);
-            const tone = status ? STATUS_TONE[status] : null;
-            const isFuture = d > today;
-            return (
-              <Pressable
-                key={k}
-                onPress={() => void onCycleDay(d)}
-                disabled={isFuture || !canWrite}
-                style={({ pressed }) => [
-                  styles.gridCell,
-                  tone && { backgroundColor: tone.bg, borderColor: tone.bg },
-                  isFuture && { opacity: 0.3 },
-                  pressed && !isFuture && canWrite && { opacity: 0.6 },
-                ]}
+        {/* Attendance grid */}
+        <View style={{ paddingHorizontal: 16 }}>
+          <View style={styles.gridLabels}>
+            {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+              <Text
+                key={i}
+                variant="caption2"
+                color="tertiary"
+                style={[styles.gridLabel, { letterSpacing: 0.6 }]}
               >
-                <Text
-                  style={
-                    tone
-                      ? [styles.gridDay, { color: tone.fg, fontWeight: '700' as const }]
-                      : styles.gridDay
-                  }
+                {d}
+              </Text>
+            ))}
+          </View>
+          <View style={styles.grid}>
+            {/* Pad cells for the days of the week before the 1st. */}
+            {Array.from({ length: days[0]?.getDay() ?? 0 }).map((_, i) => (
+              <View key={`pad-${i}`} style={[styles.gridCell, styles.gridCellEmpty]} />
+            ))}
+            {days.map((d) => {
+              const k = dateKey(d);
+              const status = attendanceMap.get(k);
+              const tone = status ? STATUS_TONE[status] : null;
+              const isFuture = d > today;
+              return (
+                <Pressable
+                  key={k}
+                  onPress={() => void onCycleDay(d)}
+                  disabled={isFuture || !canWrite}
+                  style={({ pressed }) => [
+                    styles.gridCell,
+                    {
+                      backgroundColor: tone ? tone.bg : t.colors.surface,
+                      borderColor: tone
+                        ? tone.bg
+                        : (t.mode === 'dark'
+                            ? 'rgba(255,255,255,0.06)'
+                            : 'rgba(0,0,0,0.05)'),
+                      borderWidth: t.hairline,
+                    },
+                    isFuture && { opacity: 0.3 },
+                    pressed && !isFuture && canWrite && { opacity: 0.6 },
+                  ]}
                 >
-                  {d.getDate()}
-                </Text>
-                {tone ? (
-                  <Text style={[styles.gridStatusLetter, { color: tone.fg }]}>
-                    {tone.label}
+                  <Text
+                    variant="footnote"
+                    style={{
+                      color: tone ? tone.fg : t.colors.label,
+                      fontWeight: tone ? '700' : '600',
+                    }}
+                  >
+                    {d.getDate()}
                   </Text>
-                ) : null}
-              </Pressable>
-            );
-          })}
+                  {tone ? (
+                    <Text
+                      variant="caption2"
+                      style={{
+                        color: tone.fg,
+                        fontWeight: '700',
+                        letterSpacing: 0.4,
+                        marginTop: 1,
+                      }}
+                    >
+                      {tone.label}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text
+            variant="caption1"
+            color="tertiary"
+            style={{ marginTop: 14, lineHeight: 17, paddingHorizontal: 4 }}
+          >
+            Tap a day to cycle: empty → Present → Half → Absent → empty. Future dates are disabled.
+          </Text>
         </View>
-
-        <Text variant="caption" color="textFaint" style={styles.hint}>
-          Tap a day to cycle: empty → Present → Half → Absent → empty.
-          Future dates are disabled.
-        </Text>
       </ScrollView>
 
       {editOpen ? (
@@ -403,7 +567,7 @@ export default function StaffDetailScreen() {
   );
 }
 
-// ── Header / cells / edit modal ─────────────────────────────────────
+// ── Header ────────────────────────────────────────────────────────────
 
 function Header({
   onBack,
@@ -414,18 +578,39 @@ function Header({
   title: string;
   right?: React.ReactNode;
 }) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   return (
-    <View style={styles.header}>
+    <View
+      style={[
+        styles.header,
+        {
+          paddingTop: insets.top + 6,
+          borderBottomColor: t.colors.separator,
+          borderBottomWidth: t.hairline,
+        },
+      ]}
+    >
       <Pressable
         onPress={onBack}
         hitSlop={12}
-        style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
+        style={({ pressed }) => [
+          styles.backBtn,
+          pressed && { opacity: 0.6 },
+        ]}
         accessibilityLabel="Back"
       >
-        <Ionicons name="chevron-back" size={22} color={color.primary} />
-        <Text variant="body" color="primary">Back</Text>
+        <Ionicons name="chevron-back" size={22} color={t.palette.blue.base} />
+        <Text variant="body" style={{ color: t.palette.blue.base }}>
+          Back
+        </Text>
       </Pressable>
-      <Text variant="rowTitle" color="text" style={styles.headerTitle} numberOfLines={1}>
+      <Text
+        variant="headline"
+        color="label"
+        style={[styles.headerTitle, { fontWeight: '600' }]}
+        numberOfLines={1}
+      >
         {title}
       </Text>
       <View style={styles.headerRight}>{right}</View>
@@ -433,18 +618,66 @@ function Header({
   );
 }
 
-function TallyCell({ label, value, tone }: { label: string; value: string; tone?: string }) {
+// ── Tally tile ────────────────────────────────────────────────────────
+
+/** Tally tile — neutral by design (90/10 colour discipline). `tone`/`bg`
+ *  props accepted for back-compat but ignored. */
+function TallyTile({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+  /** @deprecated value renders in neutral label colour. */
+  tone?: string;
+  /** @deprecated dot renders with neutral fill3 background. */
+  bg?: string;
+}) {
+  const t = useThemeV2();
   return (
-    <View style={styles.tallyCell}>
-      <Text style={styles.tallyLabel}>{label}</Text>
+    <View
+      style={[
+        styles.tallyTile,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: t.radii.card,
+          borderColor:
+            t.mode === 'dark'
+              ? 'rgba(255,255,255,0.05)'
+              : 'rgba(0,0,0,0.04)',
+          borderWidth: t.hairline,
+        },
+      ]}
+    >
+      <View style={[styles.tallyDot, { backgroundColor: t.colors.fill3 }]}>
+        <View style={[styles.tallyDotInner, { backgroundColor: t.colors.tertiary }]} />
+      </View>
       <Text
-        style={tone ? [styles.tallyValue, { color: tone }] : styles.tallyValue}
+        variant="caption2"
+        color="tertiary"
+        style={{ letterSpacing: 0.5, marginTop: 6 }}
+      >
+        {label}
+      </Text>
+      <Text
+        variant="footnote"
+        color="label"
+        style={{
+          fontWeight: '600',
+          fontVariant: ['tabular-nums'],
+          marginTop: 2,
+        }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
       >
         {value}
       </Text>
     </View>
   );
 }
+
+// ── Edit staff modal ─────────────────────────────────────────────────
 
 function EditStaffModal({
   visible,
@@ -455,6 +688,7 @@ function EditStaffModal({
   onClose: () => void;
   staff: Staff;
 }) {
+  const t = useThemeV2();
   const [name, setName] = useState(staff.name);
   const [role, setRole] = useState(staff.role);
   const [salary, setSalary] = useState(String(staff.monthlySalary));
@@ -484,174 +718,207 @@ function EditStaffModal({
 
   if (!visible) return null;
   return (
-    <View style={modalStyles.backdrop}>
-      <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-      <View style={modalStyles.sheet}>
-        <View style={modalStyles.handle} />
-        <View style={modalStyles.header}>
-          <Pressable onPress={onClose} hitSlop={10}>
-            <Text variant="body" color="textMuted">Cancel</Text>
-          </Pressable>
-          <Text variant="title" color="text">Edit staff</Text>
-          <Pressable onPress={onSave} hitSlop={10} disabled={busy}>
-            <Text variant="bodyStrong" color="primary">{busy ? '…' : 'Save'}</Text>
-          </Pressable>
-        </View>
-        <ScrollView contentContainerStyle={modalStyles.body}>
-          <Text style={modalStyles.label}>NAME</Text>
-          <TextInput value={name} onChangeText={setName} style={modalStyles.input} autoCapitalize="words" />
-          <Text style={modalStyles.label}>ROLE</Text>
-          <TextInput value={role} onChangeText={setRole} style={modalStyles.input} autoCapitalize="words" />
-          <Text style={modalStyles.label}>MONTHLY SALARY (₹)</Text>
-          <TextInput value={salary} onChangeText={setSalary} style={modalStyles.input} keyboardType="number-pad" />
-          <Text style={modalStyles.label}>PAY UNIT</Text>
-          <View style={modalStyles.toggle}>
-            <Pressable
-              onPress={() => setPayUnit('month')}
-              style={[modalStyles.toggleBtn, payUnit === 'month' && modalStyles.toggleBtnActive]}
+    <Modal visible animationType="slide" onRequestClose={onClose} presentationStyle="pageSheet">
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit staff"
+          cancelLabel="Cancel"
+          saveLabel="Save"
+          saveLoading={busy}
+          onCancel={onClose}
+          onSave={() => void onSave()}
+        />
+
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <ScrollView
+            contentContainerStyle={{ paddingTop: 8, paddingBottom: 60 }}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            showsVerticalScrollIndicator={false}
+          >
+            <FormGroup header="Identity">
+              <InputRow
+                label="Name"
+                value={name}
+                onChangeText={setName}
+                autoCapitalize="words"
+              />
+              <InputRow
+                label="Role"
+                value={role}
+                onChangeText={setRole}
+                autoCapitalize="words"
+                divider={false}
+              />
+            </FormGroup>
+
+            <FormGroup
+              header="Salary"
+              footer={`Standard ${WORKING_DAYS_PER_MONTH} working days per month.`}
             >
-              <Text variant="metaStrong" color={payUnit === 'month' ? 'onPrimary' : 'text'}>Monthly</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => setPayUnit('day')}
-              style={[modalStyles.toggleBtn, payUnit === 'day' && modalStyles.toggleBtnActive]}
-            >
-              <Text variant="metaStrong" color={payUnit === 'day' ? 'onPrimary' : 'text'}>Per day</Text>
-            </Pressable>
-          </View>
-          <Text variant="caption" color="textFaint" style={{ marginTop: 12 }}>
-            Standard {WORKING_DAYS_PER_MONTH} working days per month.
-          </Text>
-        </ScrollView>
+              <InputRow
+                label="Monthly salary"
+                value={salary}
+                onChangeText={setSalary}
+                keyboardType="number-pad"
+                autoCapitalize="none"
+              />
+              <View style={styles.payModelBlock}>
+                <Text
+                  variant="caption2"
+                  color="tertiary"
+                  style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingTop: 12 }}
+                >
+                  PAY MODEL
+                </Text>
+                <View style={[styles.modelPillRow, { paddingHorizontal: 12, paddingVertical: 10 }]}>
+                  {(['month', 'day'] as PayUnit[]).map((p) => {
+                    const sel = payUnit === p;
+                    return (
+                      <Pressable
+                        key={p}
+                        onPress={() => setPayUnit(p)}
+                        hitSlop={6}
+                        style={({ pressed }) => [
+                          styles.modelPill,
+                          {
+                            backgroundColor: sel
+                              ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                              : t.colors.fill3,
+                            borderRadius: t.radii.pill,
+                            borderColor: sel ? t.palette.blue.base + '33' : 'transparent',
+                            borderWidth: sel ? 1 : 0,
+                          },
+                          pressed && { opacity: 0.85 },
+                        ]}
+                      >
+                        <Text
+                          variant="footnote"
+                          style={{
+                            color: sel ? t.palette.blue.base : t.colors.secondary,
+                            fontWeight: sel ? '700' : '500',
+                          }}
+                        >
+                          {p === 'month' ? 'Monthly' : 'Per-day'}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            </FormGroup>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </View>
-    </View>
+    </Modal>
   );
 }
 
-// ── Styles ──────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: color.bg },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: space.sm,
-    paddingTop: 50, // approx safe-area; the Stack.Screen hides nav so we offset.
-    paddingBottom: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingBottom: 12,
   },
   backBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 2,
-    minWidth: 80,
+    minWidth: 70,
   },
   headerTitle: { flex: 1, textAlign: 'center' },
-  headerRight: { minWidth: 80, alignItems: 'flex-end' },
+  headerRight: { minWidth: 70, alignItems: 'flex-end' },
   headerKebab: {
-    width: 36,
-    height: 36,
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 8,
   },
-  scroll: {
-    paddingBottom: 40,
-  },
+
+  scroll: {},
+
+  // Identity card
   idCard: {
-    margin: screenInset,
-    padding: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    borderRadius: 12,
-    backgroundColor: color.bg,
+    gap: 14,
+    padding: 16,
   },
   idAvatar: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: color.primarySoft,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
   postedPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 9999,
-    backgroundColor: color.successSoft,
-  },
-  postedPillText: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: color.success,
-    letterSpacing: 0.8,
-  },
-  tallyCard: {
     flexDirection: 'row',
-    marginHorizontal: screenInset,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    borderRadius: 12,
-    overflow: 'hidden',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    flexShrink: 0,
   },
-  tallyCell: { flex: 1, paddingVertical: 10, paddingHorizontal: 8, gap: 2 },
-  tallyDivider: { width: StyleSheet.hairlineWidth, backgroundColor: color.borderStrong },
-  tallyLabel: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 1.1,
+
+  // Tally row
+  tallyRow: {
+    flexDirection: 'row',
+    paddingTop: 14,
+    gap: 8,
   },
-  tallyValue: {
-    fontFamily: fontFamily.mono,
-    fontSize: 16,
-    fontWeight: '700',
-    color: color.text,
-    fontVariant: ['tabular-nums'],
+  tallyTile: {
+    flex: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    alignItems: 'flex-start',
   },
+  tallyDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tallyDotInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+
+  // Month pager
   monthBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: screenInset,
-    paddingTop: space.lg,
-    paddingBottom: space.sm,
+    paddingTop: 22,
+    paddingBottom: 12,
   },
   monthBtn: {
     width: 36,
     height: 36,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
     alignItems: 'center',
     justifyContent: 'center',
   },
+
+  // Grid
   gridLabels: {
     flexDirection: 'row',
-    paddingHorizontal: screenInset,
-    paddingBottom: 6,
+    paddingBottom: 8,
   },
   gridLabel: {
     flex: 1,
     textAlign: 'center',
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 1,
   },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    paddingHorizontal: screenInset,
     gap: 6,
   },
   gridCell: {
@@ -660,101 +927,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 8,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
   },
   gridCellEmpty: {
     borderColor: 'transparent',
     backgroundColor: 'transparent',
   },
-  gridDay: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.text,
-  },
-  gridStatusLetter: {
-    fontFamily: fontFamily.mono,
-    fontSize: 8,
-    fontWeight: '700',
-    letterSpacing: 0.4,
-    marginTop: 1,
-  },
-  hint: {
-    paddingHorizontal: screenInset,
-    paddingTop: 14,
-    lineHeight: 16,
-  },
-});
 
-const modalStyles = StyleSheet.create({
-  backdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(15,23,42,0.45)',
-    justifyContent: 'flex-end',
+  // Edit modal pay-model row
+  payModelBlock: {
+    paddingBottom: 0,
   },
-  sheet: {
-    backgroundColor: color.bg,
-    borderTopLeftRadius: 22,
-    borderTopRightRadius: 22,
-    paddingBottom: 28,
-    maxHeight: '88%',
+  modelPillRow: {
+    flexDirection: 'row',
+    gap: 7,
   },
-  handle: {
-    alignSelf: 'center',
-    width: 38,
-    height: 4,
-    borderRadius: 4,
-    backgroundColor: color.borderStrong,
-    marginTop: 8,
-  },
-  header: {
+  modelPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: screenInset,
-    paddingTop: 14,
-    paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
-  body: { padding: screenInset, gap: 8 },
-  label: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 1.2,
-    marginTop: 12,
-  },
-  input: {
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 15,
-    color: color.text,
-  },
-  toggle: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    borderRadius: 10,
-    overflow: 'hidden',
-  },
-  toggleBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: color.bg,
-  },
-  toggleBtnActive: { backgroundColor: color.primary },
 });

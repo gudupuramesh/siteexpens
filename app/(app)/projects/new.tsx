@@ -1,19 +1,24 @@
 /**
- * Create Project — InteriorOS-styled form (grouped-list pattern).
+ * Create Project — v2 design.
  *
- * Sections (top → bottom):
- *   • DETAILS  — name, location, full site address
- *   • TYPE     — typology picker, sub-type picker (with "Other" → text input)
- *   • STATUS   — status picker, progress slider (draggable)
- *   • TIMELINE — start, target handover
- *   • BUDGET   — value (₹)
- *   • PHOTO    — optional cover photo
+ * Layout (top → bottom):
+ *   1. SheetHeader: Cancel · "New project" · Create
+ *   2. KeyboardAvoidingView + ScrollView so keyboard never overlaps inputs
+ *      a. Cover photo card (tap to pick — image preview or placeholder)
+ *      b. FormGroup "Details"  — Name · Location · Site (multiline)
+ *      c. FormGroup "Type"     — Typology · Sub-type (conditional) · Custom
+ *      d. FormGroup "Status"   — Status · Progress slider
+ *      e. FormGroup "Timeline" — Start date · Target handover
+ *      f. FormGroup "Budget"   — Project value (₹)
  *
- * Client + team are intentionally not collected here — they're added
- * later from the project detail screen.
+ * Pickers use v2 SelectSheet (typology / sub-type / status) and v2
+ * DateTimeSheet (with proper Done button).
+ *
+ * Cover photo is staged locally on pick — no R2 upload happens until the
+ * user taps Create project. This prevents orphans when the user backs
+ * out without saving.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router, Stack } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Controller, useForm } from 'react-hook-form';
@@ -22,12 +27,10 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text as RNText,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -47,21 +50,23 @@ import {
   type ProjectStatus,
   type ProjectTypology,
 } from '@/src/features/projects/types';
-import { Screen } from '@/src/ui/Screen';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { Slider } from '@/src/ui/io';
 import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
-import {
-  Group,
-  InputRow,
-  PickerRow,
-  PrimaryButton,
-  SelectModal,
-  Slider,
-} from '@/src/ui/io';
-import { color, fontFamily } from '@/src/theme/tokens';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const schema = z
   .object({
     name: z.string().trim().min(2, 'Name is too short').max(80),
+    client: z.string().trim().max(80).optional(),
     location: z.string().trim().max(60).optional(),
     siteAddress: z.string().trim().min(3, 'Enter a site address'),
     typology: z.enum(['residential', 'commercial', 'hospitality', 'industrial', 'other']).optional(),
@@ -72,6 +77,7 @@ const schema = z
     startDate: z.date(),
     endDate: z.date().nullable(),
     value: z.string().trim().regex(/^\d+$/, 'Enter a number'),
+    team: z.string().trim().regex(/^\d*$/, 'Enter a number').optional(),
     photoUri: z.string().nullable(),
   })
   .refine((d) => !d.endDate || d.endDate >= d.startDate, {
@@ -81,7 +87,6 @@ const schema = z
 
 type FormValues = z.input<typeof schema>;
 
-/** Calendar date in local timezone (midnight not required; comparisons use Y-M-D). */
 function startOfLocalDay(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate());
 }
@@ -109,6 +114,7 @@ export default function NewProjectScreen() {
   // stack could still land here — bounce them home.
   useGuardedRoute({ capability: 'project.create' });
 
+  const t = useThemeV2();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? null;
@@ -118,18 +124,11 @@ export default function NewProjectScreen() {
 
   const [submitError, setSubmitError] = useState<string>();
   const [datePicker, setDatePicker] = useState<'start' | 'end' | null>(null);
-  /** iOS: draft value while the modal date picker is open (committed on Done). */
-  const [iosDateDraft, setIosDateDraft] = useState<Date>(() => startOfLocalDay(new Date()));
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [showTypePicker, setShowTypePicker] = useState(false);
   const [showSubTypePicker, setShowSubTypePicker] = useState(false);
-  // Cover photo is staged locally on pick — no R2 upload happens
-  // until the user taps Create project (see onSubmit below). This
-  // prevents orphans when the user backs out of the form without
-  // saving.
   const [stagedCover, setStagedCover] = useState<StagedFile | null>(null);
   const [coverError, setCoverError] = useState<string>();
-  // Save-time progress message ("Uploading 1 of 1…").
   const [savePhase, setSavePhase] = useState<string>();
 
   const {
@@ -144,6 +143,7 @@ export default function NewProjectScreen() {
     mode: 'onChange',
     defaultValues: {
       name: '',
+      client: '',
       location: '',
       siteAddress: '',
       typology: undefined,
@@ -154,27 +154,26 @@ export default function NewProjectScreen() {
       startDate: initialStartDate,
       endDate: null,
       value: '',
+      team: '',
       photoUri: null,
     },
   });
 
   const startDate = watch('startDate');
   const endDate = watch('endDate');
-
-  const todayStart = startOfLocalDay(new Date());
-  const handoverMinimum = new Date(
-    Math.max(startOfLocalDay(startDate).getTime(), todayStart.getTime()),
-  );
-
-  const photoUri = watch('photoUri');
   const status = watch('status');
   const typology = watch('typology');
   const subTypeKey = watch('subTypeKey');
 
+  // If the user moves the start date forward past the existing handover,
+  // wipe the handover so they're forced to re-pick a sensible value.
   useEffect(() => {
     const curEnd = getValues('endDate');
     if (!curEnd) return;
-    const minTs = Math.max(startOfLocalDay(startDate).getTime(), startOfLocalDay(new Date()).getTime());
+    const minTs = Math.max(
+      startOfLocalDay(startDate).getTime(),
+      startOfLocalDay(new Date()).getTime(),
+    );
     if (startOfLocalDay(curEnd).getTime() < minTs) {
       setValue('endDate', null, { shouldValidate: true });
     }
@@ -187,7 +186,7 @@ export default function NewProjectScreen() {
 
   const subTypeDisplay = useMemo(() => {
     if (!subTypeKey) return undefined;
-    if (subTypeKey === 'other') return undefined;
+    if (subTypeKey === 'other') return 'Other';
     return subTypeOptions.find((s) => s.key === subTypeKey)?.label;
   }, [subTypeKey, subTypeOptions]);
 
@@ -202,7 +201,10 @@ export default function NewProjectScreen() {
   async function handlePickPhoto() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('Permission needed', 'Allow photo library access to add a project photo.');
+      Alert.alert(
+        'Permission needed',
+        'Allow photo library access to add a project photo.',
+      );
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -213,8 +215,6 @@ export default function NewProjectScreen() {
     });
     if (result.canceled || !result.assets[0]) return;
 
-    // Stage only — no R2 round-trip. Files upload during onSubmit so
-    // backing out without saving leaves no orphans in the bucket.
     const asset = result.assets[0];
     setCoverError(undefined);
     setStagedCover({
@@ -222,50 +222,6 @@ export default function NewProjectScreen() {
       localUri: asset.uri,
       contentType: asset.mimeType || guessImageMimeType(asset.uri),
     });
-  }
-
-  function openDatePicker(kind: 'start' | 'end') {
-    const today = startOfLocalDay(new Date()).getTime();
-    if (kind === 'start') {
-      setIosDateDraft(new Date(Math.max(startOfLocalDay(startDate).getTime(), today)));
-    } else {
-      const minHandover = Math.max(startOfLocalDay(startDate).getTime(), today);
-      const fallback = new Date(minHandover);
-      if (!endDate) {
-        setIosDateDraft(fallback);
-      } else {
-        setIosDateDraft(new Date(Math.max(startOfLocalDay(endDate).getTime(), minHandover)));
-      }
-    }
-    setDatePicker(kind);
-  }
-
-  function handleDateChange(kind: 'start' | 'end', event: DateTimePickerEvent, picked?: Date) {
-    if (Platform.OS === 'android') setDatePicker(null);
-    if (event.type === 'dismissed' || !picked) return;
-    const today = startOfLocalDay(new Date()).getTime();
-    if (kind === 'start') {
-      const n = startOfLocalDay(picked);
-      setValue('startDate', new Date(Math.max(n.getTime(), today)), { shouldValidate: true });
-    } else {
-      const minTs = Math.max(startOfLocalDay(startDate).getTime(), today);
-      const n = startOfLocalDay(picked);
-      setValue('endDate', new Date(Math.max(n.getTime(), minTs)), { shouldValidate: true });
-    }
-  }
-
-  function confirmIosDatePicker() {
-    if (!datePicker) return;
-    const today = startOfLocalDay(new Date()).getTime();
-    if (datePicker === 'start') {
-      const n = startOfLocalDay(iosDateDraft);
-      setValue('startDate', new Date(Math.max(n.getTime(), today)), { shouldValidate: true });
-    } else {
-      const minTs = Math.max(startOfLocalDay(startDate).getTime(), today);
-      const n = startOfLocalDay(iosDateDraft);
-      setValue('endDate', new Date(Math.max(n.getTime(), minTs)), { shouldValidate: true });
-    }
-    setDatePicker(null);
   }
 
   async function onSubmit(values: FormValues) {
@@ -285,9 +241,7 @@ export default function NewProjectScreen() {
     }
 
     try {
-      // Step 1 — upload the cover photo to R2 (if any was picked).
-      // Skipped entirely when stagedCover is null so projects with
-      // no cover save instantly.
+      // Step 1 — upload cover photo if picked.
       let coverPublicUrl: string | null = null;
       let coverKey: string | null = null;
       let coverSize = 0;
@@ -297,17 +251,10 @@ export default function NewProjectScreen() {
         const { uploaded, failed } = await commitStagedFiles({
           files: [stagedCover],
           kind: 'project_cover',
-          // refId is the user's uid for now — the project doc doesn't
-          // exist yet so we have no project id to attribute the file
-          // to inside the storage path. Each upload gets its own UUID
-          // so no collision risk.
           refId: user.uid,
           compress: 'balanced',
         });
         if (failed.length > 0) {
-          // Cover is optional — but if the user picked one and it
-          // failed, surface the error and keep them on the form so
-          // they can retry without losing the form data.
           setSubmitError(`Cover photo upload failed: ${failed[0].error}`);
           setSavePhase(undefined);
           return;
@@ -321,6 +268,10 @@ export default function NewProjectScreen() {
 
       // Step 2 — create the project doc.
       setSavePhase('Saving project…');
+      const teamNum =
+        values.team && values.team.trim().length > 0
+          ? parseInt(values.team, 10)
+          : undefined;
       const id = await createProject({
         uid: user.uid,
         orgId,
@@ -330,18 +281,17 @@ export default function NewProjectScreen() {
         siteAddress: values.siteAddress.trim(),
         value: parseInt(values.value, 10),
         photoUri: coverPublicUrl,
-        // R2 key is stored alongside the URL so a future replace
-        // flow can delete the old object cleanly.
         photoR2Key: coverKey,
         status: values.status,
         location: values.location?.trim() || undefined,
         typology: values.typology,
         subType,
         progress: values.progress,
+        client: values.client?.trim() || undefined,
+        team: teamNum,
       });
 
-      // Step 3 — attribute the cover upload to project storage totals
-      // now that the project id exists. Best-effort.
+      // Step 3 — attribute the cover upload to project storage. Best-effort.
       if (coverKey) {
         void recordStorageEvent({
           projectId: id,
@@ -355,9 +305,6 @@ export default function NewProjectScreen() {
       }
       router.replace(`/(app)/projects/${id}` as never);
     } catch (err) {
-      // Tier paywall — open the upgrade sheet instead of dumping a
-      // raw "failed-precondition" string at the user. Bail cleanly
-      // so the form keeps its values for retry after upgrade.
       if (err instanceof PlanLimitError) {
         openPaywall({ reason: 'plan_limit_projects' });
         setSavePhase(undefined);
@@ -372,108 +319,209 @@ export default function NewProjectScreen() {
   const showSubTypeCustom =
     typology === 'other' || subTypeKey === 'other';
 
-  return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
-      <Stack.Screen options={{ headerShown: false }} />
+  // Date picker — keep the picked value within bounds (today / startDate).
+  const todayStart = startOfLocalDay(new Date());
+  const handoverMinimum = new Date(
+    Math.max(startOfLocalDay(startDate).getTime(), todayStart.getTime()),
+  );
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="chevron-back" size={22} color={color.textMuted} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <RNText style={styles.navEyebrow}>CREATE</RNText>
-          <RNText style={styles.navTitle}>New project</RNText>
-        </View>
-        <View style={styles.navBtn} />
-      </View>
+  return (
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
+
+      <SheetHeader
+        title="New project"
+        cancelLabel="Cancel"
+        saveLabel="Create"
+        saveLoading={isSubmitting}
+        saveDisabled={!orgId}
+        onCancel={() => router.back()}
+        onSave={() => void handleSubmit(onSubmit)()}
+      />
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
-          showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
         >
-          {/* DETAILS */}
-          <Group header="Details">
+          {/* Cover photo */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+            <Pressable
+              onPress={handlePickPhoto}
+              style={({ pressed }) => [
+                styles.photoTile,
+                {
+                  backgroundColor: t.colors.surface,
+                  borderRadius: t.radii.hero,
+                  borderColor:
+                    t.mode === 'dark'
+                      ? 'rgba(255,255,255,0.05)'
+                      : 'rgba(0,0,0,0.04)',
+                  borderWidth: t.hairline,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              {stagedCover ? (
+                <>
+                  <Image
+                    source={{ uri: stagedCover.localUri }}
+                    style={styles.photoImg}
+                    resizeMode="cover"
+                  />
+                  <View
+                    style={[
+                      styles.photoBadge,
+                      { backgroundColor: 'rgba(0,0,0,0.55)' },
+                    ]}
+                  >
+                    <Ionicons name="camera" size={13} color="#fff" />
+                    <Text
+                      variant="caption2"
+                      style={{
+                        color: '#fff',
+                        fontWeight: '700',
+                        marginLeft: 4,
+                        letterSpacing: 0.4,
+                      }}
+                    >
+                      CHANGE PHOTO
+                    </Text>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.photoPlaceholder}>
+                  <View
+                    style={[
+                      styles.photoIcon,
+                      {
+                        backgroundColor:
+                          t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="image-outline"
+                      size={22}
+                      color={t.palette.blue.base}
+                    />
+                  </View>
+                  <Text
+                    variant="callout"
+                    color="label"
+                    style={{ fontWeight: '700', marginTop: 10 }}
+                  >
+                    Add cover photo
+                  </Text>
+                  <Text
+                    variant="caption1"
+                    color="secondary"
+                    style={{ marginTop: 2, textAlign: 'center' }}
+                  >
+                    Optional — appears on the project card.
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+            {coverError ? (
+              <Text
+                variant="caption2"
+                style={{ color: t.palette.red.base, marginTop: 6, paddingHorizontal: 4 }}
+              >
+                {coverError}
+              </Text>
+            ) : null}
+          </View>
+
+          {/* Details */}
+          <FormGroup header="Details">
             <Controller
               control={control}
               name="name"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
-                  label="Name *"
-                  placeholder="e.g. Sharma Residence"
+                  label="Name"
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
+                  placeholder="e.g. Sharma Residence"
                   autoCapitalize="words"
-                  editable={!isSubmitting}
                 />
               )}
             />
-            {errors.name?.message ? (
-              <RNText style={styles.fieldError}>{errors.name.message}</RNText>
-            ) : null}
-
+            <Controller
+              control={control}
+              name="client"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Client"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. Mr. Sharma"
+                  autoCapitalize="words"
+                />
+              )}
+            />
             <Controller
               control={control}
               name="location"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
                   label="Location"
-                  placeholder="e.g. Jubilee Hills"
                   value={value ?? ''}
                   onChangeText={onChange}
                   onBlur={onBlur}
+                  placeholder="e.g. Jubilee Hills"
                   autoCapitalize="words"
-                  editable={!isSubmitting}
                 />
               )}
             />
-
             <Controller
               control={control}
               name="siteAddress"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
-                  label="Site *"
-                  placeholder="Plot, street, area, city"
+                  label="Site"
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
+                  placeholder="Plot, street, area, city"
                   autoCapitalize="sentences"
                   multiline
-                  editable={!isSubmitting}
-                  last
+                  divider={false}
                 />
               )}
             />
-            {errors.siteAddress?.message ? (
-              <RNText style={styles.fieldError}>{errors.siteAddress.message}</RNText>
-            ) : null}
-          </Group>
+          </FormGroup>
+          {(errors.name?.message || errors.siteAddress?.message) ? (
+            <FieldError
+              text={errors.name?.message ?? errors.siteAddress?.message ?? ''}
+            />
+          ) : null}
 
-          {/* TYPE */}
-          <Group header="Type">
-            <PickerRow
+          {/* Type */}
+          <FormGroup header="Type">
+            <Row
               label="Typology"
-              icon="apps-outline"
-              value={typology ? typologyLabel(typology) : undefined}
-              placeholder="Choose typology"
+              value={typology ? typologyLabel(typology) : 'Choose'}
+              chevron
               onPress={() => setShowTypePicker(true)}
+              divider={typology != null && typology !== 'other'}
             />
             {typology && typology !== 'other' ? (
-              <PickerRow
+              <Row
                 label="Sub-type"
-                icon="grid-outline"
-                value={subTypeDisplay}
-                placeholder={
-                  subTypeKey === 'other' ? 'Other (type below)' : 'Choose sub-type'
-                }
+                value={subTypeDisplay ?? 'Choose'}
+                chevron
                 onPress={() => setShowSubTypePicker(true)}
-                last={!showSubTypeCustom}
+                divider={showSubTypeCustom}
               />
             ) : null}
             {showSubTypeCustom ? (
@@ -483,32 +531,31 @@ export default function NewProjectScreen() {
                 render={({ field: { onChange, onBlur, value } }) => (
                   <InputRow
                     label="Describe"
-                    placeholder="e.g. Boutique studio"
                     value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
+                    placeholder="e.g. Boutique studio"
                     autoCapitalize="sentences"
-                    editable={!isSubmitting}
-                    last
+                    divider={false}
                   />
                 )}
               />
             ) : null}
-          </Group>
+          </FormGroup>
 
-          {/* STATUS */}
-          <Group header="Status">
-            <PickerRow
+          {/* Status */}
+          <FormGroup header="Status">
+            <Row
               label="Status"
-              icon="ellipse-outline"
               value={statusLabel(status)}
+              chevron
               onPress={() => setShowStatusPicker(true)}
             />
             <View style={styles.sliderRow}>
-              <View style={styles.sliderLabelCol}>
-                <RNText style={styles.sliderLabel}>Progress</RNText>
-              </View>
-              <View style={styles.sliderCol}>
+              <Text variant="callout" color="label" style={{ minWidth: 88 }}>
+                Progress
+              </Text>
+              <View style={{ flex: 1 }}>
                 <Controller
                   control={control}
                   name="progress"
@@ -517,189 +564,137 @@ export default function NewProjectScreen() {
                       value={typeof value === 'number' ? value : 0}
                       onChange={onChange}
                       step={1}
+                      trackColor={t.palette.blue.base}
                     />
                   )}
                 />
               </View>
             </View>
-          </Group>
+          </FormGroup>
 
-          {/* TIMELINE */}
-          <Group header="Timeline">
-            <PickerRow
+          {/* Timeline */}
+          <FormGroup header="Timeline">
+            <Row
               label="Start date"
-              icon="calendar-outline"
               value={formatPickerDate(startDate)}
-              onPress={() => openDatePicker('start')}
+              chevron
+              onPress={() => setDatePicker('start')}
             />
-            <PickerRow
+            <Row
               label="Target handover"
-              icon="flag-outline"
-              value={endDate ? formatPickerDate(endDate) : undefined}
-              placeholder="Optional"
-              onPress={() => openDatePicker('end')}
-              last
+              value={endDate ? formatPickerDate(endDate) : 'Optional'}
+              valueColor={endDate ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setDatePicker('end')}
+              divider={false}
             />
-            {errors.endDate?.message ? (
-              <RNText style={styles.fieldError}>{errors.endDate.message}</RNText>
-            ) : null}
-          </Group>
+          </FormGroup>
+          {errors.endDate?.message ? (
+            <FieldError text={errors.endDate.message} />
+          ) : null}
 
-          {/* BUDGET */}
-          <Group header="Budget">
+          {/* Budget */}
+          <FormGroup header="Budget">
             <Controller
               control={control}
               name="value"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
-                  label="Value (₹) *"
-                  placeholder="0"
+                  label="Project value"
                   value={value}
-                  onChangeText={(t) => onChange(t.replace(/\D/g, ''))}
+                  onChangeText={(txt) => onChange(txt.replace(/\D/g, ''))}
                   onBlur={onBlur}
+                  placeholder="₹0"
                   keyboardType="number-pad"
-                  editable={!isSubmitting}
-                  mono
-                  last
+                  autoCapitalize="none"
                 />
               )}
             />
-            {errors.value?.message ? (
-              <RNText style={styles.fieldError}>{errors.value.message}</RNText>
-            ) : null}
-          </Group>
-
-          {/* PHOTO — staged locally on pick; uploaded only when the
-              user taps Create project. No R2 round-trip happens
-              during pick, so backing out of the form leaves nothing
-              behind in the bucket. */}
-          <Group header="Cover photo (optional)">
-            <Pressable
-              onPress={handlePickPhoto}
-              style={({ pressed }) => [
-                styles.photoTile,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              {stagedCover ? (
-                <Image
-                  source={{ uri: stagedCover.localUri }}
-                  style={styles.photoImg}
-                  resizeMode="cover"
+            <Controller
+              control={control}
+              name="team"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Team size"
+                  value={value ?? ''}
+                  onChangeText={(txt) => onChange(txt.replace(/\D/g, ''))}
+                  onBlur={onBlur}
+                  placeholder="e.g. 4"
+                  keyboardType="number-pad"
+                  autoCapitalize="none"
+                  divider={false}
                 />
-              ) : (
-                <View style={styles.photoPlaceholder}>
-                  <Ionicons name="image-outline" size={22} color={color.textFaint} />
-                  <RNText style={styles.photoHint}>Tap to add a project photo</RNText>
-                </View>
               )}
-            </Pressable>
-            {coverError ? (
-              <RNText style={styles.fieldError}>{coverError}</RNText>
-            ) : null}
-          </Group>
+            />
+          </FormGroup>
+          {errors.value?.message || errors.team?.message ? (
+            <FieldError text={errors.value?.message ?? errors.team?.message ?? ''} />
+          ) : null}
 
           {submitError ? (
-            <RNText style={[styles.fieldError, { paddingHorizontal: 16, marginTop: 4 }]}>
-              {submitError}
-            </RNText>
+            <FieldError text={submitError} />
           ) : null}
-        </ScrollView>
 
-        <View style={styles.footer}>
-          <PrimaryButton
-            label={savePhase ?? 'Create project'}
-            onPress={handleSubmit(onSubmit)}
-            loading={isSubmitting}
-            disabled={!orgId}
-          />
-        </View>
+          <View style={{ height: 24 }} />
+        </ScrollView>
       </KeyboardAvoidingView>
 
-      {datePicker && Platform.OS === 'ios' ? (
-        <Modal
-          visible
-          transparent
-          animationType="slide"
-          onRequestClose={() => setDatePicker(null)}
-        >
-          <Pressable style={styles.dateModalBackdrop} onPress={() => setDatePicker(null)}>
-            <View />
-          </Pressable>
-          <View style={styles.dateModalSheet}>
-            <DateTimePicker
-              value={iosDateDraft}
-              mode="date"
-              display="spinner"
-              themeVariant="light"
-              minimumDate={datePicker === 'start' ? todayStart : handoverMinimum}
-              onChange={(_: DateTimePickerEvent, picked?: Date) => {
-                if (!picked) return;
-                if (datePicker === 'start') {
-                  const n = startOfLocalDay(picked);
-                  setIosDateDraft(new Date(Math.max(n.getTime(), todayStart.getTime())));
-                } else {
-                  const minTs = Math.max(startOfLocalDay(startDate).getTime(), todayStart.getTime());
-                  const n = startOfLocalDay(picked);
-                  setIosDateDraft(new Date(Math.max(n.getTime(), minTs)));
-                }
-              }}
-            />
-            <View style={styles.dateModalActions}>
-              <Pressable
-                onPress={() => setDatePicker(null)}
-                style={({ pressed }) => [styles.dateModalBtnGhost, pressed && { opacity: 0.7 }]}
-              >
-                <RNText style={styles.dateModalBtnGhostText}>Cancel</RNText>
-              </Pressable>
-              <Pressable
-                onPress={confirmIosDatePicker}
-                style={({ pressed }) => [styles.dateModalBtnPrimary, pressed && { opacity: 0.9 }]}
-              >
-                <RNText style={styles.dateModalBtnPrimaryText}>Done</RNText>
-              </Pressable>
-            </View>
-          </View>
-        </Modal>
-      ) : null}
+      {/* Date pickers — bottom sheet with Done button */}
+      <DateTimeSheet
+        open={datePicker === 'start'}
+        value={startDate}
+        onChange={(d) => {
+          const n = startOfLocalDay(d);
+          setValue(
+            'startDate',
+            new Date(Math.max(n.getTime(), todayStart.getTime())),
+            { shouldValidate: true },
+          );
+        }}
+        onClose={() => setDatePicker(null)}
+        mode="date"
+        title="Start date"
+      />
+      <DateTimeSheet
+        open={datePicker === 'end'}
+        value={endDate ?? handoverMinimum}
+        onChange={(d) => {
+          const n = startOfLocalDay(d);
+          setValue(
+            'endDate',
+            new Date(Math.max(n.getTime(), handoverMinimum.getTime())),
+            { shouldValidate: true },
+          );
+        }}
+        onClose={() => setDatePicker(null)}
+        mode="date"
+        title="Target handover"
+      />
 
-      {datePicker && Platform.OS === 'android' ? (
-        <DateTimePicker
-          value={
-            datePicker === 'start'
-              ? startDate
-              : (endDate ?? handoverMinimum)
-          }
-          mode="date"
-          display="default"
-          minimumDate={datePicker === 'start' ? todayStart : handoverMinimum}
-          onChange={(e, d) => handleDateChange(datePicker, e, d)}
-        />
-      ) : null}
-
-      <SelectModal
-        visible={showTypePicker}
+      {/* Pickers — typology / sub-type / status */}
+      <SelectSheet
+        open={showTypePicker}
         title="Choose typology"
         options={PROJECT_TYPOLOGIES}
-        value={typology}
+        selected={typology}
         onPick={(k) => pickTypology(k as ProjectTypology)}
         onClose={() => setShowTypePicker(false)}
       />
 
-      <SelectModal
-        visible={showSubTypePicker}
+      <SelectSheet
+        open={showSubTypePicker}
         title="Choose sub-type"
         options={subTypeOptions}
-        value={subTypeKey}
+        selected={subTypeKey}
         onPick={(k) => setValue('subTypeKey', k, { shouldValidate: true })}
         onClose={() => setShowSubTypePicker(false)}
       />
 
-      <SelectModal
-        visible={showStatusPicker}
+      <SelectSheet
+        open={showStatusPicker}
         title="Set project status"
         options={PROJECT_STATUS_OPTIONS}
-        value={status}
+        selected={status}
         onPick={(k) => setValue('status', k as ProjectStatus, { shouldValidate: true })}
         onClose={() => setShowStatusPicker(false)}
       />
@@ -709,177 +704,69 @@ export default function NewProjectScreen() {
         intent="createProject"
         phaseLabel={savePhase}
       />
-    </Screen>
+    </View>
+  );
+}
+
+function FieldError({ text }: { text: string }) {
+  const t = useThemeV2();
+  return (
+    <Text
+      variant="caption2"
+      style={{
+        color: t.palette.red.base,
+        paddingHorizontal: 32,
+        marginTop: 8,
+      }}
+    >
+      {text}
+    </Text>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
+  scroll: { paddingBottom: 60 },
 
-  navBar: {
-    minHeight: 56,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-  },
-  navBtn: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navCenter: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 1,
-  },
-  navEyebrow: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    color: color.textFaint,
-    letterSpacing: 1.4,
-  },
-  navTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    fontWeight: '600',
-    color: color.text,
-    letterSpacing: -0.2,
-  },
-
-  scroll: {
-    paddingTop: 18,
-    paddingBottom: 40,
-  },
-
-  fieldError: {
-    fontFamily: fontFamily.sans,
-    fontSize: 12,
-    color: color.danger,
-    paddingHorizontal: 16,
-    paddingTop: 6,
-  },
-
-  // Slider row inside the Status group
-  sliderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    minHeight: 60,
-    backgroundColor: color.bg,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: color.separator,
-  },
-  sliderLabelCol: {
-    width: 110,
-    flexShrink: 0,
-  },
-  sliderLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    fontWeight: '500',
-    color: color.text,
-  },
-  sliderCol: {
-    flex: 1,
-  },
-
-  // Photo tile
+  // Cover photo
   photoTile: {
     height: 180,
-    backgroundColor: color.bg,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: color.borderStrong,
     overflow: 'hidden',
   },
   photoImg: {
     width: '100%',
     height: '100%',
   },
+  photoBadge: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
   photoPlaceholder: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    paddingHorizontal: 16,
   },
-  photoHint: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    color: color.textMuted,
-  },
-  // Translucent overlay shown while the picked image uploads to R2.
-  photoOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(15,23,42,0.55)',
+  photoIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-  },
-  photoOverlayText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#fff',
-    letterSpacing: 0.2,
   },
 
-  footer: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 18,
-    backgroundColor: color.bgGrouped,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-  },
-
-  dateModalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.4)',
-  },
-  dateModalSheet: {
-    backgroundColor: color.bgGrouped,
-    borderTopLeftRadius: 14,
-    borderTopRightRadius: 14,
-    paddingBottom: 28,
-    paddingTop: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-  },
-  dateModalActions: {
+  // Slider row inside the Status group — keeps the v1 Slider but in v2-styled row
+  sliderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 12,
     paddingHorizontal: 16,
-    paddingTop: 8,
-  },
-  dateModalBtnGhost: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-  },
-  dateModalBtnGhostText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 16,
-    fontWeight: '600',
-    color: color.textMuted,
-  },
-  dateModalBtnPrimary: {
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    backgroundColor: color.primary,
-    borderRadius: 10,
-  },
-  dateModalBtnPrimaryText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 16,
-    fontWeight: '600',
-    color: color.onPrimary,
+    paddingVertical: 4,
+    gap: 12,
+    minHeight: 56,
   },
 });

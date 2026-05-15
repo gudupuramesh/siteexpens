@@ -1,46 +1,48 @@
 /**
- * Project detail screen — InteriorOS-styled wrapper.
+ * Project detail screen — v2 design.
  *
  * Layout:
- *   1. Compact nav (back · 28px thumb · name + uppercase mono address · ⋯)
- *   2. InteriorOS Segmented tab bar (top + bottom hairline, 2px accent
- *      underline on active tab, horizontally scrollable)
- *   3. Tab content fills remaining screen — swipeable pager
- *   4. ⋯ button pushes to the Project Overview screen (was a tab; moved
- *      out so the swipe pager focuses on the workstreams the user is
- *      actively in)
+ *   1. AmbientBackground (soft radial glows)
+ *   2. Compact nav header — back · cover thumb · name + uppercase meta · trailing icons
+ *   3. v2 SubTabs strip — horizontally-scrollable tab labels with blue underline
+ *   4. Swipeable horizontal pager — one tab per page
  *
  * Tabs (default: Transaction):
  *   Transaction · Site · Timeline · Attendance · Material · Party ·
  *   Whiteboard · Laminate · Files
+ *
+ * The trailing icons in the nav adapt to the active tab — e.g. on
+ * Transaction it shows the payment-report shortcut, on Laminate the
+ * PDF-export shortcut. The right-most ellipsis always opens the
+ * Project Overview screen (separate route, behind the kebab).
  */
 import { useFocusEffect } from '@react-navigation/native';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Dimensions,
   FlatList,
   Image,
   Pressable,
-  ScrollView,
   StyleSheet,
-  Text as RNText,
   View,
-  type LayoutChangeEvent,
   type ViewToken,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useProject } from '@/src/features/projects/useProject';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useParties } from '@/src/features/parties/useParties';
 import { useLaminates } from '@/src/features/laminates/useLaminates';
 import { generateLaminateReport } from '@/src/features/laminates/laminateReport';
-import { PageEnter } from '@/src/ui/PageEnter';
-import { Screen } from '@/src/ui/Screen';
-import { Spinner } from '@/src/ui/Spinner';
-import { color, fontFamily } from '@/src/theme/tokens';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { SubTabs, type SubTabItem } from '@/src/ui/v2/SubTabs';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { PartyTab } from '@/src/features/projects/tabs/PartyTab';
 import { TransactionTab } from '@/src/features/projects/tabs/TransactionTab';
@@ -68,22 +70,26 @@ type TabKey =
   | 'laminate'
   | 'files';
 
-type Tab = { key: TabKey; label: string };
+type Tab = SubTabItem<TabKey>;
 
-// "Overview" was the first tab; it's now a separate screen behind the
-// ⋯ button (see app/(app)/projects/[id]/overview.tsx). The remaining
-// tabs are the workstreams the user actively edits.
+// Tab strip order: Party sits at the leading edge so the most
+// frequently-needed cross-reference (who's involved on this project) is
+// always one tap away. The DEFAULT landing tab is still 'transaction'
+// (set in the useState initializer below) — that's the screen the user
+// opens a project to look at most often.
 const TABS: Tab[] = [
+  { key: 'party',       label: 'Party' },
   { key: 'transaction', label: 'Transaction' },
   { key: 'site',        label: 'Site' },
   { key: 'task',        label: 'Timeline' },
   { key: 'attendance',  label: 'Attendance' },
   { key: 'material',    label: 'Material' },
-  { key: 'party',       label: 'Party' },
   { key: 'whiteboard',  label: 'Whiteboard' },
   { key: 'laminate',    label: 'Laminate' },
   { key: 'files',       label: 'Files' },
 ];
+
+const DEFAULT_TAB: TabKey = 'transaction';
 
 function TabContent({ tab }: { tab: TabKey }) {
   switch (tab) {
@@ -101,6 +107,8 @@ function TabContent({ tab }: { tab: TabKey }) {
 }
 
 export default function ProjectDetailScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: project, loading, error } = useProject(id);
   const { data: userDoc } = useCurrentUserDoc();
@@ -108,19 +116,20 @@ export default function ProjectDetailScreen() {
   const { data: parties } = useParties(orgId);
   const { rooms: lamRooms, data: lamData } = useLaminates(id);
 
-  // Filter the static TABS array down to what the active role can
-  // see. The set is derived from the role matrix in
-  // `useVisibleProjectTabs` and matches `docs/roles-and-permissions.md`.
-  // While permissions are still loading the hook returns the full
-  // set so the user doesn't briefly see fewer tabs than they're
-  // allowed.
   const visibleTabs = useVisibleProjectTabs();
   const visibleTABS = useMemo(
-    () => TABS.filter((t) => visibleTabs.has(t.key)),
+    () => TABS.filter((tt) => visibleTabs.has(tt.key)),
     [visibleTabs],
   );
 
-  const [tab, setTab] = useState<TabKey>(() => visibleTABS[0]?.key ?? 'transaction');
+  // Default to Transaction (regardless of where it sits in the strip) —
+  // that's what users open a project to see first. Fall back to the
+  // first visible tab if Transaction is hidden for the role.
+  const [tab, setTab] = useState<TabKey>(() =>
+    visibleTABS.some((tt) => tt.key === DEFAULT_TAB)
+      ? DEFAULT_TAB
+      : (visibleTABS[0]?.key ?? DEFAULT_TAB),
+  );
   const [generatingPdf, setGeneratingPdf] = useState(false);
   const [tabDataRefreshKey, setTabDataRefreshKey] = useState(0);
 
@@ -134,41 +143,22 @@ export default function ProjectDetailScreen() {
   // e.g. demotion), snap to the first available one.
   useEffect(() => {
     if (visibleTABS.length === 0) return;
-    if (!visibleTABS.some((t) => t.key === tab)) {
+    if (!visibleTABS.some((tt) => tt.key === tab)) {
       setTab(visibleTABS[0].key);
     }
   }, [visibleTABS, tab]);
-  const pagerRef = useRef<FlatList>(null);
-  const tabBarRef = useRef<ScrollView>(null);
-  const tabLayouts = useRef<Partial<Record<TabKey, { x: number; width: number }>>>({});
-  const tabBarWidth = useRef(0);
+
+  const pagerRef = useRef<FlatList<Tab>>(null);
   const isUserSwipe = useRef(true);
-
-  const onTabBarLayout = useCallback((e: LayoutChangeEvent) => {
-    tabBarWidth.current = e.nativeEvent.layout.width;
-  }, []);
-
-  const onTabLayout = useCallback((key: TabKey, e: LayoutChangeEvent) => {
-    const { x, width } = e.nativeEvent.layout;
-    tabLayouts.current[key] = { x, width };
-  }, []);
-
-  const syncTabBarToActive = useCallback((key: TabKey, animated = true) => {
-    const layout = tabLayouts.current[key];
-    if (!layout || !tabBarRef.current) return;
-    const targetX = Math.max(0, layout.x - (tabBarWidth.current - layout.width) / 2);
-    tabBarRef.current.scrollTo({ x: targetX, animated });
-  }, []);
 
   const handleTabChange = useCallback((key: TabKey) => {
     setTab(key);
-    syncTabBarToActive(key, true);
-    const idx = visibleTABS.findIndex((t) => t.key === key);
+    const idx = visibleTABS.findIndex((tt) => tt.key === key);
     if (idx >= 0) {
       isUserSwipe.current = false;
       pagerRef.current?.scrollToIndex({ index: idx, animated: true });
     }
-  }, [syncTabBarToActive, visibleTABS]);
+  }, [visibleTABS]);
 
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
     if (viewableItems.length > 0 && isUserSwipe.current) {
@@ -185,11 +175,6 @@ export default function ProjectDetailScreen() {
     isUserSwipe.current = true;
   }, []);
 
-  useEffect(() => {
-    // Keep top tab strip synced when tab changes via swipe.
-    syncTabBarToActive(tab, true);
-  }, [tab, syncTabBarToActive]);
-
   const handleGeneratePdf = useCallback(async () => {
     if (!project || lamData.length === 0) return;
     setGeneratingPdf(true);
@@ -204,35 +189,33 @@ export default function ProjectDetailScreen() {
 
   const renderTabPage = useCallback(({ item }: { item: Tab }) => (
     <View style={{ width: SCREEN_WIDTH, flex: 1 }}>
-      <PageEnter viewKey={item.key}>
-        <TabContent tab={item.key} />
-      </PageEnter>
+      <TabContent tab={item.key} />
     </View>
   ), []);
 
   if (loading) {
     return (
-      <Screen bg="grouped">
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <PageEnter viewKey="loading">
-          <View style={styles.loading}>
-            <Spinner size={32} />
-          </View>
-        </PageEnter>
-      </Screen>
+        <AmbientBackground />
+        <View style={styles.centered}>
+          <ActivityIndicator color={t.palette.blue.base} />
+        </View>
+      </View>
     );
   }
 
   if (!project) {
     return (
-      <Screen bg="grouped">
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.loading}>
-          <RNText style={styles.loadingText}>
-            {error ? `Couldn't load project:\n${error}` : 'Project not found.'}
-          </RNText>
+        <AmbientBackground />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center', paddingHorizontal: 32 }}>
+            {error ? `Couldn't load project: ${error}` : 'Project not found.'}
+          </Text>
         </View>
-      </Screen>
+      </View>
     );
   }
 
@@ -241,36 +224,75 @@ export default function ProjectDetailScreen() {
   return (
     <TabPagerProvider>
     <ProjectTabRefreshProvider refreshKey={tabDataRefreshKey}>
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* ── Compact nav header — back · thumb · name + meta · ⋯ */}
-      <View style={styles.navBar}>
+      {/* ── Compact nav header */}
+      <View style={[styles.navBar, { paddingTop: insets.top + 8 }]}>
         <Pressable
           onPress={() => router.back()}
-          hitSlop={12}
-          style={({ pressed }) => [styles.navBackBtn, pressed && { opacity: 0.6 }]}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.navIconBtn,
+            {
+              // Match the soft-fill chip pattern used on the overview header
+              // and across other v2 surfaces — no white card look, no border,
+              // no shadow. Reads as a tap target without shouting.
+              backgroundColor: t.colors.fill3,
+              borderRadius: 999,
+            },
+            pressed && { opacity: 0.7 },
+          ]}
           accessibilityLabel="Back"
         >
-          <Ionicons name="chevron-back" size={18} color={color.textMuted} />
+          <Ionicons name="chevron-back" size={18} color={t.colors.label} />
         </Pressable>
 
-        <View style={styles.navThumb}>
+        <View
+          style={[
+            styles.navThumb,
+            {
+              backgroundColor:
+                t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+              borderRadius: t.radii.tile,
+            },
+          ]}
+        >
           {project.photoUri ? (
             <Image source={{ uri: project.photoUri }} style={styles.navThumbImg} />
           ) : (
-            <RNText style={styles.navThumbText}>{initials}</RNText>
+            <Text
+              variant="caption2"
+              style={{
+                color: t.palette.blue.base,
+                fontWeight: '700',
+                letterSpacing: 0.5,
+              }}
+            >
+              {initials}
+            </Text>
           )}
         </View>
 
         <View style={styles.navTitleWrap}>
-          <RNText style={styles.navTitle} numberOfLines={1}>
+          <Text
+            variant="headline"
+            color="label"
+            style={{ fontWeight: '700' }}
+            numberOfLines={1}
+          >
             {project.name}
-          </RNText>
-          {project.siteAddress ? (
-            <RNText style={styles.navSub} numberOfLines={1}>
+          </Text>
+          {project.location || project.siteAddress ? (
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={{ letterSpacing: 0.5, marginTop: 1 }}
+              numberOfLines={1}
+            >
               {(project.location || project.siteAddress).toUpperCase()}
-            </RNText>
+            </Text>
           ) : null}
         </View>
 
@@ -278,19 +300,25 @@ export default function ProjectDetailScreen() {
           <Pressable
             onPress={handleGeneratePdf}
             disabled={generatingPdf}
-            hitSlop={12}
+            hitSlop={10}
             style={({ pressed }) => [
               styles.navIconBtn,
-              pressed && { opacity: 0.6 },
+              {
+                // Document/PDF action — soft blue fill so the action reads as
+                // interactive without breaking the calm-header pattern.
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.7 },
               generatingPdf && { opacity: 0.4 },
-              { marginRight: 6 },
             ]}
             accessibilityLabel="Generate laminate PDF"
           >
             <Ionicons
               name="document-text-outline"
               size={16}
-              color={color.primary}
+              color={t.palette.blue.base}
             />
           </Pressable>
         ) : null}
@@ -298,77 +326,66 @@ export default function ProjectDetailScreen() {
         {tab === 'transaction' ? (
           <Pressable
             onPress={() => router.push(`/(app)/projects/${id}/transaction-report` as never)}
-            hitSlop={12}
+            hitSlop={10}
             style={({ pressed }) => [
               styles.navIconBtn,
-              pressed && { opacity: 0.6 },
-              { marginRight: 6 },
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.7 },
             ]}
             accessibilityLabel="Payment report"
           >
             <Ionicons
               name="document-text-outline"
               size={16}
-              color={color.primary}
+              color={t.palette.blue.base}
             />
           </Pressable>
         ) : null}
 
         <Pressable
           onPress={() => router.push(`/(app)/projects/${id}/overview` as never)}
-          hitSlop={12}
-          style={({ pressed }) => [styles.navIconBtn, pressed && { opacity: 0.6 }]}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.navIconBtn,
+            {
+              // Neutral chip for the kebab — same fill as the back button.
+              backgroundColor: t.colors.fill3,
+              borderRadius: 999,
+            },
+            pressed && { opacity: 0.7 },
+          ]}
           accessibilityLabel="Project overview"
         >
           <Ionicons
             name="ellipsis-horizontal"
             size={16}
-            color={color.text}
+            color={t.colors.label}
           />
         </Pressable>
       </View>
 
-      {/* ── Tab bar — InteriorOS Segmented (top + bottom hairline, 2px underline) */}
-      <ScrollView
-        ref={tabBarRef}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.tabBar}
-        contentContainerStyle={styles.tabBarContent}
-        onLayout={onTabBarLayout}
-      >
-        {visibleTABS.map((item) => {
-          const active = tab === item.key;
-          return (
-            <Pressable
-              key={item.key}
-              onPress={() => handleTabChange(item.key)}
-              style={styles.tabBtn}
-              onLayout={(e) => onTabLayout(item.key, e)}
-            >
-              <RNText
-                style={[
-                  styles.tabLabel,
-                  { color: active ? color.text : color.textMuted, fontWeight: active ? '600' : '500' },
-                ]}
-              >
-                {item.label}
-              </RNText>
-              <View
-                style={[
-                  styles.tabUnderline,
-                  active && { backgroundColor: color.primary },
-                ]}
-              />
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+      {/* ── Tab strip — v2 SubTabs (horizontally scrollable, blue underline) */}
+      <SubTabs<TabKey>
+        items={visibleTABS}
+        selected={tab}
+        onChange={(k) => handleTabChange(k)}
+      />
 
       {/* ── Swipeable tab content */}
       <View style={styles.tabContent}>
         <TabPager
           tabs={visibleTABS}
+          // Pager opens on the Transaction page even though Party is the
+          // first tab in the strip. If Transaction is hidden for the
+          // current role, fall back to whichever tab is selected.
+          initialIndex={Math.max(
+            0,
+            visibleTABS.findIndex((tt) => tt.key === tab),
+          )}
           pagerRef={pagerRef}
           renderTabPage={renderTabPage}
           onViewableItemsChanged={onViewableItemsChanged}
@@ -377,7 +394,7 @@ export default function ProjectDetailScreen() {
         />
       </View>
 
-    </Screen>
+    </View>
     </ProjectTabRefreshProvider>
     </TabPagerProvider>
   );
@@ -385,6 +402,7 @@ export default function ProjectDetailScreen() {
 
 function TabPager({
   tabs,
+  initialIndex,
   pagerRef,
   renderTabPage,
   onViewableItemsChanged,
@@ -392,6 +410,7 @@ function TabPager({
   onMomentumScrollEnd,
 }: {
   tabs: Tab[];
+  initialIndex: number;
   pagerRef: React.RefObject<FlatList<Tab> | null>;
   renderTabPage: ({ item }: { item: Tab }) => React.ReactElement;
   onViewableItemsChanged: (info: { viewableItems: ViewToken[] }) => void;
@@ -411,7 +430,7 @@ function TabPager({
       scrollEnabled={swipeEnabled}
       showsHorizontalScrollIndicator={false}
       bounces={false}
-      initialScrollIndex={0}
+      initialScrollIndex={initialIndex}
       removeClippedSubviews={false}
       initialNumToRender={n}
       maxToRenderPerBatch={n}
@@ -430,118 +449,44 @@ function TabPager({
 }
 
 const styles = StyleSheet.create({
-  loading: {
+  centered: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 20,
-  },
-  loadingText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    color: color.textMuted,
-    textAlign: 'center',
   },
 
-  // ── Nav bar
+  // Nav bar
   navBar: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 8,
     paddingBottom: 10,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
     gap: 10,
   },
-  navBackBtn: {
-    width: 28,
-    height: 28,
+  navIconBtn: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
   navThumb: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    backgroundColor: color.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.border,
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
   navThumbImg: {
-    width: 28,
-    height: 28,
-  },
-  navThumbText: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '500',
-    color: color.textMuted,
-    letterSpacing: 0.5,
+    width: '100%',
+    height: '100%',
   },
   navTitleWrap: {
     flex: 1,
     minWidth: 0,
   },
-  navTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    fontWeight: '600',
-    color: color.text,
-    letterSpacing: -0.2,
-  },
-  navSub: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    color: color.textFaint,
-    letterSpacing: 1.2,
-    marginTop: 1,
-  },
-  navIconBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
 
-  // ── Tab bar
-  tabBar: {
-    flexGrow: 0,
-    backgroundColor: color.bgGrouped,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-  },
-  tabBarContent: {
-    paddingHorizontal: 16,
-  },
-  tabBtn: {
-    paddingHorizontal: 12,
-    paddingTop: 10,
-  },
-  tabLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    paddingBottom: 8,
-  },
-  tabUnderline: {
-    height: 2,
-    backgroundColor: 'transparent',
-    marginBottom: -StyleSheet.hairlineWidth,
-  },
-
-  // ── Tab content
+  // Tab content
   tabContent: {
     flex: 1,
-    backgroundColor: color.bgGrouped,
   },
-
 });

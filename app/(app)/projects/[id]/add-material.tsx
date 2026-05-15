@@ -1,8 +1,15 @@
 /**
- * Add Material form. Category + name + quantity + unit + rate + supplier + date.
+ * Add Material — v2 design.
+ *
+ * Layout:
+ *   1. SheetHeader: Cancel · "Add material" · Save
+ *   2. Category pill row (Request / Received / Used)
+ *   3. FormGroup "Material" — Name, Quantity, Unit (SelectSheet)
+ *   4. FormGroup "Cost" — Rate per unit · Total (auto)
+ *   5. FormGroup "Source" — Supplier · Date (DateTimeSheet)
+ *   6. FormGroup "Notes" — multiline
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
 import { useState } from 'react';
@@ -14,18 +21,22 @@ import {
   StyleSheet,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 import { z } from 'zod';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { createMaterial } from '@/src/features/materials/materials';
-import { Button } from '@/src/ui/Button';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
 import { formatDate } from '@/src/lib/format';
-import { color, radius, screenInset, space } from '@/src/theme';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const CAT_OPTIONS = [
   { key: 'request', label: 'Request' },
@@ -48,6 +59,7 @@ const schema = z.object({
 type FormData = z.infer<typeof schema>;
 
 export default function AddMaterialScreen() {
+  const t = useThemeV2();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -55,6 +67,7 @@ export default function AddMaterialScreen() {
   const [submitError, setSubmitError] = useState<string>();
   const [date, setDate] = useState(new Date());
   const [showDate, setShowDate] = useState(false);
+  const [showUnitPicker, setShowUnitPicker] = useState(false);
 
   const {
     control,
@@ -92,7 +105,6 @@ export default function AddMaterialScreen() {
         notes: data.notes ?? '',
         createdBy: user.uid,
       });
-      // Snapshot-propagation buffer (see add-transaction.tsx).
       await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
@@ -101,279 +113,246 @@ export default function AddMaterialScreen() {
   }
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="close" size={22} color={color.text} />
-        </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.navTitle}>Add Material</Text>
-        <View style={styles.navBtn} />
-      </View>
+      <SheetHeader
+        title="Add material"
+        cancelLabel="Cancel"
+        saveLabel="Save"
+        saveLoading={isSubmitting}
+        saveDisabled={!isValid || !orgId}
+        onCancel={() => router.back()}
+        onSave={() => void handleSubmit(onSubmit)()}
+      />
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Category */}
-          <Text variant="caption" color="textMuted" style={styles.label}>CATEGORY</Text>
-          <View style={styles.chipRow}>
-            {CAT_OPTIONS.map((c) => {
-              const active = selectedCat === c.key;
-              return (
-                <Pressable
-                  key={c.key}
-                  onPress={() => setValue('category', c.key, { shouldValidate: true })}
-                  style={[styles.chip, active && styles.chipActive]}
-                >
-                  <Text variant="caption" style={{ color: active ? '#fff' : color.text }}>
-                    {c.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {/* Name */}
-          <Controller
-            control={control}
-            name="name"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Material Name"
-                placeholder="e.g. Cement, Sand, Plywood"
-                autoCapitalize="words"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.name?.message}
-              />
-            )}
-          />
-
-          {/* Quantity + Unit */}
-          <View style={styles.rowFields}>
-            <View style={styles.halfField}>
-              <Controller
-                control={control}
-                name="quantity"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="Quantity"
-                    placeholder="0"
-                    keyboardType="numeric"
-                    value={value}
-                    onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))}
-                    onBlur={onBlur}
-                    error={errors.quantity?.message}
-                  />
-                )}
-              />
-            </View>
-            <View style={styles.halfField}>
-              <Text variant="caption" color="textMuted" style={styles.label}>UNIT</Text>
-              <View style={styles.chipRow}>
-                {UNITS.slice(0, 5).map((u) => {
-                  const active = selectedUnit === u;
-                  return (
-                    <Pressable
-                      key={u}
-                      onPress={() => setValue('unit', u, { shouldValidate: true })}
-                      style={[styles.chipSm, active && styles.chipActive]}
+          {/* Category pill row */}
+          <View style={styles.pillBlock}>
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={{ letterSpacing: 0.5, paddingHorizontal: 32, paddingBottom: 8 }}
+            >
+              CATEGORY
+            </Text>
+            <View style={styles.pillRow}>
+              {CAT_OPTIONS.map((c) => {
+                const active = selectedCat === c.key;
+                return (
+                  <Pressable
+                    key={c.key}
+                    onPress={() => setValue('category', c.key, { shouldValidate: true })}
+                    hitSlop={6}
+                    style={({ pressed }) => [
+                      styles.pillChip,
+                      {
+                        backgroundColor: active
+                          ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                          : t.colors.fill3,
+                        borderRadius: 999,
+                        borderColor: active ? t.palette.blue.base + '33' : 'transparent',
+                        borderWidth: active ? 1 : 0,
+                      },
+                      pressed && { opacity: 0.85 },
+                    ]}
+                  >
+                    <Text
+                      variant="caption2"
+                      style={{
+                        color: active ? t.palette.blue.base : t.colors.secondary,
+                        fontWeight: '700',
+                        letterSpacing: 0.4,
+                      }}
                     >
-                      <Text variant="caption" style={{ color: active ? '#fff' : color.text }}>{u}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-              <View style={[styles.chipRow, { marginTop: 4 }]}>
-                {UNITS.slice(5).map((u) => {
-                  const active = selectedUnit === u;
-                  return (
-                    <Pressable
-                      key={u}
-                      onPress={() => setValue('unit', u, { shouldValidate: true })}
-                      style={[styles.chipSm, active && styles.chipActive]}
-                    >
-                      <Text variant="caption" style={{ color: active ? '#fff' : color.text }}>{u}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+                      {c.label.toUpperCase()}
+                    </Text>
+                  </Pressable>
+                );
+              })}
             </View>
           </View>
 
-          {/* Rate */}
-          <Controller
-            control={control}
-            name="rate"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Rate per unit (₹)"
-                placeholder="0"
-                keyboardType="numeric"
-                leading={<Text variant="meta" color="textMuted">₹</Text>}
-                value={value}
-                onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))}
-                onBlur={onBlur}
-                error={errors.rate?.message}
-              />
-            )}
-          />
-
-          {/* Total */}
-          {totalCost > 0 && (
-            <View style={styles.totalRow}>
-              <Text variant="meta" color="textMuted">Total Cost</Text>
-              <Text variant="bodyStrong" color="text">₹{totalCost.toLocaleString('en-IN')}</Text>
-            </View>
-          )}
-
-          {/* Supplier */}
-          <Controller
-            control={control}
-            name="supplier"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Supplier (optional)"
-                placeholder="e.g. ABC Traders"
-                autoCapitalize="words"
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-              />
-            )}
-          />
-
-          {/* Date */}
-          <Text variant="caption" color="textMuted" style={styles.label}>DATE</Text>
-          <Pressable onPress={() => setShowDate(true)} style={styles.dateBtn}>
-            <Ionicons name="calendar-outline" size={18} color={color.textMuted} />
-            <Text variant="body" color="text">{formatDate(date)}</Text>
-          </Pressable>
-          {showDate && (
-            <DateTimePicker
-              value={date}
-              mode="date"
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              onChange={(_, d) => {
-                setShowDate(Platform.OS === 'ios');
-                if (d) setDate(d);
-              }}
+          {/* Material */}
+          <FormGroup header="Material">
+            <Controller
+              control={control}
+              name="name"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Name"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. Cement, Sand, Plywood"
+                  autoCapitalize="words"
+                />
+              )}
             />
-          )}
+            <Controller
+              control={control}
+              name="quantity"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Quantity"
+                  value={value}
+                  onChangeText={(txt) => onChange(txt.replace(/[^\d.]/g, ''))}
+                  onBlur={onBlur}
+                  placeholder="0"
+                  keyboardType="decimal-pad"
+                />
+              )}
+            />
+            <Row
+              label="Unit"
+              value={selectedUnit || 'Pick a unit'}
+              valueColor={selectedUnit ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setShowUnitPicker(true)}
+              divider={false}
+            />
+          </FormGroup>
+          {(errors.name?.message || errors.quantity?.message || errors.unit?.message) ? (
+            <FieldNote
+              text={errors.name?.message ?? errors.quantity?.message ?? errors.unit?.message ?? ''}
+              tone={t.palette.red.base}
+            />
+          ) : null}
+
+          {/* Cost */}
+          <FormGroup
+            header="Cost"
+            footer={
+              totalCost > 0
+                ? `Total: ₹${totalCost.toLocaleString('en-IN')}`
+                : undefined
+            }
+          >
+            <Controller
+              control={control}
+              name="rate"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Rate per unit"
+                  value={value}
+                  onChangeText={(txt) => onChange(txt.replace(/[^\d.]/g, ''))}
+                  onBlur={onBlur}
+                  placeholder="₹0"
+                  keyboardType="decimal-pad"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+          {errors.rate?.message ? (
+            <FieldNote text={errors.rate.message} tone={t.palette.red.base} />
+          ) : null}
+
+          {/* Source */}
+          <FormGroup header="Source">
+            <Controller
+              control={control}
+              name="supplier"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Supplier"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. ABC Traders"
+                  autoCapitalize="words"
+                />
+              )}
+            />
+            <Row
+              label="Date"
+              value={formatDate(date)}
+              chevron
+              onPress={() => setShowDate(true)}
+              divider={false}
+            />
+          </FormGroup>
 
           {/* Notes */}
-          <Controller
-            control={control}
-            name="notes"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Notes (optional)"
-                placeholder="Additional details"
-                multiline
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-              />
-            )}
-          />
+          <FormGroup header="Notes">
+            <Controller
+              control={control}
+              name="notes"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Note"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Additional details"
+                  multiline
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
 
-          {submitError && (
-            <Text variant="caption" color="danger" style={{ marginTop: space.xs }}>
-              {submitError}
-            </Text>
-          )}
+          {submitError ? (
+            <FieldNote text={submitError} tone={t.palette.red.base} />
+          ) : null}
+
+          <View style={{ height: 40 }} />
         </ScrollView>
-
-        <View style={styles.footer}>
-          <Button
-            label="Save Material"
-            onPress={handleSubmit(onSubmit)}
-            loading={isSubmitting}
-            disabled={!isValid || !orgId}
-          />
-        </View>
       </KeyboardAvoidingView>
-    </Screen>
+
+      <DateTimeSheet
+        open={showDate}
+        value={date}
+        onChange={setDate}
+        onClose={() => setShowDate(false)}
+        mode="date"
+        title="Date"
+      />
+
+      <SelectSheet
+        open={showUnitPicker}
+        title="Unit"
+        options={UNITS.map((u) => ({ key: u, label: u }))}
+        selected={selectedUnit}
+        onPick={(k) => setValue('unit', k, { shouldValidate: true })}
+        onClose={() => setShowUnitPicker(false)}
+      />
+    </View>
+  );
+}
+
+function FieldNote({ text, tone }: { text: string; tone: string }) {
+  return (
+    <Text
+      variant="caption2"
+      style={{ color: tone, paddingHorizontal: 32, marginTop: 8 }}
+    >
+      {text}
+    </Text>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  navBar: {
+  scroll: { paddingBottom: 60 },
+
+  pillBlock: { paddingTop: 18 },
+  pillRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingBottom: space.xs,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    paddingHorizontal: 16,
+    gap: 6,
   },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navTitle: { flex: 1, textAlign: 'center' },
-  scroll: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.md,
-    paddingBottom: space.xl,
-  },
-  label: { marginTop: space.md, marginBottom: space.xs },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-  chip: {
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xs,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: color.border,
-  },
-  chipSm: {
-    paddingHorizontal: space.xs,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: color.border,
-  },
-  chipActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
-  },
-  rowFields: {
-    flexDirection: 'row',
-    gap: space.sm,
-  },
-  halfField: { flex: 1 },
-  totalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: space.sm,
-    paddingHorizontal: space.sm,
-    backgroundColor: color.primarySoft,
-    borderRadius: radius.sm,
-    marginTop: space.xs,
-  },
-  dateBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.sm,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.border,
-    backgroundColor: color.surface,
-  },
-  footer: {
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
+  pillChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
 });

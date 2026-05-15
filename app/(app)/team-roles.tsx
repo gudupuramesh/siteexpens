@@ -1,33 +1,45 @@
 /**
- * Roles & Access — studio membership + per-project access.
+ * Roles & Access — v2 design.
  *
- * - Tap the role pill (dropdown) → RolePickerSheet only (role change).
- * - Tap the rest of the card (name / phone / project count / status) →
- *   ProjectAccessSheet only (project list).
- * - Add flow: contact → role → projects (unchanged chain).
+ * Layout (top → bottom):
+ *   1. v2 header: back · "Roles & access" · count caption
+ *   2. Search bar (fill3 + magnifier)
+ *   3. Combined Joined / Pending / You tile (hairline-divided)
+ *   4. Sectioned list — Members + Pending Invites groups
+ *      Each row: tone-tinted square initial avatar + name + phone + project
+ *      count meta + role pill (tap → role sheet) + chevron (tap → projects sheet)
+ *   5. Floating "Add team member" pill (Admin / Owner only)
+ *
+ * Sheets reused from existing flows:
+ *   • RolePickerSheet     — kept (used elsewhere; touching it would
+ *                           ripple into other consumers)
+ *   • ProjectAccessSheet  — kept (same reason)
+ *
+ * Preserves the two-step modal transition that fixes the iOS bug where
+ * dismissing one Modal while presenting another causes the second one
+ * to silently never appear (see `pendingProjectsStep`).
  */
 import * as Contacts from 'expo-contacts';
 import { router, Stack } from 'expo-router';
-import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
+import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  FlatList,
   InteractionManager,
   Keyboard,
   Pressable,
+  RefreshControl,
+  ScrollView,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/src/features/auth/useAuth';
-import {
-  inviteMember,
-  removeMember,
-} from '@/src/features/org/invites';
+import { inviteMember, removeMember } from '@/src/features/org/invites';
 import { setMemberRole } from '@/src/features/org/organizations';
 import { PlanLimitError } from '@/src/features/billing/errors';
 import { usePaywall } from '@/src/features/billing/usePaywall';
@@ -46,9 +58,11 @@ import { usePermissions } from '@/src/features/org/usePermissions';
 import { useProjects } from '@/src/features/projects/useProjects';
 import type { Project } from '@/src/features/projects/types';
 import { db, firestore } from '@/src/lib/firebase';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { color, radius, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
+import { useThemeV2 } from '@/src/theme/v2';
 
 type Row =
   | {
@@ -77,6 +91,31 @@ type Step =
     }
   | { kind: 'edit-role'; row: Row }
   | { kind: 'edit-projects'; row: Row };
+
+/**
+ * Tone for each role's avatar / pill.
+ *
+ * Color discipline: roles are categorical labels, not actionable status — so
+ * they default to a neutral tone (fill3 background + secondary glyph). Only
+ * `superAdmin` keeps a coloured pill (red), because the privileged role
+ * deserves visual emphasis. The pill is structurally identical; only the
+ * fill changes.
+ *
+ * Returns an object shaped like a palette token (`base` / `soft` / `softDark`)
+ * so the consuming JSX doesn't have to branch — `tone.soft`, `tone.base`,
+ * etc. just work whether the role is superAdmin or anything else.
+ */
+function roleTone(
+  role: RoleKey | null,
+  t: ReturnType<typeof useThemeV2>,
+): { base: string; soft: string; softDark: string } {
+  if (role === 'superAdmin') return t.palette.red;
+  return {
+    base: t.colors.secondary,
+    soft: t.colors.fill3,
+    softDark: t.colors.fill3,
+  };
+}
 
 /** Merge org.memberIds with org-scoped memberPublic projections (no peer users/{uid} reads). */
 function useOrgMemberDocs(
@@ -124,6 +163,7 @@ function useOrgMemberDocs(
         },
       );
     return unsub;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId, stableMembers]);
 
   const data = useMemo(() => {
@@ -137,7 +177,6 @@ function useOrgMemberDocs(
   return { data, loading };
 }
 
-/** Sync project docs for a joined member to match `projectIds` for their org-wide `role`. */
 async function reconcileProjectAccess(
   uid: string,
   role: RoleKey,
@@ -222,25 +261,15 @@ function projectCountLabel(
 
 export default function TeamAndRolesScreen() {
   useGuardedRoute({ capability: 'team.manage' });
+  const t = useThemeV2();
+  const refresh = usePullToRefresh();
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { data: org, loading: orgLoading } = useCurrentOrganization();
   const { isOwner, isAdminish } = usePermissions();
   const { data: projects } = useProjects();
   const orgId = org?.id ?? null;
 
-  // Union of every uid that belongs to this studio in some capacity:
-  //   • org.memberIds[]      — regular paid team (admin / manager / etc.)
-  //   • Object.keys(roles)   — anyone with an explicit role, INCLUDES clients
-  //   • org.ownerId          — superAdmin (always shown, even if missing from memberIds)
-  //
-  // Without this union we'd only see paid members. Clients live in
-  // `org.roles[uid] = 'client'` + per-project `clientUids[]`, NOT in
-  // `org.memberIds` (so they don't count toward the maxMembers cap —
-  // see invites.ts:244-286 and setMemberRole.ts:183-194). Reading
-  // memberIds alone would silently hide them from the Team & Roles
-  // screen, which is the bug we're fixing here. The union keeps plan
-  // accounting untouched (server still owns memberIds) and just
-  // surfaces clients in the UI.
   const allMemberUids = useMemo(() => {
     const ids = new Set<string>();
     for (const uid of org?.memberIds ?? []) ids.add(uid);
@@ -249,42 +278,31 @@ export default function TeamAndRolesScreen() {
     return Array.from(ids);
   }, [org?.memberIds, org?.roles, org?.ownerId]);
 
-  const { data: memberDocs, loading: membersLoading } = useOrgMemberDocs(orgId ?? undefined, allMemberUids);
+  const { data: memberDocs, loading: membersLoading } = useOrgMemberDocs(
+    orgId ?? undefined,
+    allMemberUids,
+  );
   const { data: pending, loading: pendingLoading } = usePendingInvites(orgId);
   const { openPaywall } = usePaywall();
 
   const [step, setStep] = useState<Step>({ kind: 'idle' });
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Deferred sheet transition.
-  //
-  // When the user picks a role on RolePickerSheet (Modal A) and we
-  // immediately set step to `'invite-projects'`, both modals try to
-  // swap in the same render: A's `visible` flips to false, B's flips
-  // to true. iOS will NOT present a new full-screen modal while
-  // another is still dismissing — by the time A's slide-down finishes
-  // (~250 ms), iOS has discarded B's queued present and B never
-  // appears. User sees both sheets close → "nothing happens".
-  //
-  // Fix: when picking a role, set step to `'idle'` synchronously
-  // (close A) and stash the next state here. The effect below
-  // schedules a 320 ms timer (covers iOS dismiss + safety margin),
-  // then sets step to `'invite-projects'` to open B cleanly.
+  // See original implementation comment — iOS modal-swap workaround.
   const [pendingProjectsStep, setPendingProjectsStep] = useState<
     Extract<Step, { kind: 'invite-projects' }> | null
   >(null);
 
   useEffect(() => {
     if (!pendingProjectsStep) return;
-    const t = setTimeout(() => {
+    const tt = setTimeout(() => {
       setStep((s) => {
-        // Bail if the user cancelled the flow during the gap.
         if (s.kind !== 'idle') return s;
         return pendingProjectsStep;
       });
       setPendingProjectsStep(null);
     }, 320);
-    return () => clearTimeout(t);
+    return () => clearTimeout(tt);
   }, [pendingProjectsStep]);
 
   const assignable: AssignableRole[] = isOwner
@@ -337,6 +355,31 @@ export default function TeamAndRolesScreen() {
     });
   }, [rows, q]);
 
+  const sections = useMemo(() => {
+    const members: Row[] = [];
+    const pendingItems: Row[] = [];
+    for (const r of filteredRows) {
+      if (r.kind === 'member') members.push(r);
+      else pendingItems.push(r);
+    }
+    return { members, pendingItems };
+  }, [filteredRows]);
+
+  const counts = useMemo(() => {
+    let joined = 0;
+    let pendingCount = 0;
+    let owner = 0;
+    for (const r of rows) {
+      if (r.kind === 'member') {
+        joined++;
+        if (r.isSelf) owner++;
+      } else {
+        pendingCount++;
+      }
+    }
+    return { joined, pending: pendingCount, owner };
+  }, [rows]);
+
   const openContactPicker = useCallback(async (): Promise<{
     phone: string;
     name?: string;
@@ -384,15 +427,6 @@ export default function TeamAndRolesScreen() {
     setStep({ kind: 'invite-role', contact: picked });
   }, [orgId, isAdminish, openContactPicker]);
 
-  // ── Role sheet: invite picks role → advance to project sheet ──
-  //
-  // Two-step transition (see comment on `pendingProjectsStep` above):
-  //   1. Close the role sheet immediately (step → 'idle')
-  //   2. Stash the next sheet state in `pendingProjectsStep`; the
-  //      effect opens it after the iOS dismiss animation completes.
-  //
-  // Without this, picking a role and tapping Continue does nothing
-  // visible on iOS — both modals close in the same render cycle.
   const onInviteRoleSave = useCallback((role: AssignableRole) => {
     setStep((s) => {
       if (s.kind !== 'invite-role') return s;
@@ -405,7 +439,6 @@ export default function TeamAndRolesScreen() {
     });
   }, []);
 
-  // ── Role sheet: edit saves role only ──
   const onEditRoleSave = useCallback(
     async (newRole: AssignableRole) => {
       if (!orgId || step.kind !== 'edit-role') return;
@@ -420,17 +453,6 @@ export default function TeamAndRolesScreen() {
             displayName: row.displayName,
           });
         } else {
-          // Server-only role mutation. The callable handles:
-          //   - Permission check (caller must be SA / Admin; only
-          //     SA can grant Admin).
-          //   - Atomic role write to organizations/{id}.roles[uid].
-          //   - Project-membership mirror swap when toggling
-          //     in/out of `client` (memberIds ↔ clientUids).
-          //   - Refreshing the target's auth-token claims.
-          // The previous direct-Firestore path was a self-promotion
-          // hole — Firestore rules now reject any client write to
-          // organizations/*.roles, so this callable is the only way
-          // to change a role.
           await setMemberRole({ orgId, uid: row.uid, role: newRole });
         }
         setStep({ kind: 'idle' });
@@ -443,10 +465,9 @@ export default function TeamAndRolesScreen() {
         Alert.alert('Could not save role', (e as Error).message);
       }
     },
-    [orgId, step, projects, openPaywall],
+    [orgId, step, openPaywall],
   );
 
-  // ── Project sheet save ──
   const onProjectsSave = useCallback(
     async (projectIds: string[]) => {
       if (!orgId) return;
@@ -532,17 +553,19 @@ export default function TeamAndRolesScreen() {
 
   if (orgLoading) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
         <View style={styles.loading}>
-          <ActivityIndicator color={color.primary} />
+          <ActivityIndicator color={t.palette.blue.base} />
         </View>
-      </Screen>
+      </View>
     );
   }
 
   const rolePickerVisible = step.kind === 'invite-role' || step.kind === 'edit-role';
-  const projectPickerVisible = step.kind === 'invite-projects' || step.kind === 'edit-projects';
+  const projectPickerVisible =
+    step.kind === 'invite-projects' || step.kind === 'edit-projects';
 
   const roleSheetTitle =
     step.kind === 'invite-role'
@@ -626,172 +649,216 @@ export default function TeamAndRolesScreen() {
     });
   };
 
-  return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
-      <Stack.Screen options={{ headerShown: false }} />
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+  const isLoading = membersLoading || pendingLoading;
 
+  return (
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
+
+      {/* Header — transparent so the AmbientBackground flows through */}
       <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={20} color={color.text} />
+        <Pressable
+          onPress={() => router.back()}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { backgroundColor: t.colors.fill3, borderRadius: 999 },
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <Ionicons name="chevron-back" size={18} color={t.colors.label} />
         </Pressable>
-        <View style={styles.headerCenter}>
-          <Text variant="bodyStrong" color="text">
-            Roles & Access
+        <View style={{ flex: 1 }}>
+          <Text variant="headline" color="label">
+            Roles & access
+          </Text>
+          <Text
+            variant="caption2"
+            color="secondary"
+            style={{ letterSpacing: 0.5, marginTop: 1 }}
+          >
+            {counts.joined} JOINED · {counts.pending} PENDING
           </Text>
         </View>
-        <View style={styles.backBtn} />
+        <View style={styles.iconBtn} />
       </View>
 
-      <View style={styles.searchWrap}>
-        <Ionicons name="search-outline" size={18} color={color.textMuted} style={styles.searchIcon} />
-        <TextInput
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          placeholder="Search"
-          placeholderTextColor={color.textMuted}
-          style={styles.searchInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-          clearButtonMode="while-editing"
-        />
-      </View>
-
-      <FlatList
-        data={filteredRows}
-        keyExtractor={(r) => (r.kind === 'member' ? `m-${r.uid}` : `p-${r.phoneNumber}`)}
-        ListHeaderComponent={() => (
-          <View style={styles.sectionHeader}>
-            <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-              TEAM · {filteredRows.length}
-              {q ? ` · ${rows.length} total` : ''}
-            </Text>
-          </View>
-        )}
-        ListEmptyComponent={() =>
-          membersLoading || pendingLoading ? (
-            <View style={styles.empty}>
-              <ActivityIndicator color={color.primary} />
-            </View>
-          ) : (
-            <View style={styles.empty}>
-              <Text variant="meta" color="textMuted">
-                {q ? 'No matches.' : 'No members yet.'}
-              </Text>
-            </View>
-          )
-        }
-        renderItem={({ item, index }) => {
-          const isMember = item.kind === 'member';
-          const isSelf = isMember && item.isSelf;
-          const isSuperAdmin = isMember && item.role === 'superAdmin';
-          const editable = isAdminish && !isSelf && !isSuperAdmin;
-
-          const initials = (item.displayName ?? '?')
-            .replace(/[^A-Za-z0-9]+/g, ' ')
-            .trim()
-            .split(' ')
-            .map((s) => s.charAt(0))
-            .join('')
-            .slice(0, 2)
-            .toUpperCase();
-
-          const countLabel = projectCountLabel(item, projects, org);
-          const isClient = isMember && item.role === 'client';
-          const statusLabel = isMember ? 'Joined' : 'Invite';
-
-          const openProjects = () => {
-            if (!editable) return;
-            setStep({ kind: 'edit-projects', row: item });
-          };
-          const openRole = () => {
-            if (!editable) return;
-            setStep({ kind: 'edit-role', row: item });
-          };
-
-          return (
-            <View style={[styles.card, index === 0 && styles.cardFirst]}>
-              <View style={styles.cardRow}>
-                <Pressable
-                  style={styles.cardBody}
-                  onPress={openProjects}
-                  disabled={!editable}
-                >
-                  <View
-                    style={[
-                      styles.avatar,
-                      !isMember && styles.avatarPending,
-                    ]}
-                  >
-                    <Text
-                      variant="metaStrong"
-                      color={isMember ? 'primary' : 'textMuted'}
-                    >
-                      {initials || '?'}
-                    </Text>
-                  </View>
-                  <View style={styles.rowBody}>
-                    <Text variant="bodyStrong" color="text" numberOfLines={1}>
-                      {item.displayName}
-                      {isSelf ? ' (you)' : ''}
-                    </Text>
-                    <Text variant="caption" color="textMuted" numberOfLines={1}>
-                      {isMember ? item.phoneNumber || '—' : item.phoneNumber}
-                    </Text>
-                    <Text variant="metaStrong" style={styles.projectCount}>
-                      Project: {countLabel}
-                    </Text>
-                  </View>
-                  <Pressable
-                    onPress={openProjects}
-                    disabled={!editable}
-                    style={styles.statusCol}
-                  >
-                    <Text variant="caption" color="textMuted">
-                      {statusLabel}
-                    </Text>
-                  </Pressable>
-                </Pressable>
-                <Pressable
-                  onPress={openRole}
-                  disabled={!editable}
-                  style={({ pressed }) => [
-                    styles.rolePill,
-                    isClient && styles.rolePillClient,
-                    pressed && editable && { opacity: 0.85 },
-                    !editable && { opacity: 0.55 },
-                  ]}
-                >
-                  <Text
-                    variant="metaStrong"
-                    color={isClient ? 'warning' : 'primary'}
-                    numberOfLines={1}
-                  >
-                    {item.role ? ROLE_LABELS[item.role] : 'No role'}
-                  </Text>
-                  <Ionicons
-                    name="chevron-down"
-                    size={14}
-                    color={isClient ? color.warning : color.primary}
-                  />
-                </Pressable>
-              </View>
-            </View>
-          );
-        }}
-        ItemSeparatorComponent={() => <View style={styles.cardSep} />}
-        contentContainerStyle={styles.listContent}
+      <ScrollView
+        contentContainerStyle={{ paddingBottom: 110 + insets.bottom }}
         keyboardShouldPersistTaps="handled"
-      />
+        keyboardDismissMode="on-drag"
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl {...refresh.props} />}
+      >
+        {/* Search */}
+        <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+          <View
+            style={[
+              styles.searchBar,
+              { backgroundColor: t.colors.fill3, borderRadius: t.radii.field },
+            ]}
+          >
+            <Ionicons name="search" size={16} color={t.colors.tertiary} />
+            <TextInput
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search name or phone"
+              placeholderTextColor={t.colors.tertiary}
+              style={[
+                styles.searchInput,
+                { color: t.colors.label, ...t.type.callout },
+              ]}
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+            />
+            {searchQuery ? (
+              <Pressable onPress={() => setSearchQuery('')} hitSlop={8}>
+                <Ionicons name="close-circle" size={16} color={t.colors.tertiary} />
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
 
+        {/* Combined summary */}
+        <View style={{ paddingHorizontal: 16, paddingTop: 14 }}>
+          <View
+            style={[
+              styles.summaryCard,
+              {
+                backgroundColor: cardBg,
+                borderRadius: t.radii.card,
+                borderColor: cardBorder,
+                borderWidth: t.hairline,
+              },
+            ]}
+          >
+            <SummaryCol
+              label="JOINED"
+              value={String(counts.joined)}
+              color={t.palette.green.base}
+            />
+            <View style={[styles.summaryDivider, { backgroundColor: t.colors.separator }]} />
+            <SummaryCol
+              label="PENDING"
+              value={String(counts.pending)}
+              color={t.palette.orange.base}
+            />
+            <View style={[styles.summaryDivider, { backgroundColor: t.colors.separator }]} />
+            <SummaryCol
+              label="PROJECTS"
+              value={String(projects.length)}
+              color={t.palette.blue.base}
+            />
+          </View>
+        </View>
+
+        {/* Lists */}
+        {isLoading && rows.length === 0 ? (
+          <View style={{ paddingVertical: 48, alignItems: 'center' }}>
+            <ActivityIndicator color={t.palette.blue.base} />
+          </View>
+        ) : filteredRows.length === 0 ? (
+          <View style={{ paddingVertical: 48, alignItems: 'center' }}>
+            <View
+              style={[
+                styles.emptyIcon,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                  borderRadius: t.radii.tile,
+                },
+              ]}
+            >
+              <Ionicons name="people-outline" size={28} color={t.palette.blue.base} />
+            </View>
+            <Text
+              variant="headline"
+              color="label"
+              style={{ marginTop: 12, fontWeight: '600' }}
+            >
+              {q ? 'No matches' : 'No team members yet'}
+            </Text>
+            {!q && isAdminish ? (
+              <Text
+                variant="footnote"
+                color="secondary"
+                style={{ marginTop: 4, textAlign: 'center', paddingHorizontal: 32 }}
+              >
+                Add admins, managers, accountants, site engineers, and clients.
+              </Text>
+            ) : null}
+          </View>
+        ) : (
+          <>
+            {sections.members.length > 0 ? (
+              <TeamSection
+                header="Members"
+                count={sections.members.length}
+              >
+                {sections.members.map((row, idx) => (
+                  <MemberRow
+                    key={`m-${row.kind === 'member' ? row.uid : row.phoneNumber}`}
+                    row={row}
+                    org={org}
+                    projects={projects}
+                    isAdminish={isAdminish}
+                    divider={idx < sections.members.length - 1}
+                    onOpenRole={() => setStep({ kind: 'edit-role', row })}
+                    onOpenProjects={() => setStep({ kind: 'edit-projects', row })}
+                  />
+                ))}
+              </TeamSection>
+            ) : null}
+            {sections.pendingItems.length > 0 ? (
+              <TeamSection
+                header="Pending invites"
+                count={sections.pendingItems.length}
+              >
+                {sections.pendingItems.map((row, idx) => (
+                  <MemberRow
+                    key={`p-${row.kind === 'pending' ? row.phoneNumber : row.kind}`}
+                    row={row}
+                    org={org}
+                    projects={projects}
+                    isAdminish={isAdminish}
+                    divider={idx < sections.pendingItems.length - 1}
+                    onOpenRole={() => setStep({ kind: 'edit-role', row })}
+                    onOpenProjects={() => setStep({ kind: 'edit-projects', row })}
+                  />
+                ))}
+              </TeamSection>
+            ) : null}
+          </>
+        )}
+      </ScrollView>
+
+      {/* Floating add button */}
       {isAdminish ? (
-        <View style={styles.footer}>
+        <View
+          style={[
+            styles.floatingBar,
+            { bottom: 24 + insets.bottom },
+          ]}
+        >
           <Pressable
             onPress={startInvite}
-            style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.85 }]}
+            style={({ pressed }) => [
+              styles.addBtn,
+              { backgroundColor: t.palette.blue.base, borderRadius: 999 },
+              pressed && { opacity: 0.85 },
+            ]}
           >
-            <Ionicons name="add" size={20} color={color.onPrimary} />
-            <Text variant="bodyStrong" style={{ color: color.onPrimary }}>
-              Add Team Member
+            <Ionicons name="add" size={18} color="#fff" />
+            <Text
+              variant="callout"
+              style={{ color: '#fff', fontWeight: '700', marginLeft: 8 }}
+            >
+              Add team member
             </Text>
           </Pressable>
         </View>
@@ -818,15 +885,12 @@ export default function TeamAndRolesScreen() {
       <ProjectAccessSheet
         visible={projectPickerVisible}
         onClose={closeProjectSheet}
-        title="Project List"
+        title="Project access"
         subtitle={projectSheetSubtitle}
         projects={projectOptions}
         selectedIds={defaultSelectedIds}
         onSave={onProjectsSave}
         saveLabel={step.kind === 'invite-projects' ? 'Add to team' : 'Save'}
-        // Clients can only access specific projects, never the whole studio.
-        // Disabling Save until at least one is picked makes the constraint
-        // visible up-front instead of failing silently behind the modal.
         minSelected={
           (step.kind === 'invite-projects' && step.role === 'client')
           || (step.kind === 'edit-projects'
@@ -839,134 +903,373 @@ export default function TeamAndRolesScreen() {
             : 0
         }
       />
-    </Screen>
+    </View>
+  );
+}
+
+function TeamSection({
+  header,
+  count,
+  children,
+}: {
+  header: string;
+  count: number;
+  children: React.ReactNode;
+}) {
+  const t = useThemeV2();
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+  return (
+    <View style={{ marginTop: 24 }}>
+      <View style={styles.sectionHeader}>
+        <Text variant="caption2" color="secondary" style={{ letterSpacing: 0.4 }}>
+          {header.toUpperCase()}
+        </Text>
+        <Text variant="caption2" color="tertiary">
+          {count}
+        </Text>
+      </View>
+      <View
+        style={[
+          styles.sectionCard,
+          {
+            backgroundColor: cardBg,
+            borderRadius: t.radii.group,
+            borderColor: cardBorder,
+            borderWidth: t.hairline,
+          },
+        ]}
+      >
+        {children}
+      </View>
+    </View>
+  );
+}
+
+function MemberRow({
+  row,
+  org,
+  projects,
+  isAdminish,
+  divider,
+  onOpenRole,
+  onOpenProjects,
+}: {
+  row: Row;
+  org: { ownerId?: string } | null | undefined;
+  projects: Project[];
+  isAdminish: boolean;
+  divider: boolean;
+  onOpenRole: () => void;
+  onOpenProjects: () => void;
+}) {
+  const t = useThemeV2();
+  const isMember = row.kind === 'member';
+  const isSelf = isMember && row.isSelf;
+  const isSuperAdmin = isMember && row.role === 'superAdmin';
+  const editable = isAdminish && !isSelf && !isSuperAdmin;
+
+  const tone = roleTone(row.role, t);
+  const initials = (row.displayName ?? '?')
+    .replace(/[^A-Za-z0-9]+/g, ' ')
+    .trim()
+    .split(' ')
+    .map((s) => s.charAt(0))
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
+  const countLabel = projectCountLabel(row, projects, org);
+  const roleLabel = row.role ? ROLE_LABELS[row.role] : 'No role';
+  const phone = row.kind === 'member' ? row.phoneNumber || '—' : row.phoneNumber;
+
+  return (
+    <Pressable
+      onPress={editable ? onOpenProjects : undefined}
+      style={({ pressed }) => [
+        styles.memberRow,
+        pressed && editable && { backgroundColor: t.colors.fill3 },
+      ]}
+    >
+      {/* Avatar */}
+      <View
+        style={[
+          styles.avatar,
+          {
+            backgroundColor:
+              row.kind === 'pending'
+                ? t.colors.fill3
+                : t.mode === 'dark'
+                  ? tone.softDark
+                  : tone.soft,
+            borderRadius: t.radii.tile,
+            borderColor: row.kind === 'pending' ? tone.base + '33' : 'transparent',
+            borderWidth: row.kind === 'pending' ? 1 : 0,
+            borderStyle: row.kind === 'pending' ? 'dashed' : 'solid',
+          },
+        ]}
+      >
+        <Text
+          variant="headline"
+          style={{
+            color: row.kind === 'pending' ? t.colors.tertiary : tone.base,
+            fontWeight: '700',
+          }}
+        >
+          {initials || '?'}
+        </Text>
+      </View>
+
+      {/* Body */}
+      <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text
+            variant="body"
+            color="label"
+            style={{ flex: 1 }}
+            numberOfLines={1}
+          >
+            {row.displayName}
+            {isSelf ? ' (you)' : ''}
+          </Text>
+          {row.kind === 'pending' ? (
+            <View
+              style={[
+                styles.statusPill,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft,
+                  borderRadius: 999,
+                  marginLeft: 8,
+                },
+              ]}
+            >
+              <View
+                style={{
+                  width: 5,
+                  height: 5,
+                  borderRadius: 3,
+                  backgroundColor: t.palette.orange.base,
+                  marginRight: 4,
+                }}
+              />
+              <Text
+                variant="caption2"
+                style={{
+                  color: t.palette.orange.base,
+                  fontWeight: '700',
+                  letterSpacing: 0.4,
+                }}
+              >
+                INVITE
+              </Text>
+            </View>
+          ) : null}
+        </View>
+        <Text
+          variant="caption1"
+          color="secondary"
+          numberOfLines={1}
+          style={{ marginTop: 2 }}
+        >
+          {phone}
+          {countLabel ? `  ·  ${countLabel === 'All' ? 'All projects' : `${countLabel} project${countLabel === '1' ? '' : 's'}`}` : ''}
+        </Text>
+      </View>
+
+      {/* Role pill */}
+      <Pressable
+        onPress={editable ? onOpenRole : undefined}
+        disabled={!editable}
+        hitSlop={6}
+        style={({ pressed }) => [
+          styles.rolePill,
+          {
+            backgroundColor:
+              t.mode === 'dark' ? tone.softDark : tone.soft,
+            borderRadius: 999,
+            marginLeft: 8,
+          },
+          pressed && editable && { opacity: 0.85 },
+          !editable && { opacity: 0.7 },
+        ]}
+      >
+        <Text
+          variant="caption2"
+          style={{
+            color: tone.base,
+            fontWeight: '700',
+            letterSpacing: 0.3,
+          }}
+          numberOfLines={1}
+        >
+          {roleLabel.toUpperCase()}
+        </Text>
+        {editable ? (
+          <Ionicons
+            name="chevron-down"
+            size={11}
+            color={tone.base}
+            style={{ marginLeft: 3 }}
+          />
+        ) : null}
+      </Pressable>
+
+      {divider ? (
+        <View
+          style={[
+            styles.rowDivider,
+            { backgroundColor: t.colors.separator, left: 64 },
+          ]}
+        />
+      ) : null}
+    </Pressable>
+  );
+}
+
+function SummaryCol({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <View style={styles.summaryCol}>
+      <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4 }}>
+        {label}
+      </Text>
+      <Text
+        variant="title3"
+        style={{ color, marginTop: 4, fontWeight: '700' }}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingVertical: 10,
-    backgroundColor: color.bg,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
     gap: 10,
   },
-  backBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
-  headerCenter: { flex: 1 },
-  searchWrap: {
+  iconBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Search
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: screenInset,
-    marginTop: space.sm,
-    marginBottom: space.xs,
-    paddingHorizontal: space.sm,
-    minHeight: 44,
-    borderRadius: radius.sm,
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  searchIcon: { marginRight: 8 },
-  searchInput: {
+  searchInput: { flex: 1, paddingVertical: 0, margin: 0 },
+
+  // Summary
+  summaryCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  summaryCol: {
     flex: 1,
-    fontSize: 16,
-    color: color.text,
-    paddingVertical: 8,
+    alignItems: 'center',
   },
-  listContent: { paddingBottom: space.xxl + 72 },
-  footer: {
+  summaryDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    marginHorizontal: 10,
+  },
+
+  // Section
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingBottom: 7,
+  },
+  sectionCard: {
+    marginHorizontal: 16,
+    overflow: 'hidden',
+  },
+
+  // Member row
+  memberRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 64,
+    position: 'relative',
+  },
+  avatar: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rolePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    maxWidth: 130,
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  rowDivider: {
     position: 'absolute',
-    left: 0,
-    right: 0,
     bottom: 0,
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: space.lg,
-    backgroundColor: color.bg,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
+    right: 0,
+    height: 0.5,
+  },
+
+  // Empty
+  emptyIcon: {
+    width: 56,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Floating add button
+  floatingBar: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
   },
   addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    minHeight: 48,
-    borderRadius: radius.sm,
-    backgroundColor: color.primary,
+    paddingVertical: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
   },
-  sectionHeader: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: space.xs,
-  },
-  sectionLabel: { letterSpacing: 0.6 },
-  card: {
-    marginHorizontal: screenInset,
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    overflow: 'hidden',
-  },
-  cardFirst: {},
-  cardSep: { height: space.xs },
-  cardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingLeft: space.sm,
-    paddingRight: space.sm,
-    gap: 8,
-  },
-  cardBody: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    minWidth: 0,
-  },
-  statusCol: {
-    justifyContent: 'center',
-    paddingLeft: 4,
-    minWidth: 52,
-    alignItems: 'flex-end',
-  },
-  avatar: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: color.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  avatarPending: {
-    backgroundColor: color.bgGrouped,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    borderStyle: 'dashed',
-  },
-  rowBody: { flex: 1, minWidth: 0, gap: 2 },
-  projectCount: {
-    color: color.primary,
-    marginTop: 2,
-  },
-  rolePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: radius.sm,
-    backgroundColor: color.primarySoft,
-    maxWidth: 120,
-  },
-  rolePillClient: {
-    backgroundColor: 'rgba(234, 88, 12, 0.12)',
-  },
-  empty: { padding: space.lg, alignItems: 'center', justifyContent: 'center' },
 });

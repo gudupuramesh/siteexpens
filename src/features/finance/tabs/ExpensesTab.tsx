@@ -1,29 +1,28 @@
 /**
- * Expenses tab — org-level expense + income ledger (orgFinances).
+ * Expenses tab — v2 design.
  *
- * Visible structure:
- *  - Top ribbon (MTD OUT / SALARIES / NET)
- *  - Inline search bar with filter icon
- *  - List
- *  - FAB → add new entry
+ * Layout:
+ *   1. KPI strip (MTD OUT / SALARIES / NET) — three soft surface cards
+ *   2. Search bar + filter button (rounded inputs sitting on the ambient bg)
+ *   3. Active-filter chip (only when not "All")
+ *   4. List of expense rows (FormGroup-style surface card per row)
+ *   5. FAB → /finance/new-expense
  *
- * Category filter has been moved into a bottom-sheet (opens from the
- * filter icon next to search) so the chip rail no longer steals
- * vertical space on the main view.
+ * Sits inside the Overview screen's pager — no own header / ambient bg.
+ * Bottom padding accounts for the floating tab bar so the last row + FAB
+ * never collide with the floating bottom navigation.
  */
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
   FlatList,
-  Modal,
   Pressable,
-  ScrollView,
+  RefreshControl,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { usePermissions } from '@/src/features/org/usePermissions';
@@ -35,8 +34,13 @@ import {
 import { useOrgFinances } from '@/src/features/finances/useOrgFinances';
 import { useOrgFinancesTotals } from '@/src/features/finances/useOrgFinancesTotals';
 import { formatInr } from '@/src/lib/format';
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, screenInset, shadow, space } from '@/src/theme';
+
+import { FAB } from '@/src/ui/v2/FAB';
+import { IconTile } from '@/src/ui/v2/IconTile';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
+import { useThemeV2 } from '@/src/theme/v2';
 
 type ChipKey = 'all' | OrgFinanceCategory | 'salary_group';
 
@@ -54,12 +58,26 @@ const CATEGORY_FILTERS: { key: ChipKey; label: string }[] = [
   { key: 'other', label: 'Other' },
 ];
 
+const CAT_ICON: Record<OrgFinanceCategory, keyof typeof import('@expo/vector-icons').Ionicons.glyphMap> = {
+  salary: 'cash-outline',
+  rent: 'business-outline',
+  utilities: 'flash-outline',
+  internet: 'wifi-outline',
+  office_supplies: 'cube-outline',
+  software: 'desktop-outline',
+  travel: 'car-outline',
+  marketing: 'megaphone-outline',
+  professional_fees: 'briefcase-outline',
+  other: 'ellipsis-horizontal-circle-outline',
+};
+
 function catLabel(c: OrgFinanceCategory) {
   return ORG_FINANCE_CATEGORIES.find((x) => x.key === c)?.label ?? c;
 }
 
 export function ExpensesTab() {
-  const insets = useSafeAreaInsets();
+  const t = useThemeV2();
+  const refresh = usePullToRefresh();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? undefined;
   const { data: rows, loading } = useOrgFinances(orgId, { limit: 200 });
@@ -95,68 +113,124 @@ export function ExpensesTab() {
     [chip],
   );
 
-  const renderItem = ({ item }: { item: OrgFinance }) => (
-    <Pressable
-      onPress={() => router.push(`/(app)/finance/${item.id}` as never)}
-      style={({ pressed }) => [styles.row, pressed && { opacity: 0.85 }]}
-    >
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text variant="bodyStrong" color="text" numberOfLines={1}>
-          {catLabel(item.category)} · {item.kind === 'income' ? 'Income' : 'Expense'}
+  const renderItem = ({ item }: { item: OrgFinance }) => {
+    const dt = item.paidAt?.toDate();
+    const date = dt
+      ? dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+      : '—';
+    const isIncome = item.kind === 'income';
+    const ion = CAT_ICON[item.category] ?? 'receipt-outline';
+    const amt = isIncome ? `+${formatInr(item.amount)}` : `−${formatInr(item.amount)}`;
+    const tone = isIncome ? t.palette.green.base : t.palette.red.base;
+    const tileColor = isIncome ? t.palette.green.base : t.colors.secondary;
+    return (
+      <Pressable
+        onPress={() => router.push(`/(app)/finance/${item.id}` as never)}
+        style={({ pressed }) => [
+          styles.row,
+          {
+            backgroundColor: t.colors.surface,
+            borderRadius: t.radii.card,
+            borderColor:
+              t.mode === 'dark'
+                ? 'rgba(255,255,255,0.05)'
+                : 'rgba(0,0,0,0.04)',
+            borderWidth: t.hairline,
+          },
+          pressed && { opacity: 0.85 },
+        ]}
+      >
+        <IconTile icon={ion} color={tileColor} size={36} />
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text variant="callout" color="label" numberOfLines={1}>
+            {catLabel(item.category)}
+          </Text>
+          <Text variant="caption1" color="secondary" numberOfLines={1} style={{ marginTop: 2 }}>
+            {item.payee ? `${item.payee} · ${date}` : date}
+            {item.note ? ` · ${item.note}` : ''}
+          </Text>
+        </View>
+        <Text
+          variant="callout"
+          style={{
+            color: tone,
+            fontWeight: '600',
+            fontVariant: ['tabular-nums'],
+          }}
+          numberOfLines={1}
+        >
+          {amt}
         </Text>
-        <Text variant="caption" color="textMuted" numberOfLines={1}>
-          {item.payee || '—'}
-          {item.paidAt
-            ? ` · ${item.paidAt.toDate().toLocaleDateString('en-IN')}`
-            : ''}
-        </Text>
-      </View>
-      <Text variant="bodyStrong" color={item.kind === 'income' ? 'success' : 'danger'}>
-        {item.kind === 'income' ? '+' : '−'}
-        {formatInr(item.amount)}
-      </Text>
-      <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
-    </Pressable>
-  );
+        <Ionicons name="chevron-forward" size={14} color={t.colors.tertiary} style={{ marginLeft: 4 }} />
+      </Pressable>
+    );
+  };
 
   return (
     <View style={styles.container}>
-      <View style={styles.ribbon}>
-        <View style={styles.ribbonCell}>
-          <Text variant="caption" color="textMuted">MTD OUT</Text>
-          <Text variant="bodyStrong" color="danger">{formatInr(mtd.expense)}</Text>
-        </View>
-        <View style={styles.ribbonSep} />
-        <View style={styles.ribbonCell}>
-          <Text variant="caption" color="textMuted">SALARIES</Text>
-          <Text variant="bodyStrong" color="text">{formatInr(mtd.salaryExpense)}</Text>
-        </View>
-        <View style={styles.ribbonSep} />
-        <View style={styles.ribbonCell}>
-          <Text variant="caption" color="textMuted">NET</Text>
-          <Text variant="bodyStrong" color={mtd.net >= 0 ? 'success' : 'danger'}>
-            {formatInr(mtd.net)}
-          </Text>
+      {/* KPI strip — one combined card with hairline dividers (matches the
+          Finance Overview pattern). Values neutral; only NET goes red when
+          negative because that's an actual problem to act on. */}
+      <View style={styles.kpiRowWrap}>
+        <View
+          style={[
+            styles.kpiCard,
+            {
+              backgroundColor: t.colors.surface,
+              borderRadius: t.radii.card,
+              borderColor:
+                t.mode === 'dark'
+                  ? 'rgba(255,255,255,0.05)'
+                  : 'rgba(0,0,0,0.05)',
+              borderWidth: t.hairline,
+            },
+          ]}
+        >
+          <KpiCell label="MTD OUT" value={formatInr(mtd.expense)} />
+          <View style={[styles.kpiDivider, { backgroundColor: t.colors.separator }]} />
+          <KpiCell label="SALARIES" value={formatInr(mtd.salaryExpense)} />
+          <View style={[styles.kpiDivider, { backgroundColor: t.colors.separator }]} />
+          <KpiCell
+            label="NET"
+            value={formatInr(mtd.net)}
+            tone={mtd.net < 0 ? t.palette.red.base : undefined}
+          />
         </View>
       </View>
 
       {/* Search + filter row */}
       <View style={styles.searchRow}>
-        <View style={styles.searchInputWrap}>
-          <Ionicons name="search-outline" size={16} color={color.textMuted} />
+        <View
+          style={[
+            styles.searchInputWrap,
+            {
+              backgroundColor: t.colors.surface,
+              borderRadius: t.radii.field,
+              borderColor:
+                t.mode === 'dark'
+                  ? 'rgba(255,255,255,0.06)'
+                  : 'rgba(0,0,0,0.05)',
+              borderWidth: t.hairline,
+            },
+          ]}
+        >
+          <Ionicons name="search" size={16} color={t.colors.tertiary} />
           <TextInput
             value={search}
             onChangeText={setSearch}
             placeholder="Search payee, note, category"
-            placeholderTextColor={color.textFaint}
-            style={styles.searchInput}
+            placeholderTextColor={t.colors.tertiary}
+            style={[
+              styles.searchInput,
+              { color: t.colors.label, ...t.type.callout },
+            ]}
             autoCapitalize="none"
             autoCorrect={false}
             returnKeyType="search"
           />
           {search.length > 0 ? (
-            <Pressable onPress={() => setSearch('')} hitSlop={8}>
-              <Ionicons name="close-circle" size={16} color={color.textFaint} />
+            <Pressable onPress={() => setSearch('')} hitSlop={10}>
+              <Ionicons name="close-circle" size={16} color={t.colors.tertiary} />
             </Pressable>
           ) : null}
         </View>
@@ -164,30 +238,53 @@ export function ExpensesTab() {
           onPress={() => setFilterOpen(true)}
           style={({ pressed }) => [
             styles.filterBtn,
+            {
+              backgroundColor: filterActive
+                ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                : t.colors.surface,
+              borderRadius: t.radii.field,
+              borderColor: filterActive
+                ? t.palette.blue.base + '33'
+                : (t.mode === 'dark' ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'),
+              borderWidth: t.hairline,
+            },
             pressed && { opacity: 0.7 },
-            filterActive && styles.filterBtnActive,
           ]}
           accessibilityLabel="Open category filter"
         >
           <Ionicons
             name="options-outline"
             size={18}
-            color={filterActive ? color.primary : color.text}
+            color={filterActive ? t.palette.blue.base : t.colors.label}
           />
-          {filterActive ? <View style={styles.filterDot} /> : null}
         </Pressable>
       </View>
 
-      {/* Active filter pill (only when not "All") — gives the user a
-          single-tap way to clear without re-opening the sheet. */}
+      {/* Active filter pill */}
       {filterActive ? (
         <View style={styles.activeFilterRow}>
-          <View style={styles.activeFilterPill}>
-            <Text variant="caption" color="primary">
-              {activeFilterLabel}
+          <View
+            style={[
+              styles.activeFilterPill,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                borderRadius: 999,
+              },
+            ]}
+          >
+            <Text
+              variant="caption2"
+              style={{
+                color: t.palette.blue.base,
+                fontWeight: '600',
+                letterSpacing: 0.6,
+              }}
+            >
+              {activeFilterLabel.toUpperCase()}
             </Text>
             <Pressable onPress={() => setChip('all')} hitSlop={6}>
-              <Ionicons name="close" size={12} color={color.primary} />
+              <Ionicons name="close" size={12} color={t.palette.blue.base} />
             </Pressable>
           </View>
         </View>
@@ -197,10 +294,19 @@ export function ExpensesTab() {
         data={filtered}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
-        contentContainerStyle={styles.list}
+        refreshControl={<RefreshControl {...refresh.props} />}
+        contentContainerStyle={[
+          styles.list,
+          { paddingBottom: t.region.tabBarBuffer + 80 },
+        ]}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Text variant="meta" color="textMuted">
+            <Ionicons
+              name="receipt-outline"
+              size={28}
+              color={t.colors.tertiary}
+            />
+            <Text variant="footnote" color="secondary" style={{ marginTop: 8 }}>
               {loading
                 ? 'Loading…'
                 : search || filterActive
@@ -212,106 +318,99 @@ export function ExpensesTab() {
       />
 
       {canWrite ? (
-        <Pressable
+        <FAB
+          icon="add"
           onPress={() => router.push('/(app)/finance/new-expense' as never)}
-          style={[styles.fab, { bottom: 24 + insets.bottom }]}
           accessibilityLabel="Add finance entry"
-        >
-          <Ionicons name="add" size={26} color={color.onPrimary} />
-        </Pressable>
+        />
       ) : null}
 
-      {/* Category filter modal */}
-      <Modal
-        visible={filterOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setFilterOpen(false)}
+      {/* Category filter sheet */}
+      <SelectSheet
+        open={filterOpen}
+        title="Filter by category"
+        options={CATEGORY_FILTERS}
+        selected={chip}
+        onPick={(k) => setChip(k as ChipKey)}
+        onClose={() => setFilterOpen(false)}
+      />
+    </View>
+  );
+}
+
+/**
+ * Compact KPI cell — one column inside the combined hairline-divided card.
+ * Label + value stacked, both neutral by default. Pass `tone` to override
+ * the value colour (used only for NET when it's negative).
+ */
+function KpiCell({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: string;
+}) {
+  const t = useThemeV2();
+  return (
+    <View style={styles.kpiCell}>
+      <Text
+        variant="caption2"
+        color="tertiary"
+        style={{ letterSpacing: 0.6 }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
       >
-        <View style={styles.modalBackdrop}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setFilterOpen(false)}
-          />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <View style={styles.modalHeader}>
-              <Text variant="bodyStrong" color="text">Filter by category</Text>
-              <Pressable onPress={() => setFilterOpen(false)} hitSlop={12}>
-                <Text variant="metaStrong" color="primary">Done</Text>
-              </Pressable>
-            </View>
-            <ScrollView contentContainerStyle={styles.filterScroll}>
-              {CATEGORY_FILTERS.map((c) => {
-                const on = chip === c.key;
-                return (
-                  <Pressable
-                    key={c.key}
-                    onPress={() => {
-                      setChip(c.key);
-                      setFilterOpen(false);
-                    }}
-                    style={({ pressed }) => [
-                      styles.filterRow,
-                      pressed && { backgroundColor: color.bgGrouped },
-                    ]}
-                  >
-                    <Text variant="body" color="text" style={{ flex: 1 }}>
-                      {c.label}
-                    </Text>
-                    {on ? (
-                      <Ionicons name="checkmark" size={18} color={color.primary} />
-                    ) : null}
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-            {filterActive ? (
-              <View style={styles.modalFooter}>
-                <Pressable
-                  onPress={() => {
-                    setChip('all');
-                    setFilterOpen(false);
-                  }}
-                  style={({ pressed }) => [
-                    styles.clearAllBtn,
-                    pressed && { opacity: 0.7 },
-                  ]}
-                >
-                  <Ionicons name="close-circle-outline" size={16} color={color.danger} />
-                  <Text variant="metaStrong" color="danger">Clear filter</Text>
-                </Pressable>
-              </View>
-            ) : null}
-          </View>
-        </View>
-      </Modal>
+        {label}
+      </Text>
+      <Text
+        variant="footnote"
+        style={{
+          color: tone ?? t.colors.label,
+          fontWeight: '600',
+          fontVariant: ['tabular-nums'],
+          marginTop: 2,
+        }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
+        {value}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  ribbon: {
-    flexDirection: 'row',
-    marginHorizontal: screenInset,
-    marginTop: space.sm,
-    paddingVertical: space.md,
-    paddingHorizontal: space.sm,
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-  },
-  ribbonCell: { flex: 1, alignItems: 'center', gap: 4 },
-  ribbonSep: { width: 1, backgroundColor: color.borderStrong },
 
+  // KPI strip — single combined card with hairline dividers
+  kpiRowWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+  },
+  kpiCard: {
+    flexDirection: 'row',
+    overflow: 'hidden',
+  },
+  kpiCell: {
+    flex: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+  },
+  kpiDivider: {
+    width: StyleSheet.hairlineWidth,
+  },
+
+  // Search + filter row
   searchRow: {
     flexDirection: 'row',
-    gap: space.sm,
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: 4,
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 6,
     alignItems: 'center',
   },
   searchInputWrap: {
@@ -320,49 +419,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
+    paddingVertical: 10,
   },
   searchInput: {
     flex: 1,
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    color: color.text,
-    padding: 0,
+    paddingVertical: 0,
+    margin: 0,
   },
   filterBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
-    position: 'relative',
-  },
-  filterBtnActive: {
-    borderColor: color.primary,
-    backgroundColor: color.primarySoft,
-  },
-  filterDot: {
-    position: 'absolute',
-    top: 6,
-    right: 8,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: color.primary,
-    borderWidth: 1,
-    borderColor: color.bg,
   },
 
+  // Active filter chip
   activeFilterRow: {
     flexDirection: 'row',
-    paddingHorizontal: screenInset,
+    paddingHorizontal: 16,
+    paddingTop: 4,
     paddingBottom: 4,
   },
   activeFilterPill: {
@@ -371,93 +446,23 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: radius.pill,
-    backgroundColor: color.primarySoft,
-    borderWidth: 1,
-    borderColor: color.primary,
   },
 
-  list: { paddingHorizontal: screenInset, paddingBottom: 100, paddingTop: space.xs },
+  // List
+  list: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    gap: 8,
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: space.md,
-    paddingHorizontal: space.sm,
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    marginBottom: space.xs,
-  },
-  empty: { padding: space.xl, alignItems: 'center' },
-  fab: {
-    position: 'absolute',
-    right: screenInset,
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: color.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadow.fab,
-  },
-
-  // Filter modal
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  modalSheet: {
-    backgroundColor: color.bg,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    paddingTop: 6,
-    paddingBottom: 24,
-    maxHeight: '80%',
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.border,
-    alignSelf: 'center',
-    marginBottom: 8,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.border,
-  },
-  filterScroll: { paddingBottom: 8 },
-  filterRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: space.md,
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
-  },
-  modalFooter: {
-    paddingHorizontal: space.md,
-    paddingTop: space.sm,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.border,
-  },
-  clearAllBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+    gap: 12,
     paddingVertical: 12,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.danger,
-    backgroundColor: color.dangerSoft,
+    paddingHorizontal: 12,
+  },
+  empty: {
+    paddingTop: 60,
+    alignItems: 'center',
   },
 });

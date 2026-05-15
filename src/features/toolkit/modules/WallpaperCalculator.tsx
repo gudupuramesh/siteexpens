@@ -15,8 +15,8 @@
 import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -31,6 +31,7 @@ export function WallpaperCalculator({
   visible: boolean;
   onClose: () => void;
 }) {
+  const t = useThemeV2();
   const [wallW, setWallW] = useState('20');
   const [wallH, setWallH] = useState('9');
   const [rollWIn, setRollWIn] = useState(String(WALLPAPER_ROLL_DEFAULT.widthIn));
@@ -72,13 +73,12 @@ export function WallpaperCalculator({
   const isWarn = result && 'warn' in result;
   const ok = result && !('warn' in result);
 
+  const warnBg =
+    t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft;
+  const warnFg = t.palette.orange.base;
+
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="Wallpaper Calculator"
-      eyebrow="SOFT FINISHES"
-    >
+    <ToolModal visible={visible} onClose={onClose} title="Wallpaper calculator">
       <Section title="Wall">
         <View style={styles.row2}>
           <View style={styles.col}>
@@ -134,7 +134,24 @@ export function WallpaperCalculator({
 
       <Section title="Order quantity">
         {isWarn && result && 'warn' in result ? (
-          <Text style={styles.warn}>{result.warn}</Text>
+          <View
+            style={[
+              styles.warn,
+              {
+                backgroundColor: warnBg,
+                borderColor: warnFg + '33',
+                borderWidth: t.hairline,
+                borderRadius: t.radii.field,
+              },
+            ]}
+          >
+            <Text
+              variant="footnote"
+              style={{ color: warnFg, lineHeight: 18 }}
+            >
+              {result.warn}
+            </Text>
+          </View>
         ) : ok && result && !('warn' in result) ? (
           <>
             <ResultRow
@@ -152,9 +169,19 @@ export function WallpaperCalculator({
             />
           </>
         ) : (
-          <Text style={styles.warn}>
-            Enter wall and roll dimensions to compute.
-          </Text>
+          <View
+            style={[
+              styles.warn,
+              {
+                backgroundColor: t.colors.fill3,
+                borderRadius: t.radii.field,
+              },
+            ]}
+          >
+            <Text variant="footnote" color="secondary">
+              Enter wall and roll dimensions to compute.
+            </Text>
+          </View>
         )}
       </Section>
     </ToolModal>
@@ -162,15 +189,9 @@ export function WallpaperCalculator({
 }
 
 const styles = StyleSheet.create({
-  row2: { flexDirection: 'row', gap: space.sm },
+  row2: { flexDirection: 'row', gap: 10 },
   col: { flex: 1 },
   warn: {
-    fontSize: 13,
-    color: color.warning,
-    fontFamily: fontFamily.sans,
-    padding: space.sm,
-    backgroundColor: color.warningSoft,
-    borderRadius: 8,
-    lineHeight: 18,
+    padding: 12,
   },
 });

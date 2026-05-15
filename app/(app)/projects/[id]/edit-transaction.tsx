@@ -1,18 +1,29 @@
 /**
- * Edit Transaction screen. Pre-fills form from existing transaction data.
+ * Edit Transaction — v2 design.
+ *
+ * Pre-fills form from existing transaction data. Same shape as add-transaction
+ * but without the type/party-create flow:
+ *
+ *   1. SheetHeader: Cancel · "Edit Payment In/Out" · Save
+ *   2. Hero amount card — colored sign + tabular amount + date pill
+ *   3. FormGroup "Party" — partyName InputRow
+ *   4. FormGroup "Details" — Description · Reference (InputRow)
+ *   5. FormGroup "Payment" — method pill row · cost code SelectSheet · status
+ *   6. Receipt strip (replace / clear)
+ *   7. Footer with camera + gallery action buttons
+ *
+ * Delete is a circular button in the header (right side).
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import * as ImagePicker from 'expo-image-picker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { Controller, useForm } from 'react-hook-form';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Image,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -41,11 +52,16 @@ import {
 } from '@/src/features/transactions/types';
 import { formatDate } from '@/src/lib/format';
 import { db } from '@/src/lib/firebase';
-import { Button } from '@/src/ui/Button';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
-import { color, radius, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const schema = z.object({
   amount: z.string().regex(/^\d+(\.\d{1,2})?$/, 'Enter a valid amount'),
@@ -61,11 +77,9 @@ const schema = z.object({
 type FormData = z.infer<typeof schema>;
 
 export default function EditTransactionScreen() {
-  // Editing a posted txn = finance write. Site Engineer / Supervisor
-  // can only "submit" new ones, not edit; they shouldn't reach this
-  // screen via UI but the guard catches deep links.
   useGuardedRoute({ capability: 'transaction.write' });
 
+  const t = useThemeV2();
   const params = useLocalSearchParams<{ id: string; txnId: string }>();
   const projectId = params.id;
   const txnId = params.txnId;
@@ -73,22 +87,16 @@ export default function EditTransactionScreen() {
   const { can } = usePermissions();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
-  const { data: transactions } = useTransactions(projectId);
+  const { data: transactions, loading: txnsLoading } = useTransactions(projectId);
 
   const txn = useMemo(
-    () => transactions.find((t) => t.id === txnId),
+    () => transactions.find((tx) => tx.id === txnId),
     [transactions, txnId],
   );
 
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showCategoryPicker, setShowCategoryPicker] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
-  // Receipt state — same shape as edit-laminate:
-  //   - existingReceipt   = what's in Firestore right now
-  //   - stagedReplacement = a freshly-picked local file waiting for save
-  //   - receiptCleared    = user tapped × on the existing receipt
-  // Upload happens during onSubmit, not pick. Old key is only deleted
-  // after the new doc-write succeeds.
   const [existingReceipt, setExistingReceipt] = useState<{
     publicUrl: string;
     key?: string;
@@ -122,41 +130,53 @@ export default function EditTransactionScreen() {
     mode: 'onChange',
   });
 
-  // Pre-fill when transaction loads
+  // Pre-fill the form ONCE per transaction.
+  //
+  // BUG (was here): the dep was `[txn, reset]`. `txn` is the result of
+  // `transactions.find(...)`, and `transactions` is a Firestore snapshot
+  // that re-emits with brand-new object references whenever the underlying
+  // listener fires (initial load, auth-token refresh, peer transactions
+  // changing, retry after a transient permission-denied, etc.).
+  //
+  // Each re-emit gave us a NEW `txn` reference (even when the content was
+  // identical), so this effect ran AGAIN, calling `reset(...)` and
+  // overwriting whatever the user had typed mid-edit. Result: type a digit
+  // → snapshot fires within a second → form snaps back to the original
+  // value. Looked like the input was rejecting the user's keystrokes.
+  //
+  // Fix: key the effect on `txn?.id` (a stable string). The transaction's
+  // identity doesn't change during an edit session, so the pre-fill runs
+  // exactly once when the screen first acquires the txn data, and never
+  // again. Field hydrations (`reset`, `setExistingReceipt`) are wrapped
+  // in a guard so a re-render with the same id doesn't re-hydrate.
+  const hydratedForId = useRef<string | null>(null);
   useEffect(() => {
-    if (txn) {
-      reset({
-        amount: String(txn.amount),
-        description: txn.description || '',
-        partyName: txn.partyName || '',
-        category: txn.category || '',
-        paymentMethod: txn.paymentMethod || '',
-        referenceNumber: txn.referenceNumber || '',
-        status: txn.status || 'paid',
-        date: txn.date ? txn.date.toDate() : new Date(),
+    if (!txn) return;
+    if (hydratedForId.current === txn.id) return;
+    hydratedForId.current = txn.id;
+    reset({
+      amount: String(txn.amount),
+      description: txn.description || '',
+      partyName: txn.partyName || '',
+      category: txn.category || '',
+      paymentMethod: txn.paymentMethod || '',
+      referenceNumber: txn.referenceNumber || '',
+      status: txn.status || 'paid',
+      date: txn.date ? txn.date.toDate() : new Date(),
+    });
+    if (txn.photoUrl) {
+      setExistingReceipt({
+        publicUrl: txn.photoUrl,
+        key: txn.photoStoragePath,
       });
-      // Hydrate the receipt UI from the existing Firestore values.
-      // Older docs may have a photoUrl without a photoStoragePath
-      // (pre-R2 era) — we still render the preview but won't be able
-      // to delete the old R2 object on replace.
-      if (txn.photoUrl) {
-        setExistingReceipt({
-          publicUrl: txn.photoUrl,
-          key: txn.photoStoragePath,
-        });
-      }
     }
-  }, [txn, reset]);
+  }, [txn?.id, txn, reset]);
 
   const selectedDate = watch('date');
   const selectedCategory = watch('category');
   const selectedPaymentMethod = watch('paymentMethod');
+  const selectedStatus = watch('status');
   const categoryLabel = TRANSACTION_CATEGORIES.find((c) => c.key === selectedCategory)?.label;
-
-  function handleDateChange(_: DateTimePickerEvent, date?: Date) {
-    setShowDatePicker(Platform.OS === 'ios');
-    if (date) setValue('date', date, { shouldDirty: true });
-  }
 
   async function pickReceipt(source: 'camera' | 'library') {
     if (!projectId || !txn) return;
@@ -180,8 +200,6 @@ export default function EditTransactionScreen() {
       ? await ImagePicker.launchCameraAsync(opts)
       : await ImagePicker.launchImageLibraryAsync(opts);
     if (result.canceled || !result.assets[0]) return;
-
-    // Stage the replacement locally — upload during Save.
     const asset = result.assets[0];
     setStagedReplacement({
       id: 'replacement',
@@ -195,7 +213,6 @@ export default function EditTransactionScreen() {
     if (!txnId || !projectId) return;
     setSubmitError(undefined);
     try {
-      // Step 1 — upload the staged replacement (if any).
       let newPhotoUrl: string | undefined;
       let newPhotoKey: string | undefined;
       if (stagedReplacement) {
@@ -216,10 +233,6 @@ export default function EditTransactionScreen() {
         newPhotoKey = uploaded[0].key;
       }
 
-      // Step 2 — Decide what to write:
-      //   - replaced → new url + key
-      //   - cleared → '' (FieldValue.delete via updateTransaction)
-      //   - neither → skip the photo fields
       let photoUrl: string | undefined;
       let photoStoragePath: string | undefined;
       if (newPhotoUrl) {
@@ -229,7 +242,6 @@ export default function EditTransactionScreen() {
         photoUrl = '';
         photoStoragePath = '';
       } else if (existingReceipt) {
-        // Preserve existing.
         photoUrl = existingReceipt.publicUrl;
         photoStoragePath = existingReceipt.key;
       }
@@ -248,7 +260,6 @@ export default function EditTransactionScreen() {
         photoStoragePath,
       });
 
-      // Step 3 — Delete the OLD R2 key only after doc-write succeeded.
       const oldKey = existingReceipt?.key;
       const shouldDeleteOld =
         oldKey && (newPhotoKey || receiptCleared) && oldKey !== newPhotoKey;
@@ -262,8 +273,6 @@ export default function EditTransactionScreen() {
           contentType: 'image/jpeg',
         });
       }
-      // Wait briefly so the parent screen's onSnapshot listener catches
-      // the just-updated doc before navigation completes.
       await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
@@ -274,7 +283,7 @@ export default function EditTransactionScreen() {
   }
 
   async function onDelete() {
-    Alert.alert('Delete Transaction', 'Are you sure? This cannot be undone.', [
+    Alert.alert('Delete transaction', 'Are you sure? This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -282,10 +291,6 @@ export default function EditTransactionScreen() {
         onPress: async () => {
           try {
             await db.collection('transactions').doc(txnId).delete();
-            // Clean up the receipt object in R2 + decrement project
-            // storage totals. Best-effort — if it fails we leave an
-            // orphan, but the txn doc is already gone so the UX is
-            // complete.
             const receiptKey = txn?.photoStoragePath ?? existingReceipt?.key;
             if (receiptKey && projectId) {
               void deleteR2Object({
@@ -306,365 +311,715 @@ export default function EditTransactionScreen() {
     ]);
   }
 
+  // Loading
+  if (!txn && txnsLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit transaction"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={styles.centered}>
+          <Text variant="footnote" color="secondary">Loading…</Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Loaded but the transaction wasn't found in the result set. Either it
+  // was deleted, or — much more commonly — Firestore Security Rules denied
+  // the parent query (stale auth token after a role/claims update). The
+  // pattern is: the device cached an ID token from before the user was
+  // added to the org or had their role bumped, so rules reject the read.
+  // Sign out + back in mints a fresh token with the current claims.
   if (!txn) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <Text variant="meta" color="textMuted">Loading...</Text>
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit transaction"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={[styles.centered, { padding: 32 }]}>
+          <Ionicons
+            name="alert-circle-outline"
+            size={32}
+            color={t.colors.tertiary}
+          />
+          <Text
+            variant="callout"
+            color="label"
+            style={{ marginTop: 12, textAlign: 'center', fontWeight: '600' }}
+          >
+            Couldn't load this transaction
+          </Text>
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 6, textAlign: 'center', lineHeight: 18 }}
+          >
+            It may have been deleted, or your access to this project has
+            changed. If you were just added to this workspace or your role
+            was updated, sign out and back in to refresh your session.
+          </Text>
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={6}
+            style={{ marginTop: 18 }}
+          >
+            <Text
+              variant="footnote"
+              style={{ color: t.palette.blue.base, fontWeight: '600' }}
+            >
+              Go back
+            </Text>
+          </Pressable>
         </View>
-      </Screen>
+      </View>
     );
   }
 
   const wf = txn.workflowStatus ?? 'posted';
   const mayEditTxn =
-    wf !== 'rejected' &&
-    (can('transaction.write') ||
-      (wf === 'pending_approval' &&
-        !!user?.uid &&
-        txn.createdBy === user.uid &&
-        can('transaction.submit')));
+    wf !== 'rejected'
+    && (can('transaction.write')
+      || (wf === 'pending_approval'
+        && !!user?.uid
+        && txn.createdBy === user.uid
+        && can('transaction.submit')));
   const mayDeleteTxn =
-    can('transaction.write') ||
-    (wf === 'pending_approval' &&
-      !!user?.uid &&
-      txn.createdBy === user.uid &&
-      can('transaction.submit'));
+    can('transaction.write')
+    || (wf === 'pending_approval'
+      && !!user?.uid
+      && txn.createdBy === user.uid
+      && can('transaction.submit'));
 
   if (wf === 'rejected') {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.navBar}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="arrow-back" size={22} color={color.text} />
-          </Pressable>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-            Transaction rejected
-          </Text>
-          <View style={styles.navBtn} />
-        </View>
-        <View style={{ flex: 1, padding: space.md }}>
-          <Text variant="meta" color="textMuted">
+        <AmbientBackground />
+        <SheetHeader
+          title="Transaction rejected"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={[styles.centered, { padding: 32 }]}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
             This expense was rejected and cannot be edited.
           </Text>
-          {!!txn.rejectionNote && (
-            <Text variant="meta" color="text" style={{ marginTop: space.sm }}>
+          {txn.rejectionNote ? (
+            <Text variant="footnote" color="label" style={{ marginTop: 12, textAlign: 'center' }}>
               {txn.rejectionNote}
             </Text>
-          )}
+          ) : null}
         </View>
-      </Screen>
+      </View>
     );
   }
 
   if (!mayEditTxn) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.navBar}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="arrow-back" size={22} color={color.text} />
-          </Pressable>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-            Cannot edit
-          </Text>
-          <View style={styles.navBtn} />
-        </View>
-        <View style={{ flex: 1, padding: space.md }}>
-          <Text variant="meta" color="textMuted">
+        <AmbientBackground />
+        <SheetHeader
+          title="Cannot edit"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={[styles.centered, { padding: 32 }]}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center' }}>
             You do not have permission to edit this transaction.
           </Text>
         </View>
-      </Screen>
+      </View>
     );
   }
 
+  const heroAmountColor = isPaymentIn ? t.palette.green.base : t.palette.red.base;
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="arrow-back" size={22} color={color.text} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>EXPENSE</Text>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-            Edit {isPaymentIn ? 'Payment In' : 'Payment Out'}
-          </Text>
-        </View>
-        {mayDeleteTxn ? (
-          <Pressable onPress={onDelete} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="trash-outline" size={20} color={color.danger} />
-          </Pressable>
-        ) : (
-          <View style={styles.navBtn} />
-        )}
-      </View>
-
-      <View style={styles.hero}>
-        <Text variant="caption" color="textMuted" style={styles.heroLabel}>
-          AMOUNT - INR
-        </Text>
-        <View style={styles.heroAmountRow}>
-          <Text variant="title" style={{ color: isPaymentIn ? color.success : color.primary }}>
-            {isPaymentIn ? '+ Rs' : '- Rs'}
-          </Text>
-          <Controller control={control} name="amount" render={({ field: { onChange, onBlur, value } }) => (
-            <TextInput
-              value={value}
-              onChangeText={(t) => onChange(t.replace(/[^\d.]/g, ''))}
-              onBlur={onBlur}
-              placeholder="0"
-              keyboardType="numeric"
-              style={styles.heroAmountInput}
-              placeholderTextColor={color.textFaint}
-            />
-          )} />
-        </View>
-        <Pressable onPress={() => setShowDatePicker(true)} style={styles.dateChip}>
-          <Text variant="metaStrong" color="text">{formatDate(selectedDate)}</Text>
-          <Ionicons name="chevron-down" size={14} color={color.textMuted} />
-        </Pressable>
-      </View>
+      <SheetHeader
+        title={`Edit ${isPaymentIn ? 'Payment In' : 'Payment Out'}`}
+        cancelLabel="Cancel"
+        saveLabel="Save"
+        saveLoading={isSubmitting}
+        saveDisabled={!isValid || (!isDirty && !stagedReplacement && !receiptCleared) || !orgId}
+        onCancel={() => router.back()}
+        onSave={() => void handleSubmit(onSubmit)()}
+      />
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <ScrollView contentContainerStyle={styles.scroll} keyboardDismissMode="on-drag" showsVerticalScrollIndicator={false}>
-          <Controller control={control} name="partyName" render={({ field: { onChange, onBlur, value } }) => (
-            <TextField label="Party Name *" placeholder="Party name" value={value} onChangeText={onChange} onBlur={onBlur} error={errors.partyName?.message} square strongBorder />
-          )} />
-          {errors.amount?.message ? (
-            <Text variant="caption" color="danger" style={{ marginTop: 2 }}>
-              {errors.amount.message}
-            </Text>
-          ) : null}
-
-          <Controller control={control} name="description" render={({ field: { onChange, onBlur, value } }) => (
-            <TextField label="Description" placeholder="Description" value={value ?? ''} onChangeText={onChange} onBlur={onBlur} square strongBorder />
-          )} />
-
-          <Controller control={control} name="referenceNumber" render={({ field: { onChange, onBlur, value } }) => (
-            <TextField label="Reference Number" placeholder="Bill / Invoice number" value={value ?? ''} onChangeText={onChange} onBlur={onBlur} square strongBorder />
-          )} />
-
-          {/* Payment Method */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>PAYMENT METHOD</Text>
-          <View style={styles.methodRow}>
-            {PAYMENT_METHODS.map((m) => {
-              const active = selectedPaymentMethod === m.key;
-              return (
-                <Pressable key={m.key} onPress={() => setValue('paymentMethod', active ? '' : m.key, { shouldDirty: true })} style={[styles.methodChip, active && styles.methodChipActive]}>
-                  <Ionicons name={m.icon as any} size={16} color={active ? color.onPrimary : color.textMuted} />
-                  <Text variant="caption" style={{ color: active ? color.onPrimary : color.text, textAlign: 'center' }}>{m.label}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {/* Category */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>COST CODE</Text>
-          <Pressable onPress={() => setShowCategoryPicker(true)} style={styles.dropdownField}>
-            <Text variant="body" color={categoryLabel ? 'text' : 'textFaint'}>{categoryLabel ?? 'Select category'}</Text>
-            <Ionicons name="chevron-down" size={18} color={color.textMuted} />
-          </Pressable>
-
-          {/* Status */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>STATUS</Text>
-          <View style={styles.methodRow}>
-            {(['paid', 'pending', 'partial'] as const).map((s) => {
-              const active = watch('status') === s;
-              return (
-                <Pressable key={s} onPress={() => setValue('status', s, { shouldDirty: true })} style={[styles.statusChip, active && styles.statusChipActive]}>
-                  <Text variant="caption" style={{ color: active ? color.onPrimary : color.textMuted }}>{s.charAt(0).toUpperCase() + s.slice(1)}</Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {showDatePicker && (
-            <DateTimePicker value={selectedDate} mode="date" display={Platform.OS === 'ios' ? 'inline' : 'default'} onChange={handleDateChange} />
-          )}
-
-          {/* Receipt section — pre-filled from txn.photoUrl. Camera +
-              Library let the user attach (or replace) a receipt. The
-              old R2 object is deleted only after a successful save. */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>RECEIPT</Text>
-          {(stagedReplacement || (existingReceipt && !receiptCleared)) ? (
-            <View style={styles.receiptRow}>
-              <View style={styles.receiptThumbWrap}>
-                <Image
-                  source={{ uri: stagedReplacement?.localUri ?? existingReceipt?.publicUrl ?? '' }}
-                  style={styles.receiptThumb}
-                  resizeMode="cover"
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Hero amount card */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+            <View
+              style={[
+                styles.heroCard,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: t.radii.hero,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+              ]}
+            >
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ letterSpacing: 0.5 }}
+              >
+                AMOUNT · INR
+              </Text>
+              <View style={styles.heroAmountRow}>
+                <Text
+                  variant="title1"
+                  style={{ color: heroAmountColor, fontWeight: '700' }}
+                >
+                  {isPaymentIn ? '+ ₹' : '− ₹'}
+                </Text>
+                <Controller
+                  control={control}
+                  name="amount"
+                  render={({ field: { onChange, onBlur, value } }) => (
+                    <TextInput
+                      value={value}
+                      onChangeText={(txt) => onChange(txt.replace(/[^\d.]/g, ''))}
+                      onBlur={onBlur}
+                      placeholder="0"
+                      keyboardType="decimal-pad"
+                      style={[
+                        styles.heroAmountInput,
+                        {
+                          color: heroAmountColor,
+                          ...t.type.title1,
+                          fontWeight: '700',
+                        },
+                      ]}
+                      placeholderTextColor={t.colors.tertiary}
+                    />
+                  )}
                 />
               </View>
-              <View style={{ flex: 1 }}>
-                <Text variant="metaStrong" color="text">
-                  {stagedReplacement ? 'Replacement queued' : 'Receipt attached'}
-                </Text>
-                <Text variant="caption" color="textMuted">
-                  {stagedReplacement
-                    ? 'Will upload when you tap Save.'
-                    : 'Tap a button below to replace.'}
-                </Text>
-              </View>
               <Pressable
-                onPress={() => {
-                  setStagedReplacement(null);
-                  setReceiptCleared(!!existingReceipt);
-                }}
-                hitSlop={8}
+                onPress={() => setShowDatePicker(true)}
+                hitSlop={6}
+                style={({ pressed }) => [
+                  styles.dateChip,
+                  {
+                    backgroundColor: t.colors.fill3,
+                    borderRadius: 999,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
               >
-                <Ionicons name="close-circle" size={20} color={color.textFaint} />
+                <Ionicons name="calendar-outline" size={13} color={t.colors.label} />
+                <Text
+                  variant="footnote"
+                  color="label"
+                  style={{ fontWeight: '600', marginLeft: 6 }}
+                >
+                  {formatDate(selectedDate)}
+                </Text>
+                <Ionicons
+                  name="chevron-down"
+                  size={11}
+                  color={t.colors.tertiary}
+                  style={{ marginLeft: 4 }}
+                />
               </Pressable>
             </View>
-          ) : (
-            <View style={[styles.receiptRow, { justifyContent: 'center' }]}>
-              <Text variant="caption" color="textMuted">No receipt attached</Text>
-            </View>
-          )}
-          <View style={styles.receiptBtnRow}>
-            <Pressable
-              onPress={() => pickReceipt('camera')}
-              style={({ pressed }) => [
-                styles.receiptBtn,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Ionicons name="camera-outline" size={18} color={color.primary} />
-              <Text variant="metaStrong" style={{ color: color.primary }}>Camera</Text>
-            </Pressable>
-            <Pressable
-              onPress={() => pickReceipt('library')}
-              style={({ pressed }) => [
-                styles.receiptBtn,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              <Ionicons name="cloud-upload-outline" size={18} color={color.primary} />
-              <Text variant="metaStrong" style={{ color: color.primary }}>Library</Text>
-            </Pressable>
           </View>
 
-          {submitError && <Text variant="caption" color="danger" style={{ marginTop: space.sm }}>{submitError}</Text>}
-        </ScrollView>
+          {/* Party */}
+          <FormGroup header="Party">
+            <Controller
+              control={control}
+              name="partyName"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Name"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Party name"
+                  autoCapitalize="words"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+          {errors.partyName?.message ? (
+            <FieldNote text={errors.partyName.message} tone={t.palette.red.base} />
+          ) : null}
 
-        <View style={styles.footer}>
-          <Button
-            label={savePhase ?? 'Update Transaction'}
-            onPress={handleSubmit(onSubmit)}
-            loading={isSubmitting}
-            // Save enabled when form changed OR receipt staging changed.
-            disabled={!isValid || (!isDirty && !stagedReplacement && !receiptCleared)}
-          />
-        </View>
+          {/* Details */}
+          <FormGroup header="Details">
+            <Controller
+              control={control}
+              name="description"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Description"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. Cement purchase"
+                  autoCapitalize="sentences"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="referenceNumber"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Reference"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Bill / Invoice #"
+                  autoCapitalize="characters"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+          {errors.amount?.message ? (
+            <FieldNote text={errors.amount.message} tone={t.palette.red.base} />
+          ) : null}
+
+          {/* Payment */}
+          <FormGroup header="Payment">
+            <View style={styles.methodBlock}>
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingTop: 12 }}
+              >
+                METHOD
+              </Text>
+              <View style={styles.methodRow}>
+                {PAYMENT_METHODS.map((m) => {
+                  const active = selectedPaymentMethod === m.key;
+                  return (
+                    <Pressable
+                      key={m.key}
+                      onPress={() => setValue('paymentMethod', active ? '' : m.key, { shouldDirty: true })}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.methodChip,
+                        {
+                          backgroundColor: active
+                            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                            : t.colors.fill3,
+                          borderRadius: 999,
+                          borderColor: active ? t.palette.blue.base + '33' : 'transparent',
+                          borderWidth: active ? 1 : 0,
+                        },
+                        pressed && { opacity: 0.85 },
+                      ]}
+                    >
+                      <Ionicons
+                        name={m.icon as keyof typeof Ionicons.glyphMap}
+                        size={14}
+                        color={active ? t.palette.blue.base : t.colors.secondary}
+                      />
+                      <Text
+                        variant="caption2"
+                        style={{
+                          color: active ? t.palette.blue.base : t.colors.secondary,
+                          fontWeight: active ? '700' : '600',
+                          marginLeft: 5,
+                          letterSpacing: 0.3,
+                        }}
+                      >
+                        {m.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <View
+                style={{
+                  height: 0.5,
+                  backgroundColor: t.colors.separator,
+                  marginLeft: 16,
+                }}
+              />
+            </View>
+            <Row
+              label="Cost code"
+              value={categoryLabel ?? 'None'}
+              valueColor={categoryLabel ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setShowCategoryPicker(true)}
+            />
+            <View style={styles.statusBlock}>
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingTop: 12 }}
+              >
+                STATUS
+              </Text>
+              <View style={styles.statusRow}>
+                {(['paid', 'pending', 'partial'] as const).map((s) => {
+                  const active = selectedStatus === s;
+                  const tone =
+                    s === 'paid'
+                      ? { fg: t.palette.green.base, bg: t.mode === 'dark' ? t.palette.green.softDark : t.palette.green.soft }
+                      : s === 'pending'
+                        ? { fg: t.palette.orange.base, bg: t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft }
+                        : { fg: t.palette.red.base, bg: t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft };
+                  return (
+                    <Pressable
+                      key={s}
+                      onPress={() => setValue('status', s, { shouldDirty: true })}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.statusChip,
+                        {
+                          backgroundColor: active ? tone.bg : t.colors.fill3,
+                          borderRadius: 999,
+                          borderColor: active ? tone.fg + '33' : 'transparent',
+                          borderWidth: active ? 1 : 0,
+                        },
+                        pressed && { opacity: 0.85 },
+                      ]}
+                    >
+                      <Text
+                        variant="caption2"
+                        style={{
+                          color: active ? tone.fg : t.colors.secondary,
+                          fontWeight: active ? '700' : '600',
+                          letterSpacing: 0.4,
+                        }}
+                      >
+                        {s.toUpperCase()}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </FormGroup>
+
+          {/* Receipt */}
+          <View style={{ paddingHorizontal: 16, marginTop: 22 }}>
+            <Text
+              variant="caption2"
+              color="secondary"
+              style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingBottom: 8 }}
+            >
+              RECEIPT
+            </Text>
+            {(stagedReplacement || (existingReceipt && !receiptCleared)) ? (
+              <View
+                style={[
+                  styles.receiptRow,
+                  {
+                    backgroundColor: cardBg,
+                    borderRadius: t.radii.card,
+                    borderColor: cardBorder,
+                    borderWidth: t.hairline,
+                  },
+                ]}
+              >
+                <Image
+                  source={{ uri: stagedReplacement?.localUri ?? existingReceipt?.publicUrl ?? '' }}
+                  style={[styles.receiptThumb, { borderRadius: t.radii.tile }]}
+                  resizeMode="cover"
+                />
+                <View style={{ flex: 1 }}>
+                  <Text variant="footnote" color="label" style={{ fontWeight: '700' }}>
+                    {stagedReplacement ? 'Replacement queued' : 'Receipt attached'}
+                  </Text>
+                  <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+                    {stagedReplacement
+                      ? 'Will upload when you tap Save.'
+                      : 'Use the buttons below to replace.'}
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    setStagedReplacement(null);
+                    setReceiptCleared(!!existingReceipt);
+                  }}
+                  hitSlop={8}
+                >
+                  <Ionicons name="close-circle" size={20} color={t.colors.tertiary} />
+                </Pressable>
+              </View>
+            ) : (
+              <View
+                style={[
+                  styles.receiptEmpty,
+                  {
+                    backgroundColor: t.colors.fill3,
+                    borderRadius: t.radii.card,
+                  },
+                ]}
+              >
+                <Text variant="caption1" color="secondary">
+                  No receipt attached
+                </Text>
+              </View>
+            )}
+            <View style={styles.receiptBtnRow}>
+              <ReceiptBtn
+                icon="camera-outline"
+                label="Camera"
+                onPress={() => pickReceipt('camera')}
+              />
+              <ReceiptBtn
+                icon="image-outline"
+                label="Gallery"
+                onPress={() => pickReceipt('library')}
+              />
+            </View>
+          </View>
+
+          {submitError ? (
+            <FieldNote text={submitError} tone={t.palette.red.base} />
+          ) : null}
+
+          {/* Delete (when allowed) */}
+          {mayDeleteTxn ? (
+            <View style={{ paddingHorizontal: 16, marginTop: 26 }}>
+              <Pressable
+                onPress={onDelete}
+                hitSlop={6}
+                style={({ pressed }) => [
+                  styles.deleteBtn,
+                  {
+                    backgroundColor:
+                      t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                    borderRadius: t.radii.field,
+                    borderColor: t.palette.red.base + '33',
+                    borderWidth: t.hairline,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Ionicons name="trash-outline" size={16} color={t.palette.red.base} />
+                <Text
+                  variant="footnote"
+                  style={{
+                    color: t.palette.red.base,
+                    fontWeight: '700',
+                    marginLeft: 6,
+                  }}
+                >
+                  Delete transaction
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+
+          <View style={{ height: 40 }} />
+        </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Category Picker */}
-      <Modal visible={showCategoryPicker} animationType="slide" transparent onRequestClose={() => setShowCategoryPicker(false)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setShowCategoryPicker(false)}><View /></Pressable>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <Text variant="bodyStrong" color="text" style={styles.modalTitle}>Cost Code</Text>
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.modalList}>
-            {TRANSACTION_CATEGORIES.map((c) => {
-              const active = selectedCategory === c.key;
-              return (
-                <Pressable key={c.key} onPress={() => { setValue('category', active ? '' : c.key, { shouldDirty: true }); setShowCategoryPicker(false); }} style={[styles.catOption, active && styles.catOptionActive]}>
-                  <Text variant="body" color={active ? 'primary' : 'text'} style={active ? { fontWeight: '600' } : undefined}>{c.label}</Text>
-                  {active && <Ionicons name="checkmark-circle" size={20} color={color.primary} />}
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
-      </Modal>
-    </Screen>
+      {/* Date picker */}
+      <DateTimeSheet
+        open={showDatePicker}
+        value={selectedDate}
+        onChange={(d) => setValue('date', d, { shouldDirty: true })}
+        onClose={() => setShowDatePicker(false)}
+        mode="date"
+        title="Date"
+      />
+
+      {/* Cost code picker */}
+      <SelectSheet
+        open={showCategoryPicker}
+        title="Cost code"
+        options={[
+          { key: '', label: 'None' },
+          ...TRANSACTION_CATEGORIES.map((c) => ({ key: c.key, label: c.label })),
+        ]}
+        selected={selectedCategory ?? ''}
+        onPick={(k) => setValue('category', k, { shouldDirty: true })}
+        onClose={() => setShowCategoryPicker(false)}
+      />
+    </View>
+  );
+}
+
+function FieldNote({ text, tone }: { text: string; tone: string }) {
+  return (
+    <Text
+      variant="caption2"
+      style={{
+        color: tone,
+        paddingHorizontal: 32,
+        marginTop: 8,
+      }}
+    >
+      {text}
+    </Text>
+  );
+}
+
+function ReceiptBtn({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={6}
+      style={({ pressed }) => [
+        styles.receiptBtn,
+        {
+          backgroundColor:
+            t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+          borderRadius: t.radii.field,
+          borderColor: t.palette.blue.base + '33',
+          borderWidth: t.hairline,
+          borderStyle: 'dashed',
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Ionicons name={icon} size={16} color={t.palette.blue.base} />
+      <Text
+        variant="footnote"
+        style={{ color: t.palette.blue.base, fontWeight: '700', marginLeft: 6 }}
+      >
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  navBar: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: screenInset, paddingTop: 2, paddingBottom: 8, backgroundColor: color.bgGrouped, borderBottomWidth: 1, borderBottomColor: color.borderStrong },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  navEyebrow: { letterSpacing: 1.2 },
-  navTitle: { textAlign: 'center' },
-  hero: {
-    paddingHorizontal: screenInset,
-    paddingTop: 10,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-    backgroundColor: color.bgGrouped,
-  },
-  heroLabel: { letterSpacing: 1.2, marginBottom: 4 },
-  heroAmountRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
-  heroAmountInput: { flex: 1, fontSize: 34, fontWeight: '700', color: color.text, paddingVertical: 0 },
-  dateChip: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: space.xs, paddingHorizontal: space.sm, borderRadius: radius.sm, backgroundColor: color.bg, borderWidth: 1, borderColor: color.borderStrong },
-  scroll: { paddingHorizontal: screenInset, paddingTop: 12, paddingBottom: space.xl, backgroundColor: color.bgGrouped },
-  sectionLabel: { marginTop: space.md, marginBottom: space.xs },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  scroll: { paddingBottom: 60 },
 
-  // Receipt section styling — matches the rest of the form's sharp /
-  // hairline / dense aesthetic.
+  // Hero amount
+  heroCard: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    alignItems: 'flex-start',
+  },
+  heroAmountRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    marginTop: 6,
+    gap: 2,
+  },
+  heroAmountInput: {
+    flex: 1,
+    paddingVertical: 0,
+    margin: 0,
+    minWidth: 100,
+  },
+  dateChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginTop: 12,
+  },
+
+  // Method
+  methodBlock: {},
+  methodRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+  },
+  methodChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+
+  // Status
+  statusBlock: {},
+  statusRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+  },
+  statusChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+
+  // Receipt
   receiptRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    minHeight: 56,
+    gap: 12,
+    padding: 12,
   },
-  receiptThumbWrap: {
-    width: 44, height: 44,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    overflow: 'hidden',
+  receiptThumb: {
+    width: 48,
+    height: 48,
   },
-  receiptThumb: { width: '100%', height: '100%' },
-  receiptOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(15,23,42,0.55)',
-    alignItems: 'center', justifyContent: 'center',
+  receiptEmpty: {
+    paddingVertical: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   receiptBtnRow: {
     flexDirection: 'row',
-    gap: space.xs,
-    marginTop: space.xs,
+    gap: 8,
+    marginTop: 10,
   },
   receiptBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    paddingVertical: space.sm,
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.primary,
+    paddingVertical: 12,
   },
-  methodRow: { flexDirection: 'row', gap: space.xs, marginBottom: space.sm, flexWrap: 'wrap' },
-  methodChip: { flex: 1, minWidth: '23%', alignItems: 'center', gap: 4, paddingVertical: space.sm, borderRadius: radius.sm, borderWidth: 1, borderColor: color.borderStrong, backgroundColor: color.bg },
-  methodChipActive: { backgroundColor: color.primary, borderColor: color.primary },
-  statusChip: { flex: 1, paddingVertical: space.xs, borderRadius: radius.sm, borderWidth: 1, borderColor: color.borderStrong, alignItems: 'center' },
-  statusChipActive: { backgroundColor: color.primary, borderColor: color.primary },
-  dropdownField: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: color.bg, borderRadius: radius.sm, borderWidth: 1, borderColor: color.borderStrong, paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: 48, marginBottom: space.sm },
-  footer: { paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.bgGrouped, borderTopWidth: 1, borderTopColor: color.borderStrong },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)' },
-  modalSheet: { backgroundColor: color.surface, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg, paddingTop: space.sm, paddingBottom: space.xxl, maxHeight: '65%' },
-  modalHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: color.border, alignSelf: 'center', marginBottom: space.sm },
-  modalTitle: { textAlign: 'center', marginBottom: space.sm },
-  modalList: { paddingHorizontal: screenInset },
-  catOption: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: space.sm, paddingHorizontal: space.xs, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: color.separator },
-  catOptionActive: { backgroundColor: color.primarySoft, borderRadius: radius.sm },
+
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
 });

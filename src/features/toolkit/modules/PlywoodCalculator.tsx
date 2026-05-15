@@ -6,8 +6,7 @@
 import { useMemo, useState } from 'react';
 import { StyleSheet } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -41,12 +40,7 @@ export function PlywoodCalculator({
   }, [area]);
 
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="Plywood / Laminate"
-      eyebrow="ESTIMATOR"
-    >
+    <ToolModal visible={visible} onClose={onClose} title="Plywood / laminate">
       <Section title="Inputs">
         <NumberField
           label="Total face area"
@@ -75,7 +69,7 @@ export function PlywoodCalculator({
               : undefined
           }
         />
-        <Text style={styles.note}>
+        <Text variant="caption1" color="secondary" style={styles.note}>
           For laminate, order one extra sheet if any face is wider than{' '}
           {PLYWOOD_SHEET_FT.width} ft — those panels need full-sheet
           coverage with no joints.
@@ -87,10 +81,8 @@ export function PlywoodCalculator({
 
 const styles = StyleSheet.create({
   note: {
-    fontSize: 11,
-    color: color.textFaint,
-    fontFamily: fontFamily.sans,
-    lineHeight: 16,
     marginTop: 4,
+    paddingHorizontal: 4,
+    lineHeight: 17,
   },
 });

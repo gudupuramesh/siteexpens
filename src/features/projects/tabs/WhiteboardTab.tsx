@@ -1,19 +1,24 @@
 /**
- * WhiteboardTab — grid of Excalidraw whiteboards for the project.
+ * Whiteboard tab — v2 design.
  *
- * Mirrors `interior-os backend`'s `WhiteboardListPage.tsx` — same flow:
- * grid of saved boards, tap to resume editing, "+ New" to start blank.
- * Each board card shows the board's saved SVG snapshot as a true vector
- * thumbnail (no WebView needed for previews).
+ * Layout:
+ *   1. Header — uppercase eyebrow + "+ New" pill
+ *   2. 2-up grid of v2 surface cards. Each card:
+ *      - 1:1 SVG thumbnail (sanitized) or empty-state icon
+ *      - Title + element count + relative-time meta line
+ *   3. Empty state with "Create your first board" CTA
+ *
+ * Long-press a card → Delete confirmation (kept v1 AlertSheet).
  */
 import { useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Dimensions,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
-  Text as RNText,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,9 +27,7 @@ import { SvgXml } from 'react-native-svg';
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useOrgMembers } from '@/src/features/org/useOrgMembers';
-import { Spinner } from '@/src/ui/Spinner';
 import { AlertSheet } from '@/src/ui/io';
-import { color, fontFamily } from '@/src/theme/tokens';
 
 import type { Whiteboard } from '@/src/features/whiteboard/types';
 import {
@@ -35,6 +38,10 @@ import {
 import { useWhiteboards } from '@/src/features/whiteboard/useWhiteboard';
 import { WhiteboardEditor } from '@/src/features/whiteboard/WhiteboardEditor';
 import { sanitizeSvgXml } from '@/src/features/whiteboard/sanitizeSvg';
+
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
+import { useThemeV2 } from '@/src/theme/v2';
 
 function relTime(d: Date): string {
   const ms = Date.now() - d.getTime();
@@ -48,9 +55,14 @@ function relTime(d: Date): string {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
 }
 
-// ── Component ─────────────────────────────────────────────────────────
+const GUTTER = 16;
+const GAP = 10;
+const SCREEN_W = Dimensions.get('window').width;
+const CARD_W = Math.floor((SCREEN_W - GUTTER * 2 - GAP) / 2);
 
 export function WhiteboardTab() {
+  const t = useThemeV2();
+  const refresh = usePullToRefresh();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -92,10 +104,6 @@ export function WhiteboardTab() {
     thumbnailSvg?: string;
     elementCount: number;
   }) {
-    // Throw (not silent return) so the editor's persist() catches it,
-    // surfaces a banner, and leaves the board "dirty" for the user to
-    // retry. Silent returns previously made the editor *think* the save
-    // succeeded -- so dirty got cleared and nothing was ever written.
     if (!projectId) {
       throw new Error('No project selected — cannot save whiteboard.');
     }
@@ -122,8 +130,6 @@ export function WhiteboardTab() {
           thumbnailSvg: payload.thumbnailSvg,
           elementCount: payload.elementCount,
         });
-        // Switch into "edit mode" on the new doc so subsequent saves
-        // update instead of duplicating.
         setEditing({
           id: newId,
           orgId,
@@ -160,32 +166,86 @@ export function WhiteboardTab() {
       <ScrollView
         contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl {...refresh.props} />}
       >
         <View style={styles.headerRow}>
-          <RNText style={styles.eyebrow}>
-            WHITEBOARDS · {boards.length}
-          </RNText>
-          <Pressable onPress={openNew} style={styles.newBtn} hitSlop={6}>
+          <Text
+            variant="caption2"
+            color="secondary"
+            style={{ letterSpacing: 0.5 }}
+          >
+            {`WHITEBOARDS · ${boards.length}`}
+          </Text>
+          <Pressable
+            onPress={openNew}
+            hitSlop={6}
+            style={({ pressed }) => [
+              styles.newBtn,
+              {
+                backgroundColor: t.palette.blue.base,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.86 },
+            ]}
+          >
             <Ionicons name="add" size={14} color="#fff" />
-            <RNText style={styles.newBtnText}>New</RNText>
+            <Text
+              variant="caption2"
+              style={{
+                color: '#fff',
+                fontWeight: '700',
+                marginLeft: 4,
+                letterSpacing: 0.3,
+              }}
+            >
+              NEW
+            </Text>
           </Pressable>
         </View>
 
         {loading && boards.length === 0 ? (
           <View style={styles.empty}>
-            <Spinner size={24} />
+            <ActivityIndicator color={t.palette.blue.base} />
           </View>
         ) : boards.length === 0 ? (
           <View style={styles.empty}>
-            <Ionicons name="brush-outline" size={28} color={color.textFaint} />
-            <RNText style={styles.emptyTitle}>No whiteboards yet.</RNText>
-            <RNText style={styles.emptySub}>
-              Sketch ideas, floor-plans, walkthroughs — full Excalidraw,
-              save, resume.
-            </RNText>
-            <Pressable onPress={openNew} style={styles.emptyBtn}>
+            <Ionicons name="brush-outline" size={32} color={t.colors.tertiary} />
+            <Text
+              variant="callout"
+              color="label"
+              style={{ marginTop: 12, fontWeight: '600' }}
+            >
+              No whiteboards yet
+            </Text>
+            <Text
+              variant="caption1"
+              color="secondary"
+              style={{ marginTop: 4, textAlign: 'center', paddingHorizontal: 32 }}
+            >
+              Sketch ideas, floor-plans, walkthroughs — full Excalidraw, save, resume.
+            </Text>
+            <Pressable
+              onPress={openNew}
+              style={({ pressed }) => [
+                styles.emptyBtn,
+                {
+                  backgroundColor: t.palette.blue.base,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.86 },
+              ]}
+            >
               <Ionicons name="add" size={14} color="#fff" />
-              <RNText style={styles.newBtnText}>Create your first board</RNText>
+              <Text
+                variant="footnote"
+                style={{
+                  color: '#fff',
+                  fontWeight: '700',
+                  marginLeft: 6,
+                }}
+              >
+                Create your first board
+              </Text>
             </Pressable>
           </View>
         ) : (
@@ -229,8 +289,6 @@ export function WhiteboardTab() {
   );
 }
 
-// ── Card ─────────────────────────────────────────────────────────────
-
 function BoardCard({
   board,
   onPress,
@@ -240,6 +298,7 @@ function BoardCard({
   onPress: () => void;
   onLongPress: () => void;
 }) {
+  const t = useThemeV2();
   const updated = board.updatedAt?.toDate();
   const ago = updated ? relTime(updated) : '—';
   const count = board.elementCount ?? 0;
@@ -248,15 +307,30 @@ function BoardCard({
     <Pressable
       onPress={onPress}
       onLongPress={onLongPress}
-      style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }]}
+      style={({ pressed }) => [
+        styles.card,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: t.radii.card,
+          borderColor:
+            t.mode === 'dark'
+              ? 'rgba(255,255,255,0.05)'
+              : 'rgba(0,0,0,0.04)',
+          borderWidth: t.hairline,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
     >
-      {/* Thumbnail — saved SVG snapshot from Excalidraw, falls back to
-          a placeholder when the board is empty or missing a snapshot.
-          Sanitised before render: Excalidraw output commonly contains
-          anonymous `<mask>` / `<clipPath>` elements (no `id`) which
-          crash react-native-svg's iOS renderer. The sanitiser
-          synthesises ids for those and drops `<foreignObject>`. */}
-      <View style={styles.thumb}>
+      <View
+        style={[
+          styles.thumb,
+          {
+            backgroundColor: t.mode === 'dark' ? '#FFFFFF' : '#FFFFFF',
+            borderBottomColor: t.colors.separator,
+            borderBottomWidth: t.hairline,
+          },
+        ]}
+      >
         {board.thumbnailSvg ? (
           <SvgXml
             xml={sanitizeSvgXml(board.thumbnailSvg)}
@@ -265,38 +339,43 @@ function BoardCard({
           />
         ) : (
           <View style={styles.thumbEmpty}>
-            <Ionicons name="brush-outline" size={20} color={color.textFaint} />
+            <Ionicons name="brush-outline" size={20} color={t.colors.tertiary} />
           </View>
         )}
       </View>
 
       <View style={styles.cardFooter}>
-        <RNText style={styles.cardTitle} numberOfLines={1}>
+        <Text
+          variant="footnote"
+          color="label"
+          style={{ fontWeight: '700' }}
+          numberOfLines={1}
+        >
           {board.title}
-        </RNText>
+        </Text>
         <View style={styles.cardMetaRow}>
-          <RNText style={styles.cardMeta}>
+          <Text
+            variant="caption2"
+            color="tertiary"
+            style={{ letterSpacing: 0.4 }}
+          >
             {count} {count === 1 ? 'ELEM' : 'ELEMS'}
-          </RNText>
-          <RNText style={styles.cardMeta}>{ago.toUpperCase()}</RNText>
+          </Text>
+          <Text
+            variant="caption2"
+            color="tertiary"
+            style={{ letterSpacing: 0.4 }}
+          >
+            {ago.toUpperCase()}
+          </Text>
         </View>
       </View>
     </Pressable>
   );
 }
 
-// ── Styles ───────────────────────────────────────────────────────────
-
-const GUTTER = 16;
-const GAP = 10;
-// Compute card width from real screen width so two cards reliably fit
-// per row -- percentage-based widths combined with `gap` were rounding
-// the second card to a new row on some devices.
-const SCREEN_W = Dimensions.get('window').width;
-const CARD_W = Math.floor((SCREEN_W - GUTTER * 2 - GAP) / 2);
-
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: color.bgGrouped },
+  flex: { flex: 1 },
   scroll: { paddingTop: 14, paddingBottom: 40 },
 
   headerRow: {
@@ -306,27 +385,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: GUTTER,
     paddingBottom: 12,
   },
-  eyebrow: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 1.4,
-  },
   newBtn: {
-    height: 28,
-    paddingHorizontal: 10,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: color.primary,
-    borderRadius: 8,
-  },
-  newBtnText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#fff',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
 
   grid: {
@@ -337,24 +400,10 @@ const styles = StyleSheet.create({
   },
   card: {
     width: CARD_W,
-    backgroundColor: color.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    borderRadius: 10,
     overflow: 'hidden',
-    shadowColor: '#0F172A',
-    shadowOpacity: 0.04,
-    shadowRadius: 2,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 1,
   },
   thumb: {
-    // 1:1 reads cleaner in a 2-col grid than 4:3 (which made cards
-    // taller than wide and wasted vertical space).
     aspectRatio: 1,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.border,
     overflow: 'hidden',
   },
   thumbEmpty: {
@@ -362,52 +411,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cardFooter: { padding: 10 },
-  cardTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.text,
-    letterSpacing: -0.1,
+  cardFooter: {
+    padding: 10,
   },
   cardMetaRow: {
     marginTop: 4,
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  cardMeta: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    color: color.textFaint,
-    letterSpacing: 0.8,
-  },
 
   empty: {
-    paddingVertical: 50,
+    paddingVertical: 56,
     paddingHorizontal: 32,
     alignItems: 'center',
-    gap: 6,
-  },
-  emptyTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    fontWeight: '600',
-    color: color.text,
-    marginTop: 4,
-  },
-  emptySub: {
-    fontFamily: fontFamily.sans,
-    fontSize: 12,
-    color: color.textMuted,
-    textAlign: 'center',
   },
   emptyBtn: {
     marginTop: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    height: 32,
     paddingHorizontal: 14,
-    backgroundColor: color.primary,
+    paddingVertical: 9,
   },
 });

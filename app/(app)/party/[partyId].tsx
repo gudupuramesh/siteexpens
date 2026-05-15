@@ -1,27 +1,129 @@
 /**
- * Party detail — read-only preview.
- * Shows basic info, KYC, opening balance, bank details. Edit pencil in the
- * top-right routes to the edit-party form.
+ * Party detail — v2 design.
+ *
+ * Layout (top → bottom):
+ *   1. v2 header: back · "Party" · circular blue Edit pen
+ *   2. Identity hero card — large tone-tinted avatar tile + name + type pill
+ *   3. Opening balance card (only when > 0) — colored side rail + amount
+ *   4. FormGroup "Contact" — Phone/Email/Father/Joined/Address rows
+ *   5. FormGroup "KYC" — Aadhar (masked)/PAN (only when present)
+ *   6. FormGroup "Bank" — Holder/Bank/Account (masked)/IFSC/UPI (only when present)
+ *   7. (When opened from a project) Transactions card — total summary +
+ *      per-txn rows
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useMemo } from 'react';
+import {
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useParties } from '@/src/features/parties/useParties';
-import { getPartyTypeLabel } from '@/src/features/parties/types';
+import {
+  getPartyTypeLabel,
+  type Party,
+  type PartyType,
+} from '@/src/features/parties/types';
 import { useTransactions } from '@/src/features/transactions/useTransactions';
 import {
   normalizeTransactionType,
   type Transaction,
 } from '@/src/features/transactions/types';
-import { formatDate, formatInr } from '@/src/lib/format';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, screenInset, space } from '@/src/theme';
+import { formatDate } from '@/src/lib/format';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { Row } from '@/src/ui/v2/Row';
+import { Text } from '@/src/ui/v2/Text';
+import { inrCompact, inrFull, useThemeV2 } from '@/src/theme/v2';
+
+/**
+ * Party-type tone (hero avatar + type pill).
+ *
+ * Color discipline: party types (client / vendor / contractor / labour …) are
+ * categorical labels. They all use a neutral tone (fill3 + secondary). Color
+ * is reserved for things that carry meaning — the opening-balance card below
+ * still goes red/green based on direction (you owe vs they owe), and action
+ * buttons (call / WhatsApp) keep their semantic blue/green.
+ *
+ * Returns a palette-shaped object so consuming JSX (`tone.soft`, `tone.base`)
+ * doesn't need branching.
+ */
+function partyTypeTone(
+  t: ReturnType<typeof useThemeV2>,
+): { base: string; soft: string; softDark: string } {
+  return {
+    base: t.colors.secondary,
+    soft: t.colors.fill3,
+    softDark: t.colors.fill3,
+  };
+}
+
+function maskAadhar(n: string): string {
+  const digits = n.replace(/\D/g, '');
+  if (digits.length < 4) return n;
+  return `XXXX XXXX ${digits.slice(-4)}`;
+}
+
+function maskAccount(n: string): string {
+  if (n.length <= 4) return n;
+  return `••••${n.slice(-4)}`;
+}
+
+function formatPaymentMethod(m: string): string {
+  return m.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Compact inline action icon — used on the right edge of the party hero
+ * card, beside the name. Just a small blue-tinted circle with the icon;
+ * no text label, since the glyphs (call / WhatsApp logo / envelope) are
+ * universally recognised. Generous hitSlop keeps the tap target finger-
+ * friendly even though the visible button is only 32×32.
+ */
+function InlineActionBtn({
+  icon,
+  onPress,
+  t,
+  accessibilityLabel,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  t: ReturnType<typeof useThemeV2>;
+  accessibilityLabel: string;
+}) {
+  // Per the brand-colour decision: WhatsApp keeps its green identity, every
+  // other comms action (Call / Email / SMS) reads in interactive blue. The
+  // icon name is the discriminator.
+  const isWhatsApp = icon === 'logo-whatsapp';
+  const tone = isWhatsApp ? t.palette.green : t.palette.blue;
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      style={({ pressed }) => [
+        styles.inlineActionBtn,
+        {
+          backgroundColor:
+            t.mode === 'dark' ? tone.softDark : tone.soft,
+        },
+        pressed && { opacity: 0.7, transform: [{ scale: 0.92 }] },
+      ]}
+    >
+      <Ionicons name={icon} size={16} color={tone.base} />
+    </Pressable>
+  );
+}
 
 export default function PartyDetailScreen() {
+  const t = useThemeV2();
   // `projectId` is optional — when present (i.e. the user landed here from
   // a project's Party tab), we render a project-scoped Transactions
   // section listing every txn that links this party to that project.
@@ -37,37 +139,23 @@ export default function PartyDetailScreen() {
 
   const party = useMemo(() => parties.find((p) => p.id === partyId), [parties, partyId]);
 
-  // Filter the project's transactions down to this party. Done client-side
-  // because the project's full txn list is already streaming for other
-  // tabs — adding a separate Firestore listener per party would just
-  // duplicate the snapshot.
+  // Filter the project's transactions down to this party.
   const partyTxns = useMemo(
-    () => allProjectTxns.filter((t) => t.partyId === partyId),
+    () => allProjectTxns.filter((tx) => tx.partyId === partyId),
     [allProjectTxns, partyId],
   );
 
   const partyTotals = useMemo(() => {
     let received = 0;
     let paid = 0;
-    for (const t of partyTxns) {
-      const type = normalizeTransactionType(t.type);
-      if (type === 'payment_in') received += t.amount;
-      else paid += t.amount;
+    for (const tx of partyTxns) {
+      const type = normalizeTransactionType(tx.type);
+      if (type === 'payment_in') received += tx.amount;
+      else paid += tx.amount;
     }
     return { received, paid, net: received - paid };
   }, [partyTxns]);
 
-  // Detail cards (Contact, Opening Balance, KYC, Bank) are tucked
-  // behind a chevron toggle on the identity strip. Default-collapsed
-  // so the page leads with what users actually open it for: the
-  // transactions list. Tap the identity strip (or the chevron) to
-  // reveal the rest.
-  const [detailsOpen, setDetailsOpen] = useState(false);
-
-  // Back handler — falls back to the parties list when there's no
-  // navigation history (e.g. user arrived via a deep link). Without
-  // the canGoBack guard `router.back()` is a no-op on a fresh stack
-  // and the user gets stuck on the page.
   const onBack = () => {
     if (router.canGoBack()) router.back();
     else router.replace('/(app)/(tabs)' as never);
@@ -75,361 +163,598 @@ export default function PartyDetailScreen() {
 
   if (loading && !party) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        {/* Always render the nav bar so the back button is reachable
-            even while the party doc is still streaming — without
-            this the user gets a "Loading…" screen with no way out. */}
-        <View style={styles.navBar}>
-          <Pressable onPress={onBack} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="chevron-back" size={22} color={color.text} />
-          </Pressable>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>Party</Text>
-          <View style={styles.navBtn} />
+        <AmbientBackground />
+        <ScreenHeader t={t} onBack={onBack} />
+        <View style={styles.center}>
+          <Text variant="callout" color="secondary">
+            Loading…
+          </Text>
         </View>
-        <View style={styles.loading}>
-          <Text variant="meta" color="textMuted">Loading…</Text>
-        </View>
-      </Screen>
+      </View>
     );
   }
 
   if (!party) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.navBar}>
-          <Pressable onPress={onBack} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="chevron-back" size={22} color={color.text} />
-          </Pressable>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>Party</Text>
-          <View style={styles.navBtn} />
+        <AmbientBackground />
+        <ScreenHeader t={t} onBack={onBack} />
+        <View style={styles.center}>
+          <Text variant="callout" color="secondary">
+            Party not found
+          </Text>
         </View>
-        <View style={styles.loading}>
-          <Text variant="meta" color="textMuted">Party not found.</Text>
-        </View>
-      </Screen>
+      </View>
     );
   }
 
-  const typeLabel = party.partyType
-    ? getPartyTypeLabel(party.partyType)
-    : (party.role ?? '—');
+  const tone = partyTypeTone(t);
+  const typeKey = (party.partyType ?? party.role) as PartyType | undefined;
+  const typeLabel = typeKey ? getPartyTypeLabel(typeKey) : '—';
+  const initial = party.name.charAt(0).toUpperCase();
   const openingBalance = party.openingBalance ?? 0;
   const isToReceive = party.openingBalanceType === 'to_receive';
+  // 90/10 discipline: positive (to-receive) renders in neutral grey; only
+  // the problem state (to-pay i.e. studio owes the party) keeps red.
+  // We still hand a palette-shaped object to the JSX below so the existing
+  // `.soft / .softDark / .base` accessors keep working without branching.
+  const balanceTone = isToReceive
+    ? {
+        soft: t.colors.fill3,
+        softDark: t.colors.fill3,
+        base: t.colors.secondary,
+      }
+    : t.palette.red;
   const bank = party.bankDetails;
   const hasBank =
     !!bank &&
     !!(bank.accountNumber || bank.ifsc || bank.bankName || bank.upiId || bank.accountHolderName);
+  const hasContactDetail =
+    !!party.email || !!party.fatherName || !!party.dateOfJoining || !!party.address;
+
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      <View style={styles.navBar}>
-        <Pressable onPress={onBack} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="chevron-back" size={22} color={color.text} />
-        </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.navTitle}>Party</Text>
+      {/* Header — transparent so the AmbientBackground flows through */}
+      <View style={styles.header}>
         <Pressable
-          onPress={() => router.push(`/(app)/add-party?partyId=${party.id}` as never)}
-          hitSlop={12}
-          style={styles.navBtn}
+          onPress={onBack}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { backgroundColor: t.colors.fill3, borderRadius: 999 },
+            pressed && { opacity: 0.7 },
+          ]}
         >
-          <Ionicons name="create-outline" size={20} color={color.primary} />
+          <Ionicons name="chevron-back" size={18} color={t.colors.label} />
+        </Pressable>
+        <Text variant="headline" color="label" style={styles.headerTitle}>
+          Party
+        </Text>
+        <Pressable
+          onPress={() =>
+            router.push(`/(app)/add-party?partyId=${party.id}` as never)
+          }
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            {
+              backgroundColor:
+                t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+              borderRadius: 999,
+            },
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <Ionicons name="create-outline" size={16} color={t.palette.blue.base} />
         </Pressable>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={{ paddingBottom: 32 }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Identity strip — compact horizontal layout (was a tall
-            centred card that wasted half the viewport). Avatar +
-            name + type sit on one row, dense like an InteriorOS
-            list header. The whole row is a toggle: tap to expand /
-            collapse the verbose Contact / Balance / KYC / Bank
-            cards below. Default state is collapsed. */}
-        <Pressable
-          onPress={() => setDetailsOpen((v) => !v)}
-          style={({ pressed }) => [
-            styles.identityStrip,
-            pressed && { backgroundColor: color.surface },
-          ]}
-        >
-          <View style={styles.avatarSm}>
-            <Text variant="bodyStrong" style={{ color: color.primary }}>
-              {party.name.charAt(0).toUpperCase()}
-            </Text>
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text variant="bodyStrong" color="text" numberOfLines={1}>
-              {party.name}
-            </Text>
-            <Text style={styles.identityMeta} numberOfLines={1}>
-              {typeLabel.toUpperCase()}
-              {!detailsOpen ? '  ·  TAP FOR DETAILS' : ''}
-            </Text>
-          </View>
-          <Ionicons
-            name={detailsOpen ? 'chevron-up' : 'chevron-down'}
-            size={18}
-            color={color.textMuted}
-          />
-        </Pressable>
+        {/* Identity hero */}
+        <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+          <View
+            style={[
+              styles.heroCard,
+              {
+                backgroundColor: cardBg,
+                borderRadius: t.radii.card,
+                borderColor: cardBorder,
+                borderWidth: t.hairline,
+              },
+            ]}
+          >
+            {/* Single-row card: avatar · name+type · inline action icons.
+                Same pattern as a Messages chat row or iOS Mail thread row —
+                everything you need to know about this party in one band, no
+                wasted vertical space. Action icons drop their text labels
+                because the glyphs (call / WhatsApp logo / envelope) are
+                universally recognised. */}
+            <View style={styles.identityRow}>
+              <View
+                style={[
+                  styles.heroAvatar,
+                  {
+                    backgroundColor:
+                      t.mode === 'dark' ? tone.softDark : tone.soft,
+                    borderRadius: t.radii.tile,
+                  },
+                ]}
+              >
+                <Text
+                  variant="headline"
+                  style={{
+                    color: tone.base,
+                    fontWeight: '700',
+                    letterSpacing: -0.2,
+                  }}
+                >
+                  {initial}
+                </Text>
+              </View>
 
-        {/* Verbose detail cards (Contact / Balance / KYC / Bank) —
-            collapsed by default; tap the identity strip to expand. */}
-        {detailsOpen ? (
-        <>
-        {/* Contact */}
-        <View style={styles.card}>
-          <Text variant="caption" color="textMuted" style={styles.cardLabel}>CONTACT</Text>
-          <DetailRow
-            icon="call-outline"
-            label="Phone"
-            value={party.phone || '—'}
-          />
-          {!!party.email && (
-            <>
-              <Divider />
-              <DetailRow icon="mail-outline" label="Email" value={party.email} />
-            </>
-          )}
-          {!!party.fatherName && (
-            <>
-              <Divider />
-              <DetailRow icon="person-outline" label="Father" value={party.fatherName} />
-            </>
-          )}
-          {!!party.dateOfJoining && (
-            <>
-              <Divider />
-              <DetailRow
-                icon="calendar-outline"
-                label="Joined"
-                value={formatDate(party.dateOfJoining.toDate())}
-              />
-            </>
-          )}
-          {!!party.address && (
-            <>
-              <Divider />
-              <DetailRow
-                icon="location-outline"
-                label="Address"
-                value={party.address}
-                multiline
-              />
-            </>
-          )}
+              <View style={styles.identityText}>
+                <Text
+                  variant="callout"
+                  color="label"
+                 
+                  numberOfLines={2}
+                >
+                  {party.name}
+                </Text>
+                <Text
+                  variant="caption1"
+                  color="secondary"
+                  numberOfLines={1}
+                  style={{ marginTop: 2 }}
+                >
+                  {typeLabel}
+                </Text>
+              </View>
+
+              {(party.phone || party.email) ? (
+                <View style={styles.inlineActions}>
+                  {party.phone ? (
+                    <InlineActionBtn
+                      icon="call"
+                      onPress={() => Linking.openURL(`tel:${party.phone}`)}
+                      t={t}
+                      accessibilityLabel="Call"
+                    />
+                  ) : null}
+                  {party.phone ? (
+                    <InlineActionBtn
+                      icon="logo-whatsapp"
+                      onPress={() =>
+                        Linking.openURL(
+                          `https://wa.me/${party.phone!.replace(/\D/g, '')}`,
+                        )
+                      }
+                      t={t}
+                      accessibilityLabel="WhatsApp"
+                    />
+                  ) : null}
+                  {party.email ? (
+                    <InlineActionBtn
+                      icon="mail-outline"
+                      onPress={() => Linking.openURL(`mailto:${party.email}`)}
+                      t={t}
+                      accessibilityLabel="Email"
+                    />
+                  ) : null}
+                </View>
+              ) : null}
+            </View>
+          </View>
         </View>
 
         {/* Opening balance */}
-        {openingBalance > 0 && (
-          <View style={styles.card}>
-            <Text variant="caption" color="textMuted" style={styles.cardLabel}>
-              OPENING BALANCE
-            </Text>
-            <View style={styles.balanceRow}>
-              <Ionicons
-                name={isToReceive ? 'arrow-down-circle-outline' : 'arrow-up-circle-outline'}
-                size={20}
-                color={isToReceive ? color.success : color.danger}
+        {openingBalance > 0 ? (
+          <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+            <View
+              style={[
+                styles.balanceCard,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? balanceTone.softDark : balanceTone.soft,
+                  borderRadius: t.radii.card,
+                  borderColor: balanceTone.base + '33',
+                  borderWidth: t.hairline,
+                },
+              ]}
+            >
+              <View
+                style={[
+                  styles.balanceRail,
+                  { backgroundColor: balanceTone.base },
+                ]}
               />
-              <View style={styles.flex}>
+              <View style={{ flex: 1 }}>
                 <Text
-                  variant="title"
-                  style={{ color: isToReceive ? color.success : color.danger }}
+                  variant="caption2"
+                  style={{
+                    color: balanceTone.base,
+                    letterSpacing: 0.5,
+                    fontWeight: '700',
+                  }}
                 >
-                  {formatInr(openingBalance)}
+                  OPENING BALANCE
                 </Text>
-                <Text variant="caption" color="textMuted">
-                  {isToReceive ? 'They owe you (To Receive)' : 'You owe them (To Pay)'}
+                <Text
+                  variant="title2"
+                  style={{
+                    color: balanceTone.base,
+                    fontWeight: '700',
+                    marginTop: 4,
+                  }}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.7}
+                >
+                  {inrFull(openingBalance)}
+                </Text>
+                <Text
+                  variant="caption1"
+                  color="secondary"
+                  style={{ marginTop: 2 }}
+                >
+                  {isToReceive
+                    ? 'They owe you (To receive)'
+                    : 'You owe them (To pay)'}
                 </Text>
               </View>
             </View>
           </View>
-        )}
+        ) : null}
+
+        {/* Contact */}
+        <FormGroup header="Contact">
+          <Row
+            label="Phone"
+            value={party.phone || '—'}
+            valueColor={party.phone ? undefined : t.colors.tertiary}
+            onPress={party.phone ? () => Linking.openURL(`tel:${party.phone}`) : undefined}
+            divider={hasContactDetail}
+          />
+          {party.email ? (
+            <Row
+              label="Email"
+              value={party.email}
+              onPress={() => Linking.openURL(`mailto:${party.email}`)}
+              divider={!!(party.fatherName || party.dateOfJoining || party.address)}
+            />
+          ) : null}
+          {party.fatherName ? (
+            <Row
+              label="Father"
+              value={party.fatherName}
+              divider={!!(party.dateOfJoining || party.address)}
+            />
+          ) : null}
+          {party.dateOfJoining ? (
+            <Row
+              label="Joined"
+              value={formatDate(party.dateOfJoining.toDate())}
+              divider={!!party.address}
+            />
+          ) : null}
+          {party.address ? (
+            <Row
+              label="Address"
+              subtitle={party.address}
+              divider={false}
+            />
+          ) : null}
+        </FormGroup>
 
         {/* KYC */}
-        {(party.aadharNumber || party.panNumber) && (
-          <View style={styles.card}>
-            <Text variant="caption" color="textMuted" style={styles.cardLabel}>KYC</Text>
-            {!!party.aadharNumber && (
-              <DetailRow
-                icon="card-outline"
+        {party.aadharNumber || party.panNumber ? (
+          <FormGroup header="KYC">
+            {party.aadharNumber ? (
+              <Row
                 label="Aadhar"
                 value={maskAadhar(party.aadharNumber)}
+                divider={!!party.panNumber}
               />
-            )}
-            {!!party.aadharNumber && !!party.panNumber && <Divider />}
-            {!!party.panNumber && (
-              <DetailRow
-                icon="document-text-outline"
-                label="PAN"
-                value={party.panNumber}
-              />
-            )}
-          </View>
-        )}
+            ) : null}
+            {party.panNumber ? (
+              <Row label="PAN" value={party.panNumber} divider={false} />
+            ) : null}
+          </FormGroup>
+        ) : null}
 
         {/* Bank */}
-        {hasBank && bank && (
-          <View style={styles.card}>
-            <Text variant="caption" color="textMuted" style={styles.cardLabel}>BANK</Text>
-            {!!bank.accountHolderName && (
-              <DetailRow
-                icon="person-outline"
-                label="Account Holder"
+        {hasBank && bank ? (
+          <FormGroup header="Bank">
+            {bank.accountHolderName ? (
+              <Row
+                label="Holder"
                 value={bank.accountHolderName}
+                divider={!!(bank.bankName || bank.accountNumber || bank.ifsc || bank.upiId)}
               />
-            )}
-            {!!bank.bankName && (
-              <>
-                {!!bank.accountHolderName && <Divider />}
-                <DetailRow
-                  icon="business-outline"
-                  label="Bank"
-                  value={bank.bankName}
-                />
-              </>
-            )}
-            {!!bank.accountNumber && (
-              <>
-                <Divider />
-                <DetailRow
-                  icon="wallet-outline"
-                  label="A/c No."
-                  value={maskAccount(bank.accountNumber)}
-                />
-              </>
-            )}
-            {!!bank.ifsc && (
-              <>
-                <Divider />
-                <DetailRow icon="pricetag-outline" label="IFSC" value={bank.ifsc} />
-              </>
-            )}
-            {!!bank.upiId && (
-              <>
-                <Divider />
-                <DetailRow
-                  icon="phone-portrait-outline"
-                  label="UPI"
-                  value={bank.upiId}
-                />
-              </>
-            )}
-          </View>
-        )}
-        </>
+            ) : null}
+            {bank.bankName ? (
+              <Row
+                label="Bank"
+                value={bank.bankName}
+                divider={!!(bank.accountNumber || bank.ifsc || bank.upiId)}
+              />
+            ) : null}
+            {bank.accountNumber ? (
+              <Row
+                label="A/c"
+                value={maskAccount(bank.accountNumber)}
+                divider={!!(bank.ifsc || bank.upiId)}
+              />
+            ) : null}
+            {bank.ifsc ? (
+              <Row
+                label="IFSC"
+                value={bank.ifsc}
+                divider={!!bank.upiId}
+              />
+            ) : null}
+            {bank.upiId ? (
+              <Row label="UPI" value={bank.upiId} divider={false} />
+            ) : null}
+          </FormGroup>
         ) : null}
-        {/* End of expandable detail cards. */}
 
-        {/* Project-scoped transactions — only when we landed here from
-            a project's Party tab (projectId in the route). Header row
-            shows a single context-aware summary instead of the
-            received/paid/net grid (which was confusing for one-sided
-            parties like vendors who only ever get paid). */}
+        {/* Project-scoped transactions */}
         {projectIdValue ? (
-          <View style={styles.card}>
-            {/* Stat block — label, prominent NET, muted breakdown.
-                Split across three lines so the long mixed-direction
-                summary never truncates. */}
-            <View style={styles.txnStatBlock}>
-              <Text style={styles.txnStatLabel}>
-                TRANSACTIONS · {partyTxns.length}
+          <View style={{ marginTop: 24 }}>
+            <View style={styles.txnHeader}>
+              <Text
+                variant="caption2"
+                color="secondary"
+                style={{ letterSpacing: 0.4 }}
+              >
+                TRANSACTIONS
               </Text>
-              <TxnStat totals={partyTotals} />
+              <Text variant="caption2" color="tertiary">
+                {partyTxns.length}
+              </Text>
             </View>
 
-            {partyTxns.length === 0 ? (
-              <Text variant="meta" color="textMuted" style={styles.txnEmpty}>
-                No transactions recorded with this party on this project yet.
-              </Text>
-            ) : (
-              partyTxns.map((t, i) => (
-                <View key={t.id}>
-                  {i > 0 ? <View style={styles.txnRowDivider} /> : null}
+            {partyTxns.length > 0 ? (
+              <View style={{ paddingHorizontal: 16, marginBottom: 12 }}>
+                <View
+                  style={[
+                    styles.summaryCard,
+                    {
+                      backgroundColor: cardBg,
+                      borderRadius: t.radii.card,
+                      borderColor: cardBorder,
+                      borderWidth: t.hairline,
+                    },
+                  ]}
+                >
+                  <TxnSummary totals={partyTotals} t={t} />
+                </View>
+              </View>
+            ) : null}
+
+            <View
+              style={[
+                styles.txnsCard,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: t.radii.group,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+              ]}
+            >
+              {partyTxns.length === 0 ? (
+                <View style={styles.txnEmpty}>
+                  <Ionicons
+                    name="receipt-outline"
+                    size={24}
+                    color={t.colors.tertiary}
+                  />
+                  <Text
+                    variant="callout"
+                    color="secondary"
+                    style={{ marginTop: 8, textAlign: 'center' }}
+                  >
+                    No transactions yet
+                  </Text>
+                  <Text
+                    variant="caption1"
+                    color="tertiary"
+                    style={{ marginTop: 4, textAlign: 'center' }}
+                  >
+                    Logged payments with this party on this project show here
+                  </Text>
+                </View>
+              ) : (
+                partyTxns.map((tx, i) => (
                   <PartyTxnRow
-                    txn={t}
+                    key={tx.id}
+                    txn={tx}
+                    divider={i < partyTxns.length - 1}
                     onPress={() =>
                       router.push(
-                        `/(app)/projects/${projectIdValue}/transaction/${t.id}` as never,
+                        `/(app)/projects/${projectIdValue}/transaction/${tx.id}` as never,
                       )
                     }
                   />
-                </View>
-              ))
-            )}
+                ))
+              )}
+            </View>
           </View>
         ) : null}
-
-        <View style={{ height: space.xl }} />
       </ScrollView>
-    </Screen>
+    </View>
   );
 }
 
-/** Stacked stat block for the transactions section header.
- *  Lines: prominent NET (or single-direction total) + muted breakdown
- *  on its own line below. Avoids the truncation problem the inline
- *  one-liner had on long mixed-direction strings. */
-function TxnStat({ totals }: { totals: { received: number; paid: number; net: number } }) {
-  if (totals.received === 0 && totals.paid === 0) {
-    return <Text style={styles.txnStatPrimary}>—</Text>;
-  }
-  if (totals.received > 0 && totals.paid === 0) {
-    // Single-direction (client / refund-only): drop the leading '+'.
-    // The green colour + the word "received" already convey direction;
-    // the sign is redundant noise here.
-    return (
-      <Text style={[styles.txnStatPrimary, { color: color.success }]}>
-        {formatInr(totals.received)}
-        <Text style={styles.txnStatTrail}>  received</Text>
+function ScreenHeader({
+  t,
+  onBack,
+}: {
+  t: ReturnType<typeof useThemeV2>;
+  onBack: () => void;
+}) {
+  return (
+    <View style={styles.header}>
+      <Pressable
+        onPress={onBack}
+        hitSlop={10}
+        style={({ pressed }) => [
+          styles.iconBtn,
+          { backgroundColor: t.colors.fill3, borderRadius: 999 },
+          pressed && { opacity: 0.7 },
+        ]}
+      >
+        <Ionicons name="chevron-back" size={18} color={t.colors.label} />
+      </Pressable>
+      <Text variant="headline" color="label" style={styles.headerTitle}>
+        Party
       </Text>
+      <View style={styles.iconBtn} />
+    </View>
+  );
+}
+
+function TxnSummary({
+  totals,
+  t,
+}: {
+  totals: { received: number; paid: number; net: number };
+  t: ReturnType<typeof useThemeV2>;
+}) {
+  if (totals.received === 0 && totals.paid === 0) {
+    return (
+      <Text variant="callout" color="secondary">
+        —
+      </Text>
+    );
+  }
+  // 90/10 discipline: amounts render in neutral label colour. The labels
+  // (RECEIVED / PAID) and +/− signs carry the direction. Only the NET
+  // value flips red when it's negative (an actual problem).
+  if (totals.received > 0 && totals.paid === 0) {
+    return (
+      <SingleSummary
+        label="RECEIVED"
+        value={inrCompact(totals.received)}
+        color={t.colors.label}
+      />
     );
   }
   if (totals.paid > 0 && totals.received === 0) {
-    // Single-direction (vendor / sub-contractor): drop the leading '−'.
-    // Red colour + "paid" already convey direction.
     return (
-      <Text style={[styles.txnStatPrimary, { color: color.danger }]}>
-        {formatInr(totals.paid)}
-        <Text style={styles.txnStatTrail}>  paid</Text>
-      </Text>
+      <SingleSummary
+        label="PAID"
+        value={inrCompact(totals.paid)}
+        color={t.colors.label}
+      />
     );
   }
-  // Mixed — NET on top line, breakdown on muted second line.
+  // Mixed — Net + Paid + Received columns
+  const netColor = totals.net < 0 ? t.palette.red.base : t.colors.label;
   const netSign = totals.net > 0 ? '+' : totals.net < 0 ? '−' : '';
-  const netColor = totals.net > 0 ? color.success : totals.net < 0 ? color.danger : color.textMuted;
   return (
-    <>
-      <Text style={[styles.txnStatPrimary, { color: netColor }]}>
-        {netSign}
-        {formatInr(Math.abs(totals.net))}
-        <Text style={styles.txnStatTrail}>  net</Text>
-      </Text>
-      <Text style={styles.txnStatBreakdown}>
-        Paid {formatInr(totals.paid)}  ·  Received {formatInr(totals.received)}
-      </Text>
-    </>
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <SummaryCol
+        label="NET"
+        value={`${netSign}${inrCompact(Math.abs(totals.net))}`}
+        color={netColor}
+      />
+      <View style={[styles.summaryDivider, { backgroundColor: t.colors.separator }]} />
+      <SummaryCol
+        label="RECEIVED"
+        value={inrCompact(totals.received)}
+        color={t.colors.label}
+      />
+      <View style={[styles.summaryDivider, { backgroundColor: t.colors.separator }]} />
+      <SummaryCol
+        label="PAID"
+        value={inrCompact(totals.paid)}
+        color={t.colors.label}
+      />
+    </View>
   );
 }
 
-/** A single transaction row — matches the InteriorOS dense list style
- *  used in the project's TransactionTab: square hairline-bordered icon
- *  tile, mono tabular amount, single-line description + meta. */
+function SingleSummary({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <View>
+      <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4 }}>
+        {label}
+      </Text>
+      <Text
+        variant="title2"
+        style={{ color, marginTop: 4, fontWeight: '700' }}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function SummaryCol({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <View style={styles.summaryCol}>
+      <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4 }}>
+        {label}
+      </Text>
+      <Text
+        variant="callout"
+        style={{ color, marginTop: 4, fontWeight: '700' }}
+        numberOfLines={1}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
 function PartyTxnRow({
   txn,
+  divider,
   onPress,
 }: {
   txn: Transaction;
+  divider: boolean;
   onPress: () => void;
 }) {
+  const t = useThemeV2();
   const type = normalizeTransactionType(txn.type);
   const isIn = type === 'payment_in';
+  // 90/10 discipline: transaction rows render in neutral tones — like a
+  // bank statement. The +/− prefix on the amount carries the direction.
+  // Icon tile + glyph are always neutral; amount text is neutral too.
   const dateLabel = txn.date ? formatDate(txn.date.toDate()) : '—';
   const meta = [
     dateLabel,
@@ -438,290 +763,183 @@ function PartyTxnRow({
   ]
     .filter(Boolean)
     .join('  ·  ');
+
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.txnRow, pressed && { opacity: 0.7 }]}
+      style={({ pressed }) => [
+        styles.txnRow,
+        pressed && { backgroundColor: t.colors.fill3 },
+      ]}
     >
-      <View style={styles.txnIcon}>
+      <View
+        style={[
+          styles.txnIcon,
+          {
+            backgroundColor: t.colors.fill3,
+            borderRadius: t.radii.tile,
+          },
+        ]}
+      >
         <Ionicons
-          name={isIn ? 'wallet-outline' : 'receipt-outline'}
+          name={isIn ? 'arrow-down' : 'arrow-up'}
           size={14}
-          color={isIn ? color.success : color.textMuted}
+          color={t.colors.secondary}
         />
       </View>
-      <View style={styles.txnBody}>
-        <Text variant="rowTitle" color="text" numberOfLines={1}>
+      <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+        <Text variant="body" color="label" numberOfLines={1}>
           {txn.description || (isIn ? 'Payment received' : 'Payment made')}
         </Text>
-        <Text variant="caption" color="textMuted" numberOfLines={1}>
+        <Text
+          variant="caption1"
+          color="secondary"
+          numberOfLines={1}
+          style={{ marginTop: 2 }}
+        >
           {meta}
         </Text>
       </View>
       <Text
-        style={[
-          styles.txnAmount,
-          { color: isIn ? color.success : color.danger },
-        ]}
+        variant="callout"
+        color="label"
+        style={{ fontWeight: '600', marginLeft: 8, fontVariant: ['tabular-nums'] }}
       >
         {isIn ? '+' : '−'}
-        {formatInr(txn.amount)}
+        {inrCompact(txn.amount)}
       </Text>
+
+      {divider ? (
+        <View
+          style={[
+            styles.rowDivider,
+            { backgroundColor: t.colors.separator, left: 60 },
+          ]}
+        />
+      ) : null}
     </Pressable>
   );
 }
 
-function formatPaymentMethod(m: string): string {
-  return m
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
-/** Context-aware one-line summary for a party's transactions:
- *   - Vendor / sub-contractor (only payments out)  → "Paid ₹X"
- *   - Client (only payments in)                    → "Received ₹X"
- *   - Mixed (both directions)                      → "Net ±₹N (paid ₹X · received ₹Y)"
- *   - None                                          → "—"
- *
- *  For the Mixed case we lead with the NET (running balance) so the
- *  user sees who-owes-whom up front, with the gross numbers in
- *  parentheses for audit. Real-world hits: vendor refunding an
- *  advance, client refund, milestone adjustments. */
-function buildTxnSummary(t: { received: number; paid: number; net: number }): string {
-  if (t.received === 0 && t.paid === 0) return '—';
-  if (t.received > 0 && t.paid === 0) return `Received ${formatInr(t.received)}`;
-  if (t.paid > 0 && t.received === 0) return `Paid ${formatInr(t.paid)}`;
-  // Mixed: show NET (signed) with gross breakdown. Order the parens
-  // by which side is bigger so the dominant flow reads first.
-  const netAbs = formatInr(Math.abs(t.net));
-  const sign = t.net > 0 ? '+' : t.net < 0 ? '−' : '';
-  const breakdown =
-    t.paid >= t.received
-      ? `paid ${formatInr(t.paid)} · received ${formatInr(t.received)}`
-      : `received ${formatInr(t.received)} · paid ${formatInr(t.paid)}`;
-  return `Net ${sign}${netAbs} (${breakdown})`;
-}
-
-function DetailRow({
-  icon,
-  label,
-  value,
-  multiline,
-}: {
-  icon: keyof typeof import('@expo/vector-icons').Ionicons.glyphMap;
-  label: string;
-  value: string;
-  multiline?: boolean;
-}) {
-  return (
-    <View style={[styles.metaRow, multiline && styles.metaRowMultiline]}>
-      <Ionicons name={icon} size={16} color={color.textMuted} />
-      <Text variant="caption" color="textMuted" style={styles.metaLabel}>
-        {label}
-      </Text>
-      <Text
-        variant="meta"
-        color="text"
-        style={multiline ? styles.metaValueMultiline : styles.metaValue}
-      >
-        {value}
-      </Text>
-    </View>
-  );
-}
-
-function Divider() {
-  return <View style={styles.divider} />;
-}
-
-function maskAadhar(n: string): string {
-  const digits = n.replace(/\D/g, '');
-  if (digits.length < 4) return n;
-  return `XXXX XXXX ${digits.slice(-4)}`;
-}
-
-function maskAccount(n: string): string {
-  if (n.length <= 4) return n;
-  return `••••${n.slice(-4)}`;
-}
-
 const styles = StyleSheet.create({
-  flex: { flex: 1, minWidth: 0 },
-  loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  navBar: {
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
+  // Header
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingBottom: space.xs,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+    gap: 10,
   },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navTitle: { flex: 1, textAlign: 'center' },
-  scroll: { padding: screenInset, gap: space.sm },
-
-  identityCard: {
-    backgroundColor: color.surface,
-    borderRadius: radius.md,
-    paddingVertical: space.lg,
-    alignItems: 'center',
-    gap: space.xs,
-  },
-  avatar: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: color.primarySoft,
+  iconBtn: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  typePill: {
-    paddingHorizontal: space.sm,
-    paddingVertical: 2,
-    borderRadius: radius.pill,
-    backgroundColor: color.primarySoft,
-  },
+  headerTitle: { flex: 1, fontWeight: '600' },
 
-  card: {
-    // InteriorOS card style: white background, hairline border, no
-    // border-radius — sits flush on the grouped canvas below it. The
-    // surrounding ScrollView provides the screen-inset padding + gap
-    // between cards, so this style stays margin-free.
-    backgroundColor: color.bg,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: space.xs,
+  // Hero — single-row card: avatar · name+type · inline action icons
+  heroCard: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  cardLabel: { marginTop: space.sm, marginBottom: space.xxs },
-
-  metaRow: {
+  identityRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.xs,
-    paddingVertical: space.sm,
+    gap: 10,
   },
-  metaRowMultiline: { alignItems: 'flex-start' },
-  metaLabel: { width: 110, marginLeft: 4 },
-  metaValue: { flex: 1, textAlign: 'right' },
-  metaValueMultiline: { flex: 1 },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: color.separator },
-
-  balanceRow: {
+  heroAvatar: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  identityText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  inlineActions: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: space.sm,
+    gap: 6,
+    flexShrink: 0,
   },
-
-  // Compact identity strip (replaces the tall centred identity card).
-  identityStrip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: color.bg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
-  },
-  avatarSm: {
-    // Square tile to match the InteriorOS sharp-corner language used
-    // in ProjectRow / TransactionTab icons.
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.primarySoft,
+  inlineActionBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  identityMeta: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 1.2,
-    marginTop: 2,
+
+  // Balance card
+  balanceCard: {
+    flexDirection: 'row',
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    overflow: 'hidden',
+  },
+  balanceRail: {
+    width: 4,
+    alignSelf: 'stretch',
+    borderRadius: 2,
+    marginRight: 12,
   },
 
-  // Transactions stat block — label + prominent NET + muted breakdown.
-  txnStatBlock: {
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
-    gap: 2,
+  // Transactions
+  txnHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingBottom: 7,
   },
-  txnStatLabel: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 1.2,
+  summaryCard: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
   },
-  txnStatPrimary: {
-    fontFamily: fontFamily.sans,
-    fontSize: 22,
-    fontWeight: '700',
-    color: color.text,
-    letterSpacing: -0.4,
-    marginTop: 4,
-    fontVariant: ['tabular-nums'],
+  summaryCol: {
+    flex: 1,
+    alignItems: 'center',
   },
-  txnStatTrail: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 1.2,
-  },
-  txnStatBreakdown: {
-    fontFamily: fontFamily.mono,
-    fontSize: 11,
-    color: color.textMuted,
-    letterSpacing: 0.4,
-    marginTop: 2,
+  summaryDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    marginHorizontal: 8,
   },
 
+  txnsCard: {
+    marginHorizontal: 16,
+    overflow: 'hidden',
+  },
   txnEmpty: {
-    paddingVertical: space.md,
-    textAlign: 'center',
+    paddingVertical: 32,
+    paddingHorizontal: 24,
+    alignItems: 'center',
   },
-
-  // List rows — match TransactionTab.tsx for visual consistency.
   txnRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
-  },
-  txnRowDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.borderStrong,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 56,
+    position: 'relative',
   },
   txnIcon: {
-    // Square hairline tile (same as TransactionTab's txnIcon).
-    width: 30,
-    height: 30,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  txnBody: {
-    flex: 1,
-    minWidth: 0,
-    gap: 1,
-  },
-  txnAmount: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
+  rowDivider: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    height: 0.5,
   },
 });

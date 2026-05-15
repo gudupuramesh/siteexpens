@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
 import { color, radius, screenInset, space } from '@/src/theme';
 
 export type ProjectOption = {
@@ -130,9 +130,9 @@ export function ProjectAccessSheet({
               <Ionicons name="chevron-back" size={20} color={color.text} />
             </Pressable>
             <View style={{ flex: 1 }}>
-              <Text variant="bodyStrong" color="text">{title}</Text>
+              <Text variant="headline" color="label">{title}</Text>
               {subtitle ? (
-                <Text variant="caption" color="textMuted" numberOfLines={1}>
+                <Text variant="caption1" color="secondary" numberOfLines={1}>
                   {subtitle}
                 </Text>
               ) : null}
@@ -143,17 +143,17 @@ export function ProjectAccessSheet({
               style={({ pressed }) => [styles.selectAll, pressed && { opacity: 0.7 }]}
             >
               <Checkbox checked={allChecked} />
-              <Text variant="metaStrong" color="text">Select all</Text>
+              <Text variant="footnote" color="label">Select all</Text>
             </Pressable>
           </View>
 
           {projects.length === 0 ? (
             <View style={styles.empty}>
               <Ionicons name="folder-open-outline" size={32} color={color.textFaint} />
-              <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
+              <Text variant="headline" color="label" style={styles.emptyTitle}>
                 No projects yet
               </Text>
-              <Text variant="meta" color="textMuted" align="center" style={styles.emptySub}>
+              <Text variant="caption1" color="secondary" style={styles.emptySub}>
                 Create a project first, then come back to invite your client. Clients can only see specific projects.
               </Text>
             </View>
@@ -170,7 +170,7 @@ export function ProjectAccessSheet({
                     style={({ pressed }) => [styles.row, pressed && { opacity: 0.85 }]}
                   >
                     <Checkbox checked={checked} />
-                    <Text variant="body" color="text" numberOfLines={1} style={{ flex: 1 }}>
+                    <Text variant="body" color="label" numberOfLines={1} style={{ flex: 1 }}>
                       {item.name}
                     </Text>
                   </Pressable>
@@ -194,7 +194,7 @@ export function ProjectAccessSheet({
               {busy ? (
                 <ActivityIndicator color={color.onPrimary} />
               ) : (
-                <Text variant="bodyStrong" style={{ color: color.onPrimary }}>
+                <Text variant="headline" style={{ color: color.onPrimary }}>
                   {noProjects
                     ? 'Create a project first'
                     : belowMin

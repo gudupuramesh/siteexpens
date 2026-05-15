@@ -28,7 +28,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { Text } from '@/src/ui/Text';
+import { openLegalUrl } from '@/src/lib/openLegalUrl';
+import { Text } from '@/src/ui/v2/Text';
 import { color, radius, screenInset, space } from '@/src/theme';
 
 import {
@@ -116,7 +117,7 @@ export function PaywallSheet({
     }
     return (
       <>
-        Your <Text variant="metaStrong" color="text">{label}</Text> plan has reached its cap. Upgrade to keep working.
+        Your <Text variant="footnote" color="label">{label}</Text> plan has reached its cap. Upgrade to keep working.
       </>
     );
   }, [currentTier, reason]);
@@ -135,7 +136,7 @@ export function PaywallSheet({
           <View style={styles.handle} />
 
           <View style={styles.header}>
-            <Text variant="title" color="text">
+            <Text variant="title1" color="label">
               {resolvedHeadline}
             </Text>
             <Pressable hitSlop={12} onPress={onClose}>
@@ -144,11 +145,11 @@ export function PaywallSheet({
           </View>
 
           {reason !== 'browse' ? (
-            <Text variant="caption" color="textMuted" style={styles.subhead}>
+            <Text variant="caption1" color="secondary" style={styles.subhead}>
               {limitSubhead}
             </Text>
           ) : (
-            <Text variant="caption" color="textMuted" style={styles.subhead}>
+            <Text variant="caption1" color="secondary" style={styles.subhead}>
               Pick the plan that fits your studio.
             </Text>
           )}
@@ -167,6 +168,41 @@ export function PaywallSheet({
                 onUpgrade={goToSubscription}
               />
             ))}
+
+            {/*
+             * Legal-link footer — Apple guideline 3.1.2(c) requires
+             * any surface that shows or initiates a subscription
+             * purchase to provide functional links to BOTH the
+             * privacy policy and Terms of Use (EULA), plus the
+             * auto-renew disclosure. The full subscription screen
+             * (`app/(app)/subscription.tsx`) shows the same block;
+             * we mirror it here because users CAN tap "Upgrade"
+             * from this teaser, and Apple has historically flagged
+             * this exact pattern.
+             */}
+            <View style={styles.legalBlock}>
+              <Text variant="caption1" color="secondary" style={styles.legalDisclosure}>
+                Auto-renewing subscription. Payment is charged to your Apple
+                ID at confirmation of purchase. The subscription auto-renews
+                unless cancelled at least 24 hours before the end of the
+                current period. Manage in your Apple ID settings.
+              </Text>
+              <View style={styles.legalLinks}>
+                <Pressable
+                  onPress={() => void openLegalUrl('privacyPolicy', 'Privacy Policy')}
+                  hitSlop={6}
+                >
+                  <Text variant="footnote" color="label">Privacy Policy</Text>
+                </Pressable>
+                <Text variant="caption1" color="tertiary">·</Text>
+                <Pressable
+                  onPress={() => void openLegalUrl('termsOfService', 'Terms of Use')}
+                  hitSlop={6}
+                >
+                  <Text variant="footnote" color="label">Terms of Use</Text>
+                </Pressable>
+              </View>
+            </View>
           </ScrollView>
         </View>
       </View>
@@ -197,24 +233,24 @@ function PlanCard({ tier, isCurrent, isSuggested, onUpgrade }: PlanCardProps) {
     >
       <View style={styles.cardHead}>
         <View style={styles.cardTitleRow}>
-          <Text variant="bodyStrong" color="text">
+          <Text variant="headline" color="label">
             {PLAN_LABELS[tier]}
           </Text>
           {isCurrent ? (
             <View style={[styles.pill, styles.pillCurrent]}>
-              <Text variant="metaStrong" color="textMuted" style={styles.pillText}>
+              <Text variant="footnote" color="secondary" style={styles.pillText}>
                 CURRENT
               </Text>
             </View>
           ) : isSuggested ? (
             <View style={[styles.pill, styles.pillSuggested]}>
-              <Text variant="metaStrong" color="primary" style={styles.pillText}>
+              <Text variant="footnote" color="label" style={styles.pillText}>
                 RECOMMENDED
               </Text>
             </View>
           ) : null}
         </View>
-        <Text variant="caption" color="textMuted" numberOfLines={2}>
+        <Text variant="caption1" color="secondary" numberOfLines={2}>
           {PLAN_TAGLINES[tier]}
         </Text>
       </View>
@@ -222,15 +258,15 @@ function PlanCard({ tier, isCurrent, isSuggested, onUpgrade }: PlanCardProps) {
       <View style={styles.priceRow}>
         {pricing ? (
           <>
-            <Text variant="title" color="text">
+            <Text variant="title1" color="label">
               ₹{pricing.monthly.toLocaleString('en-IN')}
             </Text>
-            <Text variant="caption" color="textMuted" style={styles.priceUnit}>
+            <Text variant="caption1" color="secondary" style={styles.priceUnit}>
               /month · or ₹{pricing.annual.toLocaleString('en-IN')}/yr
             </Text>
           </>
         ) : (
-          <Text variant="title" color="text">
+          <Text variant="title1" color="label">
             Free
           </Text>
         )}
@@ -266,7 +302,7 @@ function PlanCard({ tier, isCurrent, isSuggested, onUpgrade }: PlanCardProps) {
           ]}
         >
           <Text
-            variant="bodyStrong"
+            variant="headline"
             style={isSuggested ? styles.ctaTextSuggested : styles.ctaText}
           >
             {tier === 'free' ? 'Downgrade' : `Upgrade to ${PLAN_LABELS[tier]}`}
@@ -280,10 +316,10 @@ function PlanCard({ tier, isCurrent, isSuggested, onUpgrade }: PlanCardProps) {
 function FeatureRow({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.featureRow}>
-      <Text variant="caption" color="textMuted">
+      <Text variant="caption1" color="secondary">
         {label}
       </Text>
-      <Text variant="metaStrong" color="text">
+      <Text variant="footnote" color="label">
         {value}
       </Text>
     </View>
@@ -408,4 +444,20 @@ const styles = StyleSheet.create({
   },
   ctaText: { color: color.text },
   ctaTextSuggested: { color: color.onPrimary },
+
+  legalBlock: {
+    marginTop: space.md,
+    paddingHorizontal: space.sm,
+    gap: space.xs,
+  },
+  legalDisclosure: {
+    lineHeight: 16,
+  },
+  legalLinks: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+  },
 });

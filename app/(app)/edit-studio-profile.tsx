@@ -1,14 +1,30 @@
 /**
- * Edit studio profile — mirrors preview sections on profile.tsx.
- * Saves org document + user doc (work email, owner name, title).
+ * Edit studio profile — v2 design.
+ *
+ * Two modes (driven by `?section=` param):
+ *   - HUB (no param): list of section cards. Tap a card to open that
+ *     section's spoke. Each card has a tinted IconTile, title +
+ *     subtitle, and a chevron — same vocabulary as the More tab.
+ *   - SPOKE (param set): SheetHeader with Cancel/Save + grouped
+ *     InputRows for that section's fields. Save submits the WHOLE
+ *     form (every section's fields are loaded into RHF on mount, so
+ *     untouched fields flow through unchanged).
+ *
+ * Saves org document + user doc (work email, owner name, title) via
+ * the existing `updateStudioProfile` Cloud-Function-style path. The
+ * 300 ms snapshot-buffer pause before `router.back()` is preserved
+ * so the next screen sees fresh data instead of the prior snapshot.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Redirect, router, Stack, useLocalSearchParams } from 'expo-router';
 import { Controller, useForm } from 'react-hook-form';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
@@ -20,12 +36,14 @@ import { updateStudioProfile } from '@/src/features/org/organizations';
 import { useCurrentOrganization } from '@/src/features/org/useCurrentOrganization';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { firestore } from '@/src/lib/firebase';
-import { Button } from '@/src/ui/Button';
-import { KeyboardFormLayout } from '@/src/ui/KeyboardFormLayout';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
-import { color, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const schema = z.object({
   name: z.string().trim().min(1, 'Studio name is required'),
@@ -67,22 +85,6 @@ function foundedFromInput(raw: string): number | ReturnType<typeof firestore.Fie
   return Math.floor(n);
 }
 
-function FormSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <View style={styles.section}>
-      <Text variant="caption" color="textMuted" style={styles.sectionTitle}>
-        {title}
-      </Text>
-      {children}
-    </View>
-  );
-}
-
-/** All sections, in render order. The hub renders one tappable
- *  card per row; each card pushes back into this same screen with
- *  `?section={key}` so only that section's fields show. Keeping it
- *  one file means one schema, one submit handler, one source of
- *  truth — no per-section files to maintain. */
 type SectionKey =
   | 'identity'
   | 'owner'
@@ -92,72 +94,37 @@ type SectionKey =
   | 'banking'
   | 'social';
 
-/** Sections are aligned 1:1 with the section-cards on the profile
- *  view (`profile.tsx`). The form section's field set MUST match
- *  what the user can see in the corresponding view card —
- *  otherwise tapping the pencil drops them into a form missing the
- *  fields they came in to edit, which is the bug we just fixed.
- *
- *  Identity = studio name + tagline + founding year (the hero
- *  block on the profile view).
- *  Contact = verified mobile (read-only) + work email + accounts
- *  email + studio landline + website. */
-const SECTION_LIST: {
+/** Section list — all icons render as neutral grey tiles. The
+ *  shape (square IconTile) + glyph + section title carry the
+ *  meaning; per-section color was reading as decorative noise.
+ *  Reserve color for things that demand action (status pills,
+ *  errors, primary CTAs). */
+type SectionMeta = {
   key: SectionKey;
   title: string;
   subtitle: string;
   icon: keyof typeof Ionicons.glyphMap;
-}[] = [
-  { key: 'identity',   title: 'Identity',   subtitle: 'Studio name, tagline, founded',   icon: 'sparkles-outline' },
-  { key: 'owner',      title: 'Owner',      subtitle: 'Your name and title',             icon: 'person-outline' },
+};
+
+const SECTION_LIST: SectionMeta[] = [
+  { key: 'identity',   title: 'Identity',   subtitle: 'Studio name, tagline, founded',    icon: 'sparkles-outline' },
+  { key: 'owner',      title: 'Owner',      subtitle: 'Your name and title',              icon: 'person-outline' },
   { key: 'contact',    title: 'Contact',    subtitle: 'Phone, emails, landline, website', icon: 'mail-outline' },
-  { key: 'address',    title: 'Address',    subtitle: 'Studio address',                  icon: 'location-outline' },
-  { key: 'compliance', title: 'Compliance', subtitle: 'GSTIN, PAN, RERA',                icon: 'shield-checkmark-outline' },
-  { key: 'banking',    title: 'Banking',    subtitle: 'Bank account and UPI',            icon: 'card-outline' },
-  { key: 'social',     title: 'Social',     subtitle: 'Instagram and LinkedIn',          icon: 'globe-outline' },
+  { key: 'address',    title: 'Address',    subtitle: 'Studio address',                   icon: 'location-outline' },
+  { key: 'compliance', title: 'Compliance', subtitle: 'GSTIN, PAN, RERA',                 icon: 'shield-checkmark-outline' },
+  { key: 'banking',    title: 'Banking',    subtitle: 'Bank account and UPI',             icon: 'card-outline' },
+  { key: 'social',     title: 'Social',     subtitle: 'Instagram and LinkedIn',           icon: 'globe-outline' },
 ];
 
 function isSectionKey(v: string | undefined): v is SectionKey {
   return !!v && SECTION_LIST.some((s) => s.key === v);
 }
 
-/** Card row used in the hub list — section icon + title + subtitle
- *  + chevron. Visually identical vocabulary to the rest of the
- *  app's settings rows (see `chats.tsx > Row`). */
-function HubCard({
-  title,
-  subtitle,
-  icon,
-  onPress,
-}: {
-  title: string;
-  subtitle: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.hubCard, pressed && { opacity: 0.85 }]}
-    >
-      <View style={styles.hubCardIcon}>
-        <Ionicons name={icon} size={18} color={color.primary} />
-      </View>
-      <View style={styles.hubCardBody}>
-        <Text variant="bodyStrong" color="text">{title}</Text>
-        <Text variant="caption" color="textMuted">{subtitle}</Text>
-      </View>
-      <Ionicons name="chevron-forward" size={18} color={color.textFaint} />
-    </Pressable>
-  );
-}
-
 export default function EditStudioProfileScreen() {
+  const t = useThemeV2();
   const params = useLocalSearchParams<{ section?: string | string[] }>();
   const sectionParam = Array.isArray(params.section) ? params.section[0] : params.section;
-  const activeSection: SectionKey | null = isSectionKey(sectionParam)
-    ? sectionParam
-    : null;
+  const activeSection: SectionKey | null = isSectionKey(sectionParam) ? sectionParam : null;
   const isHub = activeSection === null;
 
   const { user, loading: authLoading } = useAuth();
@@ -202,8 +169,16 @@ export default function EditStudioProfileScreen() {
     },
   });
 
+  // Pre-fill the form ONCE per org. Same reasoning as edit-transaction:
+  // `org` and `userDoc` come from Firestore subscriptions and re-emit with
+  // new object references on every snapshot. Without the hydration guard,
+  // every snapshot wipes the user's mid-edit input. Keyed on `org.id`
+  // since switching workspaces is the only time we want to re-hydrate.
+  const hydratedForOrgId = useRef<string | null>(null);
   useEffect(() => {
     if (!org || !userDoc) return;
+    if (hydratedForOrgId.current === org.id) return;
+    hydratedForOrgId.current = org.id ?? null;
     reset({
       name: org.name ?? '',
       email: (userDoc.email ?? org.email ?? '').trim(),
@@ -231,7 +206,7 @@ export default function EditStudioProfileScreen() {
       bankBranch: org.bankBranch ?? '',
       upi: org.upi ?? '',
     });
-  }, [org, userDoc, reset]);
+  }, [org?.id, org, userDoc, reset]);
 
   async function onSubmit(values: FormValues) {
     if (!user || !org) return;
@@ -278,7 +253,6 @@ export default function EditStudioProfileScreen() {
         org: orgPayload,
         user: userPayload,
       });
-      // Snapshot-propagation buffer (see add-transaction.tsx).
       await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (e) {
@@ -288,12 +262,13 @@ export default function EditStudioProfileScreen() {
 
   if (authLoading || userLoading || orgLoading) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
         <View style={styles.loading}>
-          <ActivityIndicator color={color.primary} />
+          <ActivityIndicator color={t.palette.blue.base} />
         </View>
-      </Screen>
+      </View>
     );
   }
 
@@ -303,542 +278,586 @@ export default function EditStudioProfileScreen() {
 
   if (!org) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
         <View style={styles.loading}>
-          <ActivityIndicator color={color.primary} />
+          <ActivityIndicator color={t.palette.blue.base} />
         </View>
-      </Screen>
+      </View>
     );
   }
 
   const verifiedPhone = user.phoneNumber ?? '';
-  const headerTitle = isHub
+  const screenTitle = isHub
     ? 'Edit studio'
-    : `Edit ${SECTION_LIST.find((s) => s.key === activeSection)!.title}`;
+    : `Edit ${SECTION_LIST.find((s) => s.key === activeSection)!.title.toLowerCase()}`;
 
-  // The Save handler saves the WHOLE form regardless of which
-  // section the user opened — every section's fields stayed in
-  // memory across navigation because the hub and the spoke share
-  // one component instance per stack push. We chose
-  // `<Stack.Screen ... />` per route, so opening "Contact" from
-  // the hub mounts a fresh component instance with that section's
-  // fields hydrated from the org doc — same behaviour, cleaner UX.
-  const wrappedSubmit = handleSubmit(async (values) => {
-    await onSubmit(values);
-  });
+  // ── HUB MODE ───────────────────────────────────────────────────
+  if (isHub) {
+    return (
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
+
+        {/* Header (no Save) — transparent so the AmbientBackground flows through */}
+        <View style={styles.header}>
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.iconBtn,
+              { backgroundColor: t.colors.fill3, borderRadius: 999 },
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Ionicons name="chevron-back" size={18} color={t.colors.label} />
+          </Pressable>
+          <Text variant="headline" color="label" style={styles.headerTitle}>
+            {screenTitle}
+          </Text>
+          <View style={styles.iconBtn} />
+        </View>
+
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 32 }}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text
+            variant="footnote"
+            color="secondary"
+            style={{
+              paddingHorizontal: 24,
+              paddingTop: 18,
+              paddingBottom: 6,
+            }}
+          >
+            Pick a section to edit. Changes save once you tap Save in
+            the section.
+          </Text>
+
+          <FormGroup>
+            {SECTION_LIST.map((s, idx) => {
+              return (
+                <Row
+                  key={s.key}
+                  leading={
+                    <View
+                      style={[
+                        styles.tile,
+                        {
+                          backgroundColor: t.colors.fill3,
+                          borderRadius: t.radii.tile,
+                        },
+                      ]}
+                    >
+                      <Ionicons name={s.icon} size={16} color={t.colors.secondary} />
+                    </View>
+                  }
+                  label={s.title}
+                  subtitle={s.subtitle}
+                  chevron
+                  onPress={() =>
+                    router.push({
+                      pathname: '/(app)/edit-studio-profile',
+                      params: { section: s.key },
+                    })
+                  }
+                  divider={idx < SECTION_LIST.length - 1}
+                />
+              );
+            })}
+          </FormGroup>
+        </ScrollView>
+      </View>
+    );
+  }
+
+  // ── SPOKE MODE ─────────────────────────────────────────────────
+  const wrappedSubmit = handleSubmit(onSubmit);
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.backBtn}>
-          <Ionicons name="arrow-back" size={18} color={color.textMuted} />
-        </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.headerTitle}>
-          {headerTitle}
-        </Text>
-        <View style={styles.backBtn} />
-      </View>
+      <SheetHeader
+        title={screenTitle}
+        cancelLabel="Cancel"
+        saveLabel="Save"
+        saveLoading={isSubmitting}
+        saveDisabled={!isValid}
+        onCancel={() => router.back()}
+        onSave={() => void wrappedSubmit()}
+      />
 
-      {/* Hub mode — no form fields, no save footer. Just a vertical
-          stack of section cards. Tapping a card pushes back into
-          this same screen with `?section={key}`. */}
-      {isHub ? (
-        <KeyboardFormLayout
-          headerInset={52}
-          contentContainerStyle={styles.scrollContent}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 60 }}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <View style={styles.hubList}>
-            {SECTION_LIST.map((s) => (
-              <HubCard
-                key={s.key}
-                title={s.title}
-                subtitle={s.subtitle}
-                icon={s.icon}
-                onPress={() =>
-                  router.push({
-                    pathname: '/(app)/edit-studio-profile',
-                    params: { section: s.key },
-                  })
-                }
+          {activeSection === 'identity' ? (
+            <FormGroup header="Identity">
+              <Controller
+                control={control}
+                name="name"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Studio"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="Your studio name"
+                    autoCapitalize="words"
+                  />
+                )}
               />
-            ))}
-          </View>
-        </KeyboardFormLayout>
-      ) : (
-        <KeyboardFormLayout
-          headerInset={52}
-          contentContainerStyle={styles.scrollContent}
-          footer={
-            <View style={styles.footer}>
-              {submitError ? (
-                <Text variant="caption" color="danger" style={{ marginBottom: space.sm }}>
-                  {submitError}
-                </Text>
+              <Controller
+                control={control}
+                name="tagline"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Tagline"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="Short description"
+                    autoCapitalize="sentences"
+                  />
+                )}
+              />
+              <Controller
+                control={control}
+                name="founded"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Founded"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="2018"
+                    keyboardType="number-pad"
+                    divider={false}
+                  />
+                )}
+              />
+            </FormGroup>
+          ) : null}
+          {activeSection === 'identity' && errors.name?.message ? (
+            <FieldNote text={errors.name.message} />
+          ) : null}
+
+          {activeSection === 'owner' ? (
+            <FormGroup header="Owner">
+              <Controller
+                control={control}
+                name="displayName"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Name"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="Full name"
+                    autoCapitalize="words"
+                  />
+                )}
+              />
+              <Controller
+                control={control}
+                name="role"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Title"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="e.g. Principal Designer"
+                    autoCapitalize="words"
+                    divider={false}
+                  />
+                )}
+              />
+            </FormGroup>
+          ) : null}
+
+          {activeSection === 'contact' ? (
+            <>
+              <FormGroup
+                header="Contact"
+                footer="Mobile is your verified sign-in number. Changing it requires a fresh OTP flow."
+              >
+                <Row
+                  label="Mobile"
+                  value={verifiedPhone || 'Not set'}
+                  valueColor={verifiedPhone ? undefined : t.colors.tertiary}
+                />
+                <Controller
+                  control={control}
+                  name="email"
+                  render={({ field: { onChange, onBlur, value } }) => (
+                    <InputRow
+                      label="Email"
+                      value={value}
+                      onChangeText={onChange}
+                      onBlur={onBlur}
+                      placeholder="you@studio.com"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                  )}
+                />
+                <Controller
+                  control={control}
+                  name="altEmail"
+                  render={({ field: { onChange, onBlur, value } }) => (
+                    <InputRow
+                      label="Accounts"
+                      value={value}
+                      onChangeText={onChange}
+                      onBlur={onBlur}
+                      placeholder="Optional"
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                  )}
+                />
+                <Controller
+                  control={control}
+                  name="altPhone"
+                  render={({ field: { onChange, onBlur, value } }) => (
+                    <InputRow
+                      label="Studio line"
+                      value={value}
+                      onChangeText={onChange}
+                      onBlur={onBlur}
+                      placeholder="Optional"
+                      keyboardType="phone-pad"
+                    />
+                  )}
+                />
+                <Controller
+                  control={control}
+                  name="website"
+                  render={({ field: { onChange, onBlur, value } }) => (
+                    <InputRow
+                      label="Website"
+                      value={value}
+                      onChangeText={onChange}
+                      onBlur={onBlur}
+                      placeholder="example.com"
+                      autoCapitalize="none"
+                      keyboardType="url"
+                      divider={false}
+                    />
+                  )}
+                />
+              </FormGroup>
+              {errors.email?.message ? (
+                <FieldNote text={errors.email.message} />
               ) : null}
-              <Button
-                label="Save changes"
-                onPress={wrappedSubmit}
-                loading={isSubmitting}
-                disabled={!isValid}
-              />
-            </View>
-          }
-        >
-        {activeSection === 'owner' ? (
-        <FormSection title="OWNER">
-          <Controller
-            control={control}
-            name="displayName"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Your name"
-                placeholder="Full name"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
-              />
-            )}
-          />
-          <Controller
-            control={control}
-            name="role"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Title"
-                placeholder="e.g. Principal Designer"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-              />
-            )}
-          />
-        </FormSection>
-        ) : null}
+            </>
+          ) : null}
 
-        {activeSection === 'identity' ? (
-        <FormSection title="IDENTITY">
-          <Controller
-            control={control}
-            name="name"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Studio name"
-                placeholder="Your studio name"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.name?.message}
-                containerStyle={styles.fieldGap}
+          {activeSection === 'address' ? (
+            <FormGroup header="Address">
+              <Controller
+                control={control}
+                name="addressLine1"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Line 1"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="Building, street"
+                    autoCapitalize="words"
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="tagline"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Tagline"
-                placeholder="Short description"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
+              <Controller
+                control={control}
+                name="addressLine2"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Line 2"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="Area, landmark"
+                    autoCapitalize="words"
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="founded"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Founded year"
-                placeholder="e.g. 2018"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                keyboardType="number-pad"
+              <Controller
+                control={control}
+                name="city"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="City"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder=""
+                    autoCapitalize="words"
+                  />
+                )}
               />
-            )}
-          />
-        </FormSection>
-        ) : null}
+              <Controller
+                control={control}
+                name="state"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="State"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder=""
+                    autoCapitalize="words"
+                  />
+                )}
+              />
+              <Controller
+                control={control}
+                name="pincode"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="PIN"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder=""
+                    keyboardType="number-pad"
+                  />
+                )}
+              />
+              <Controller
+                control={control}
+                name="country"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Country"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder=""
+                    autoCapitalize="words"
+                    divider={false}
+                  />
+                )}
+              />
+            </FormGroup>
+          ) : null}
 
-        {activeSection === 'contact' ? (
-        <FormSection title="CONTACT">
-          {/* Verified mobile — same value the user signs in with.
-              Read-only here because changing it requires a fresh
-              OTP flow, which is a separate path. Shown so users
-              can confirm at a glance which number is on file. */}
-          <View style={styles.fieldGap}>
-            <TextField
-              label="Mobile (verified)"
-              value={verifiedPhone}
-              editable={false}
-            />
-          </View>
-          <Controller
-            control={control}
-            name="email"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Primary email"
-                placeholder="you@studio.com"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                autoCorrect={false}
-                error={errors.email?.message}
-                containerStyle={styles.fieldGap}
+          {activeSection === 'compliance' ? (
+            <FormGroup header="Compliance">
+              <Controller
+                control={control}
+                name="gstin"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="GSTIN"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="29AAAAA1234A1Z5"
+                    autoCapitalize="characters"
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="altEmail"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Accounts email"
-                placeholder="Optional"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                keyboardType="email-address"
-                autoCapitalize="none"
-                containerStyle={styles.fieldGap}
+              <Controller
+                control={control}
+                name="pan"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="PAN"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="AAAAA1234A"
+                    autoCapitalize="characters"
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="altPhone"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Studio landline"
-                placeholder="Optional"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                keyboardType="phone-pad"
-                containerStyle={styles.fieldGap}
+              <Controller
+                control={control}
+                name="rera"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="RERA"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="Registration number"
+                    autoCapitalize="characters"
+                    divider={false}
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="website"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Website"
-                placeholder="example.com"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                autoCapitalize="none"
-                keyboardType="url"
-              />
-            )}
-          />
-        </FormSection>
-        ) : null}
+            </FormGroup>
+          ) : null}
 
-        {activeSection === 'address' ? (
-        <FormSection title="ADDRESS">
-          <Controller
-            control={control}
-            name="addressLine1"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Address line 1"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
+          {activeSection === 'banking' ? (
+            <FormGroup header="Banking">
+              <Controller
+                control={control}
+                name="bankName"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Bank"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="e.g. HDFC Bank"
+                    autoCapitalize="words"
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="addressLine2"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Address line 2"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
+              <Controller
+                control={control}
+                name="bankAccount"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Account"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="Account number"
+                    keyboardType="number-pad"
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="city"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="City"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
+              <Controller
+                control={control}
+                name="bankIFSC"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="IFSC"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="HDFC0000123"
+                    autoCapitalize="characters"
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="state"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="State"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
+              <Controller
+                control={control}
+                name="bankBranch"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Branch"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="Branch name"
+                    autoCapitalize="words"
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="pincode"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="PIN code"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
+              <Controller
+                control={control}
+                name="upi"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="UPI"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="name@bank"
+                    autoCapitalize="none"
+                    divider={false}
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="country"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Country"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-              />
-            )}
-          />
-        </FormSection>
-        ) : null}
+            </FormGroup>
+          ) : null}
 
-        {activeSection === 'compliance' ? (
-        <FormSection title="COMPLIANCE">
-          <Controller
-            control={control}
-            name="gstin"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="GSTIN"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                autoCapitalize="characters"
-                containerStyle={styles.fieldGap}
+          {activeSection === 'social' ? (
+            <FormGroup header="Social">
+              <Controller
+                control={control}
+                name="instagram"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Instagram"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="@handle"
+                    autoCapitalize="none"
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="pan"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="PAN"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                autoCapitalize="characters"
-                containerStyle={styles.fieldGap}
+              <Controller
+                control={control}
+                name="linkedin"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="LinkedIn"
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="company-or-profile"
+                    autoCapitalize="none"
+                    divider={false}
+                  />
+                )}
               />
-            )}
-          />
-          <Controller
-            control={control}
-            name="rera"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="RERA"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                autoCapitalize="characters"
-              />
-            )}
-          />
-        </FormSection>
-        ) : null}
+            </FormGroup>
+          ) : null}
 
-        {activeSection === 'banking' ? (
-        <FormSection title="BANKING">
-          <Controller
-            control={control}
-            name="bankName"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Bank name"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
-              />
-            )}
-          />
-          <Controller
-            control={control}
-            name="bankAccount"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Account number"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
-              />
-            )}
-          />
-          <Controller
-            control={control}
-            name="bankIFSC"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="IFSC"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                autoCapitalize="characters"
-                containerStyle={styles.fieldGap}
-              />
-            )}
-          />
-          <Controller
-            control={control}
-            name="bankBranch"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Branch"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                containerStyle={styles.fieldGap}
-              />
-            )}
-          />
-          <Controller
-            control={control}
-            name="upi"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="UPI ID"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                autoCapitalize="none"
-              />
-            )}
-          />
-        </FormSection>
-        ) : null}
+          {submitError ? <FieldNote text={submitError} /> : null}
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
+  );
+}
 
-        {activeSection === 'social' ? (
-        <FormSection title="SOCIAL">
-          <Controller
-            control={control}
-            name="instagram"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Instagram"
-                placeholder="@handle"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                autoCapitalize="none"
-                containerStyle={styles.fieldGap}
-              />
-            )}
-          />
-          <Controller
-            control={control}
-            name="linkedin"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="LinkedIn"
-                placeholder="Company or profile slug"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                autoCapitalize="none"
-              />
-            )}
-          />
-        </FormSection>
-        ) : null}
-        </KeyboardFormLayout>
-      )}
-    </Screen>
+function FieldNote({ text }: { text: string }) {
+  const t = useThemeV2();
+  return (
+    <Text
+      variant="caption2"
+      style={{
+        color: t.palette.red.base,
+        paddingHorizontal: 32,
+        marginTop: 8,
+      }}
+    >
+      {text}
+    </Text>
   );
 }
 
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: screenInset,
-    paddingBottom: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-    backgroundColor: color.bg,
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+    gap: 10,
   },
-  backBtn: {
+  iconBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerTitle: { flex: 1, fontWeight: '600' },
+
+  tile: {
     width: 28,
     height: 28,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headerTitle: { flex: 1, textAlign: 'center' },
-  scrollContent: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.md,
-    paddingBottom: space.xl,
-  },
-  section: { marginBottom: space.lg },
-  sectionTitle: { letterSpacing: 0.5, marginBottom: space.sm },
-  fieldGap: { marginBottom: space.md },
-  footer: { marginTop: space.sm },
-
-  // Hub list — vertical stack of section cards on the landing
-  // page. Each card is bounded white with hairline border + 10 px
-  // radius (same vocabulary as the rest of the app's settings
-  // rows).
-  hubList: {
-    gap: 10,
-  },
-  hubCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    backgroundColor: color.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    borderRadius: 10,
-  },
-  hubCardIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    backgroundColor: color.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  hubCardBody: { flex: 1, minWidth: 0, gap: 2 },
 });

@@ -1,26 +1,33 @@
 /**
- * Notifications — aggregates time-sensitive alerts from across the app
- * into a single InteriorOS-styled card list.
+ * Notifications — v2 design.
  *
- *   • DUE       — projects where payment-out > payment-in (client owes)
- *   • LATE      — projects past their handover date and still not done
- *   • OVERDUE   — leads with a follow-up date in the past
- *   • TODAY     — appointments scheduled for today (still scheduled)
+ * Aggregates time-sensitive alerts from across the app:
+ *   • approval_transaction — pending expense approvals
+ *   • approval_material    — pending material requests
+ *   • due / late / overdue — project payments, late handover, follow-ups
+ *   • today                — appointments scheduled for today
+ *   • txn_*  / mr_*        — recent decisions on items I touched
  *
- * Cards mirror the visual language of the project / lead / appointment
- * lists: hairline border, sharp corners, soft shadow, mono uppercase
- * meta + a colored alert chip. Tapping a card jumps to the source.
+ * Layout:
+ *   1. v2 transparent header (back · "Notifications" + count caption)
+ *   2. Per-kind FormGroup-style section cards with tone-tinted IconTile
+ *      rows (icon + title + subtitle + colored meta pill + chevron)
+ *   3. v2 empty state when there's nothing to show
+ *
+ * All notification gathering / grouping logic is preserved 1:1 from
+ * the previous version — only the visual layer changed.
  */
 import { router, Stack } from 'expo-router';
 import { useMemo } from 'react';
 import {
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
-  Text as RNText,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useProjects } from '@/src/features/projects/useProjects';
@@ -30,9 +37,11 @@ import { useAppointments } from '@/src/features/crm/useAppointments';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { usePermissions } from '@/src/features/org/usePermissions';
 import { useOrgMaterialRequests } from '@/src/features/materialRequests/useOrgMaterialRequests';
-import { Screen } from '@/src/ui/Screen';
-import { color, screenInset, space } from '@/src/theme';
-import { fontFamily } from '@/src/theme/tokens';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
+import { useThemeV2, type ThemeV2 } from '@/src/theme/v2';
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
@@ -84,117 +93,51 @@ type Notification = {
   kind: NotificationKind;
   title: string;
   subtitle: string;
-  meta: string; // small uppercase right-side text (e.g. "5D AGO")
-  /** Sort key — bigger number = more urgent. */
+  meta: string;
   weight: number;
   href: string;
 };
 
-const KIND_META: Record<
-  NotificationKind,
-  { label: string; bg: string; chipFg: string; iconBg: string; iconFg: string; icon: keyof typeof Ionicons.glyphMap }
-> = {
-  due: {
-    label: 'PAYMENT DUE',
-    bg: color.danger,
-    chipFg: '#fff',
-    iconBg: color.dangerSoft,
-    iconFg: color.danger,
-    icon: 'cash-outline',
-  },
-  late: {
-    label: 'DELAYED',
-    bg: color.warning,
-    chipFg: '#fff',
-    iconBg: color.warningSoft,
-    iconFg: color.warning,
-    icon: 'time-outline',
-  },
-  overdue: {
-    label: 'FOLLOW-UP DUE',
-    bg: color.danger,
-    chipFg: '#fff',
-    iconBg: color.dangerSoft,
-    iconFg: color.danger,
-    icon: 'alert-circle-outline',
-  },
-  today: {
-    label: 'TODAY',
-    bg: color.primary,
-    chipFg: '#fff',
-    iconBg: color.primarySoft,
-    iconFg: color.primary,
-    icon: 'calendar-outline',
-  },
-  approval_material: {
-    label: 'MATERIAL',
-    bg: color.primary,
-    chipFg: '#fff',
-    iconBg: color.primarySoft,
-    iconFg: color.primary,
-    icon: 'cube-outline',
-  },
-  approval_transaction: {
-    label: 'EXPENSE',
-    bg: color.warning,
-    chipFg: '#fff',
-    iconBg: color.warningSoft,
-    iconFg: color.warning,
-    icon: 'wallet-outline',
-  },
-  txn_approved: {
-    label: 'APPROVED',
-    bg: color.success,
-    chipFg: '#fff',
-    iconBg: color.successSoft,
-    iconFg: color.success,
-    icon: 'checkmark-circle-outline',
-  },
-  txn_rejected: {
-    label: 'REJECTED',
-    bg: color.danger,
-    chipFg: '#fff',
-    iconBg: color.dangerSoft,
-    iconFg: color.danger,
-    icon: 'close-circle-outline',
-  },
-  txn_cleared: {
-    label: 'CLEARED',
-    bg: color.success,
-    chipFg: '#fff',
-    iconBg: color.successSoft,
-    iconFg: color.success,
-    icon: 'cash-outline',
-  },
-  mr_approved: {
-    label: 'APPROVED',
-    bg: color.success,
-    chipFg: '#fff',
-    iconBg: color.successSoft,
-    iconFg: color.success,
-    icon: 'checkmark-circle-outline',
-  },
-  mr_rejected: {
-    label: 'REJECTED',
-    bg: color.danger,
-    chipFg: '#fff',
-    iconBg: color.dangerSoft,
-    iconFg: color.danger,
-    icon: 'close-circle-outline',
-  },
-  mr_delivery_update: {
-    label: 'DELIVERY',
-    bg: color.primary,
-    chipFg: '#fff',
-    iconBg: color.primarySoft,
-    iconFg: color.primary,
-    icon: 'cube-outline',
-  },
+/**
+ * Tone discipline for notifications:
+ *   - red    → overdue / error / rejected (act now)
+ *   - orange → pending action / warning (act now)
+ *   - green  → success / approved / cleared
+ *   - neutral → informational status updates (calendar, delivery progress)
+ *
+ * The kind icon tile is ALWAYS neutral — what matters semantically is the meta
+ * pill on the right ("Payment due", "Approved", etc.), not the category icon
+ * on the left. This keeps the list calm; only act-now items pull the eye.
+ */
+type ToneKey = 'red' | 'orange' | 'green' | 'neutral';
+
+type KindMeta = {
+  label: string;
+  tone: ToneKey;
+  icon: keyof typeof Ionicons.glyphMap;
+};
+
+const KIND_META: Record<NotificationKind, KindMeta> = {
+  due:                  { label: 'Payment due',   tone: 'red',     icon: 'cash-outline' },
+  late:                 { label: 'Delayed',       tone: 'orange',  icon: 'time-outline' },
+  overdue:              { label: 'Follow-up due', tone: 'red',     icon: 'alert-circle-outline' },
+  today:                { label: 'Today',         tone: 'neutral', icon: 'calendar-outline' },
+  approval_material:    { label: 'Material',      tone: 'orange',  icon: 'cube-outline' },
+  approval_transaction: { label: 'Expense',       tone: 'orange',  icon: 'wallet-outline' },
+  txn_approved:         { label: 'Approved',      tone: 'green',   icon: 'checkmark-circle-outline' },
+  txn_rejected:         { label: 'Rejected',      tone: 'red',     icon: 'close-circle-outline' },
+  txn_cleared:          { label: 'Cleared',       tone: 'green',   icon: 'cash-outline' },
+  mr_approved:          { label: 'Approved',      tone: 'green',   icon: 'checkmark-circle-outline' },
+  mr_rejected:          { label: 'Rejected',      tone: 'red',     icon: 'close-circle-outline' },
+  mr_delivery_update:   { label: 'Delivery',      tone: 'neutral', icon: 'cube-outline' },
 };
 
 // ── Component ─────────────────────────────────────────────────────────
 
 export default function NotificationsScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  const refresh = usePullToRefresh();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? undefined;
@@ -206,10 +149,6 @@ export default function NotificationsScreen() {
   const { totalsByProject, transactions: orgTransactions } = useProjectTotals(orgId);
   const { data: leads } = useLeads(orgId);
   const { data: appointments } = useAppointments(orgId);
-  // Fetch ALL material requests for the org (no status filter) so the
-  // same hook drives both the "pending approvals" rows and the new
-  // "Recent" entries (approved / rejected / delivery-update events from
-  // the last 30 days). Cheaper than firing two listeners.
   const { data: allMaterialsOrg } = useOrgMaterialRequests(orgId);
   const pendingMaterialsOrg = useMemo(
     () => allMaterialsOrg.filter((r) => r.status === 'pending'),
@@ -242,32 +181,27 @@ export default function NotificationsScreen() {
       });
     }
 
-    const visiblePendingTxns = orgTransactions.filter((t) => {
-      if (t.workflowStatus !== 'pending_approval') return false;
+    const visiblePendingTxns = orgTransactions.filter((tx) => {
+      if (tx.workflowStatus !== 'pending_approval') return false;
       if (!uid) return false;
       if (canApproveTxnCap) return true;
-      return t.createdBy === uid;
+      return tx.createdBy === uid;
     });
-    for (const t of visiblePendingTxns) {
-      const p = projects.find((x) => x.id === t.projectId);
-      const party = t.partyName || 'Expense';
+    for (const tx of visiblePendingTxns) {
+      const p = projects.find((x) => x.id === tx.projectId);
+      const party = tx.partyName || 'Expense';
       out.push({
-        id: `at-${t.id}`,
+        id: `at-${tx.id}`,
         kind: 'approval_transaction',
         title: p?.name ?? 'Project',
-        subtitle: `${party} · ${inrCompact(t.amount)} · awaiting approval`,
+        subtitle: `${party} · ${inrCompact(tx.amount)} · awaiting approval`,
         meta: 'PENDING',
         weight: 97,
-        href: `/(app)/projects/${t.projectId}/transaction/${t.id}`,
+        href: `/(app)/projects/${tx.projectId}/transaction/${tx.id}`,
       });
     }
 
     // Recent transaction events (last 30 days) — approved / rejected / cleared.
-    // Surface only events the viewer participated in:
-    //   - they submitted the txn (createdBy), OR
-    //   - they made the decision (approvedBy / rejectedBy / cleared by them).
-    // Keeps the bell scoped to "things that happened to me" — admins won't be
-    // spammed with every txn the studio approved, just ones they touched.
     if (uid) {
       const cutoff = now.getTime() - 30 * 86_400_000;
       type RecentEvent = {
@@ -276,55 +210,43 @@ export default function NotificationsScreen() {
         txn: (typeof orgTransactions)[number];
       };
       const events: RecentEvent[] = [];
-      // When admin uses "Approve & Clear" in one tap, both approvedAt and
-      // settlement.clearedAt are written by the same Firestore update —
-      // their timestamps land within the same server batch (typically a
-      // few ms apart, well under a second). The bell would otherwise show
-      // two separate entries for the same admin action, which is noise.
-      // Treat the cleared event as the canonical one in that case (it
-      // implies approval) and suppress the duplicate approved entry.
       const SAME_WRITE_WINDOW_MS = 5_000;
 
-      for (const t of orgTransactions) {
-        const projName = projects.find((x) => x.id === t.projectId)?.name;
+      for (const tx of orgTransactions) {
+        const projName = projects.find((x) => x.id === tx.projectId)?.name;
         if (!projName) continue;
 
-        const clearedMs = t.settlement?.clearedAt?.toMillis();
-        const approvedMs = t.approvedAt?.toMillis();
+        const clearedMs = tx.settlement?.clearedAt?.toMillis();
+        const approvedMs = tx.approvedAt?.toMillis();
         const sameWriteApproveAndClear =
           clearedMs != null &&
           approvedMs != null &&
           Math.abs(clearedMs - approvedMs) < SAME_WRITE_WINDOW_MS;
 
-        // Approved — skip when this txn was approved-and-cleared together
-        // (the cleared entry below already represents the same admin action).
         if (
-          t.workflowStatus === 'posted' &&
+          tx.workflowStatus === 'posted' &&
           approvedMs != null &&
           !sameWriteApproveAndClear
         ) {
           if (
             approvedMs >= cutoff &&
-            (t.createdBy === uid || t.approvedBy === uid)
+            (tx.createdBy === uid || tx.approvedBy === uid)
           ) {
-            events.push({ kind: 'txn_approved', whenMs: approvedMs, txn: t });
+            events.push({ kind: 'txn_approved', whenMs: approvedMs, txn: tx });
           }
-        } else if (t.workflowStatus === 'rejected' && t.rejectedAt) {
-          const ms = t.rejectedAt.toMillis();
-          if (ms >= cutoff && (t.createdBy === uid || t.rejectedBy === uid)) {
-            events.push({ kind: 'txn_rejected', whenMs: ms, txn: t });
+        } else if (tx.workflowStatus === 'rejected' && tx.rejectedAt) {
+          const ms = tx.rejectedAt.toMillis();
+          if (ms >= cutoff && (tx.createdBy === uid || tx.rejectedBy === uid)) {
+            events.push({ kind: 'txn_rejected', whenMs: ms, txn: tx });
           }
         }
 
-        // Cleared — surfaces on its own; for clear-later flows it's a
-        // distinct event from the earlier approval (which gets its own
-        // entry timestamped at approval time).
         if (clearedMs != null) {
           if (
             clearedMs >= cutoff &&
-            (t.createdBy === uid || t.settlement?.clearedBy === uid)
+            (tx.createdBy === uid || tx.settlement?.clearedBy === uid)
           ) {
-            events.push({ kind: 'txn_cleared', whenMs: clearedMs, txn: t });
+            events.push({ kind: 'txn_cleared', whenMs: clearedMs, txn: tx });
           }
         }
       }
@@ -332,10 +254,10 @@ export default function NotificationsScreen() {
       events.sort((a, b) => b.whenMs - a.whenMs);
       const RECENT_CAP = 15;
       for (const e of events.slice(0, RECENT_CAP)) {
-        const t = e.txn;
-        const p = projects.find((x) => x.id === t.projectId);
-        const party = t.partyName || 'Expense';
-        const amt = inrCompact(t.amount);
+        const tx = e.txn;
+        const p = projects.find((x) => x.id === tx.projectId);
+        const party = tx.partyName || 'Expense';
+        const amt = inrCompact(tx.amount);
         const ago = relPast(new Date(e.whenMs));
         let subtitle: string;
         let metaLabel: string;
@@ -344,13 +266,12 @@ export default function NotificationsScreen() {
           metaLabel = ago.toUpperCase();
         } else if (e.kind === 'txn_rejected') {
           subtitle = `${party} · ${amt} · rejected${
-            t.rejectionNote ? ` (${t.rejectionNote})` : ''
+            tx.rejectionNote ? ` (${tx.rejectionNote})` : ''
           }`;
           metaLabel = ago.toUpperCase();
         } else {
-          // cleared
-          const isOwn = t.createdBy === uid;
-          const isReimb = t.submissionKind === 'expense_reimbursement';
+          const isOwn = tx.createdBy === uid;
+          const isReimb = tx.submissionKind === 'expense_reimbursement';
           subtitle = isReimb
             ? isOwn
               ? `Reimbursement of ${amt} cleared`
@@ -358,26 +279,21 @@ export default function NotificationsScreen() {
             : `Paid to ${party} · ${amt}`;
           metaLabel = ago.toUpperCase();
         }
-        // Decided/cleared events weight below pending. Newer events float to
-        // the top of the recent group via whenMs; we squash to the 30–60 band.
         const ageDays = Math.max(0, (now.getTime() - e.whenMs) / 86_400_000);
-        const weight = 60 - Math.min(30, ageDays); // newest = 60, oldest = 30
+        const weight = 60 - Math.min(30, ageDays);
         out.push({
-          id: `${e.kind}-${t.id}-${e.whenMs}`,
+          id: `${e.kind}-${tx.id}-${e.whenMs}`,
           kind: e.kind,
           title: p?.name ?? 'Project',
           subtitle,
           meta: metaLabel,
           weight,
-          href: `/(app)/projects/${t.projectId}/transaction/${t.id}`,
+          href: `/(app)/projects/${tx.projectId}/transaction/${tx.id}`,
         });
       }
     }
 
-    // Recent material request events — last 30 days, scoped to events the
-    // viewer participated in (creator OR the admin who acted on it).
-    // Each event uses a dedicated timestamp field so the bell reflects
-    // the actual moment of the event, not a proxy.
+    // Recent material request events — last 30 days.
     if (uid) {
       const cutoff = now.getTime() - 30 * 86_400_000;
       type MrEvent = {
@@ -390,8 +306,6 @@ export default function NotificationsScreen() {
         const projName = projects.find((x) => x.id === r.projectId)?.name;
         if (!projName) continue;
 
-        // Approved — skip auto-approvals (silent self-actions don't deserve a
-        // "look at this" line in the bell).
         if (r.status === 'approved' && !r.autoApproved && r.approvedAt) {
           const ms = r.approvedAt.toMillis();
           if (ms >= cutoff && (r.createdBy === uid || r.approvedBy === uid)) {
@@ -399,7 +313,6 @@ export default function NotificationsScreen() {
           }
         }
 
-        // Rejected — surface for both the creator AND the admin who rejected.
         if (r.status === 'rejected' && r.rejectedAt) {
           const ms = r.rejectedAt.toMillis();
           if (ms >= cutoff && (r.createdBy === uid || r.rejectedBy === uid)) {
@@ -407,9 +320,6 @@ export default function NotificationsScreen() {
           }
         }
 
-        // Delivery updates — surface for the creator and the admin who made
-        // the change. Bell shows a single rolled-up entry per request; the
-        // granular per-item info goes via push notifications.
         if (r.status === 'approved' && r.lastDeliveryUpdateAt) {
           const ms = r.lastDeliveryUpdateAt.toMillis();
           if (
@@ -466,7 +376,7 @@ export default function NotificationsScreen() {
           title: p.name,
           subtitle: `Client owes ${inrCompact(Math.abs(balance))} · received +${inrCompact(totals.income)} / spent −${inrCompact(totals.expense)}`,
           meta: 'NOW',
-          weight: 100 + Math.abs(balance) / 1_00_000, // bigger loss → higher
+          weight: 100 + Math.abs(balance) / 1_00_000,
           href: `/(app)/projects/${p.id}`,
         });
       }
@@ -480,7 +390,7 @@ export default function NotificationsScreen() {
           title: p.name,
           subtitle: `Handover was due ${endDate.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} — ${daysLate} day${daysLate === 1 ? '' : 's'} ago`,
           meta: `${daysLate}D LATE`,
-          weight: 80 + daysLate, // longer delay → higher
+          weight: 80 + daysLate,
           href: `/(app)/projects/${p.id}`,
         });
       }
@@ -519,7 +429,7 @@ export default function NotificationsScreen() {
         title: a.title,
         subtitle: `${fmtTime(at)}${a.clientName ? ` · with ${a.clientName}` : ''}${a.location ? ` · ${a.location}` : ''}`,
         meta: fmtTime(at).toUpperCase(),
-        weight: 50 + (24 - at.getHours()), // earlier today = higher (more imminent)
+        weight: 50 + (24 - at.getHours()),
         href: `/(app)/crm/appointment/${a.id}`,
       });
     }
@@ -554,6 +464,12 @@ export default function NotificationsScreen() {
       'late',
       'overdue',
       'today',
+      'txn_approved',
+      'txn_rejected',
+      'txn_cleared',
+      'mr_approved',
+      'mr_rejected',
+      'mr_delivery_update',
     ];
     for (const kind of order) {
       const items = map.get(kind);
@@ -565,255 +481,366 @@ export default function NotificationsScreen() {
   }, [notifications]);
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      <View style={styles.topBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="chevron-back" size={22} color={color.textMuted} />
+      {/* Header — transparent so the AmbientBackground flows through */}
+      <View style={styles.header}>
+        <Pressable
+          onPress={() => router.back()}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { backgroundColor: t.colors.fill3, borderRadius: 999 },
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <Ionicons name="chevron-back" size={18} color={t.colors.label} />
         </Pressable>
         <View style={{ flex: 1 }}>
-          <RNText style={styles.eyebrow}>
+          <Text variant="headline" color="label">
+            Notifications
+          </Text>
+          <Text
+            variant="caption2"
+            color="secondary"
+            style={{ letterSpacing: 0.5, marginTop: 1 }}
+          >
             {notifications.length} {notifications.length === 1 ? 'NOTIFICATION' : 'NOTIFICATIONS'}
-          </RNText>
-          <RNText style={styles.title}>Notifications</RNText>
+          </Text>
         </View>
-        <View style={styles.navBtn} />
+        <View style={styles.iconBtn} />
       </View>
 
       {notifications.length === 0 ? (
-        <View style={styles.empty}>
-          <Ionicons name="checkmark-circle-outline" size={36} color={color.success} />
-          <RNText style={styles.emptyTitle}>All caught up</RNText>
-          <RNText style={styles.emptySub}>
-            No pending approvals, payments due, late projects, overdue follow-ups, or appointments
-            today.
-          </RNText>
+        <View style={styles.emptyBox}>
+          <View
+            style={[
+              styles.emptyIcon,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.green.softDark : t.palette.green.soft,
+                borderRadius: t.radii.tile + 4,
+              },
+            ]}
+          >
+            <Ionicons
+              name="checkmark-circle"
+              size={32}
+              color={t.palette.green.base}
+            />
+          </View>
+          <Text
+            variant="title3"
+            color="label"
+            style={{ marginTop: 14, fontWeight: '700' }}
+          >
+            All caught up
+          </Text>
+          <Text
+            variant="callout"
+            color="secondary"
+            style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}
+          >
+            No pending approvals, payments due, late projects, overdue
+            follow-ups, or appointments today.
+          </Text>
         </View>
       ) : (
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={{ paddingBottom: 32 + insets.bottom }}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl {...refresh.props} />}
         >
-          {grouped.map((bucket) => {
-            const meta = KIND_META[bucket.kind];
-            return (
-              <View key={bucket.kind} style={styles.section}>
-                <View style={styles.sectionHeader}>
-                  <RNText style={styles.sectionLabel}>
-                    {bucket.label}
-                  </RNText>
-                  <View style={[styles.countDot, { backgroundColor: meta.bg }]}>
-                    <RNText style={styles.countDotText}>{bucket.items.length}</RNText>
-                  </View>
-                </View>
-                {bucket.items.map((n) => (
-                  <NotificationCard key={n.id} notif={n} />
-                ))}
-              </View>
-            );
-          })}
-          <View style={{ height: 24 }} />
+          {grouped.map((bucket) => (
+            <Section
+              key={bucket.kind}
+              kind={bucket.kind}
+              label={bucket.label}
+              items={bucket.items}
+              t={t}
+            />
+          ))}
         </ScrollView>
       )}
-    </Screen>
+    </View>
   );
 }
 
-// ── Card ──────────────────────────────────────────────────────────────
+// ── Section + Card ────────────────────────────────────────────────────
 
-function NotificationCard({ notif }: { notif: Notification }) {
+function Section({
+  kind,
+  label,
+  items,
+  t,
+}: {
+  kind: NotificationKind;
+  label: string;
+  items: Notification[];
+  t: ThemeV2;
+}) {
+  const meta = KIND_META[kind];
+
+  // Section count badge mirrors the meta pill colour discipline: neutral for
+  // informational sections, palette tone for act-now sections.
+  let countBg: string;
+  let countFg: string;
+  if (meta.tone === 'neutral') {
+    countBg = t.colors.fill3;
+    countFg = t.colors.secondary;
+  } else {
+    const tone = t.palette[meta.tone];
+    countBg = t.mode === 'dark' ? tone.softDark : tone.soft;
+    countFg = tone.base;
+  }
+
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
+  return (
+    <View style={{ marginTop: 24 }}>
+      <View style={styles.sectionHeader}>
+        <Text variant="caption2" color="secondary" style={{ letterSpacing: 0.4 }}>
+          {label.toUpperCase()}
+        </Text>
+        <View
+          style={[
+            styles.countDot,
+            {
+              backgroundColor: countBg,
+              borderRadius: 999,
+            },
+          ]}
+        >
+          <Text
+            variant="caption2"
+            style={{
+              color: countFg,
+              fontWeight: '700',
+              letterSpacing: 0.3,
+            }}
+          >
+            {items.length}
+          </Text>
+        </View>
+      </View>
+
+      <View
+        style={[
+          styles.sectionCard,
+          {
+            backgroundColor: cardBg,
+            borderRadius: t.radii.group,
+            borderColor: cardBorder,
+            borderWidth: t.hairline,
+          },
+        ]}
+      >
+        {items.map((n, idx) => (
+          <NotificationRow
+            key={n.id}
+            notif={n}
+            divider={idx < items.length - 1}
+            t={t}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function NotificationRow({
+  notif,
+  divider,
+  t,
+}: {
+  notif: Notification;
+  divider: boolean;
+  t: ThemeV2;
+}) {
   const meta = KIND_META[notif.kind];
+
+  // Icon tile is ALWAYS neutral — categorical, not semantic.
+  const iconTileBg = t.colors.fill3;
+  const iconTileFg = t.colors.secondary;
+
+  // Meta pill carries the semantic colour: red/orange/green for act-now items,
+  // neutral for purely informational updates.
+  let pillBg: string;
+  let pillFg: string;
+  if (meta.tone === 'neutral') {
+    pillBg = t.colors.fill3;
+    pillFg = t.colors.secondary;
+  } else {
+    const tone = t.palette[meta.tone];
+    pillBg = t.mode === 'dark' ? tone.softDark : tone.soft;
+    pillFg = tone.base;
+  }
+
   return (
     <Pressable
       onPress={() => router.push(notif.href as never)}
-      style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }]}
+      style={({ pressed }) => [
+        styles.row,
+        pressed && { backgroundColor: t.colors.fill3 },
+      ]}
     >
-      <View style={[styles.cardIcon, { backgroundColor: meta.iconBg }]}>
-        <Ionicons name={meta.icon} size={18} color={meta.iconFg} />
+      <View
+        style={[
+          styles.iconTile,
+          {
+            backgroundColor: iconTileBg,
+            borderRadius: t.radii.tile,
+          },
+        ]}
+      >
+        <Ionicons name={meta.icon} size={16} color={iconTileFg} />
       </View>
-      <View style={styles.cardBody}>
-        <View style={styles.cardTopRow}>
-          <RNText style={styles.cardTitle} numberOfLines={1}>
+
+      <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+        <View style={styles.titleRow}>
+          <Text
+            variant="body"
+            color="label"
+            style={{ flex: 1, fontWeight: '600' }}
+            numberOfLines={1}
+          >
             {notif.title}
-          </RNText>
-          <View style={[styles.metaPill, { backgroundColor: meta.bg }]}>
-            <RNText style={styles.metaPillText}>{notif.meta}</RNText>
+          </Text>
+          <View
+            style={[
+              styles.metaPill,
+              {
+                backgroundColor: pillBg,
+                borderRadius: 999,
+                marginLeft: 8,
+              },
+            ]}
+          >
+            <Text
+              variant="caption2"
+              style={{
+                color: pillFg,
+                fontWeight: '700',
+                letterSpacing: 0.4,
+              }}
+              numberOfLines={1}
+            >
+              {notif.meta}
+            </Text>
           </View>
         </View>
-        <RNText style={styles.cardSub} numberOfLines={2}>
+        <Text
+          variant="caption1"
+          color="secondary"
+          style={{ marginTop: 2 }}
+          numberOfLines={2}
+        >
           {notif.subtitle}
-        </RNText>
+        </Text>
       </View>
+
       <Ionicons
         name="chevron-forward"
         size={14}
-        color={color.textFaint}
-        style={{ alignSelf: 'center' }}
+        color={t.colors.tertiary}
+        style={{ marginLeft: 8 }}
       />
+
+      {divider ? (
+        <View
+          style={[
+            styles.rowDivider,
+            { backgroundColor: t.colors.separator, left: 60 },
+          ]}
+        />
+      ) : null}
     </Pressable>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  // Top bar
-  topBar: {
+  // Header
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: space.sm,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+    gap: 10,
   },
-  navBtn: {
+  iconBtn: {
     width: 32,
     height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  eyebrow: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 1.4,
-  },
-  title: {
-    fontFamily: fontFamily.sans,
-    fontSize: 22,
-    fontWeight: '700',
-    color: color.text,
-    letterSpacing: -0.4,
-    marginTop: 1,
-  },
-
-  // Scroll
-  scroll: {
-    paddingTop: space.md,
-    paddingBottom: 40,
-  },
 
   // Section
-  section: {
-    marginBottom: 18,
-  },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingBottom: 8,
-    gap: 6,
-  },
-  sectionLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 0.8,
+    paddingHorizontal: 32,
+    paddingBottom: 7,
+    gap: 8,
   },
   countDot: {
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 5,
+    minWidth: 22,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 9,
   },
-  countDotText: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#fff',
-    fontVariant: ['tabular-nums'],
+  sectionCard: {
+    marginHorizontal: 16,
+    overflow: 'hidden',
   },
 
-  // Card (matches project/lead/appointment card style)
-  card: {
+  // Row
+  row: {
     flexDirection: 'row',
-    gap: 10,
-    marginHorizontal: screenInset,
-    marginBottom: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: color.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    shadowColor: '#0F172A',
-    shadowOpacity: 0.06,
-    shadowRadius: 3,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 64,
+    position: 'relative',
   },
-  cardIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+  iconTile: {
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    flexShrink: 0,
   },
-  cardBody: {
-    flex: 1,
-    minWidth: 0,
-  },
-  cardTopRow: {
+  titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
-  },
-  cardTitle: {
-    flex: 1,
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: '600',
-    color: color.text,
-    letterSpacing: -0.2,
-  },
-  cardSub: {
-    fontFamily: fontFamily.sans,
-    fontSize: 12,
-    lineHeight: 15,
-    color: color.textMuted,
-    marginTop: 2,
   },
   metaPill: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    maxWidth: 110,
   },
-  metaPillText: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#fff',
-    letterSpacing: 0.6,
+  rowDivider: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    height: 0.5,
   },
 
   // Empty
-  empty: {
+  emptyBox: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 36,
-    gap: 6,
+    paddingHorizontal: 32,
   },
-  emptyTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 16,
-    fontWeight: '700',
-    color: color.text,
-    marginTop: 8,
-  },
-  emptySub: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    lineHeight: 18,
-    color: color.textMuted,
-    textAlign: 'center',
+  emptyIcon: {
+    width: 72,
+    height: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

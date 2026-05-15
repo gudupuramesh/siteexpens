@@ -30,12 +30,14 @@ import type { RoleKey } from './types';
 
 // ── Bottom-tab visibility ─────────────────────────────────────────
 
-export type BottomTabKey = 'index' | 'overview' | 'crm' | 'toolkit' | 'chats';
+export type BottomTabKey = 'index' | 'overview' | 'crm' | 'toolkit' | 'account';
 
 /** Bottom-tab routes a given role can see.
  *
  *  Universal across all 8 roles: `index` (Projects), `overview`,
- *  `toolkit`, `chats` (More). Every signed-in user gets these so
+ *  `toolkit`, `account` (formerly `chats` — renamed when the v2
+ *  design promoted the More tab to a proper "Account" tab). Every
+ *  signed-in user gets these so
  *  the studio switcher chip / project list / utilities are
  *  always reachable. Overview content will diverge by role in a
  *  future phase — for now everyone sees the same Overview,
@@ -52,15 +54,15 @@ export type BottomTabKey = 'index' | 'overview' | 'crm' | 'toolkit' | 'chats';
  */
 const BOTTOM_TABS_BY_ROLE: Record<RoleKey, ReadonlySet<BottomTabKey>> = {
   // SA / Admin / Manager / Viewer get CRM.
-  superAdmin:   new Set(['index', 'overview', 'crm', 'toolkit', 'chats']),
-  admin:        new Set(['index', 'overview', 'crm', 'toolkit', 'chats']),
-  manager:      new Set(['index', 'overview', 'crm', 'toolkit', 'chats']),
-  viewer:       new Set(['index', 'overview', 'crm', 'toolkit', 'chats']),
+  superAdmin:   new Set(['index', 'overview', 'crm', 'toolkit', 'account']),
+  admin:        new Set(['index', 'overview', 'crm', 'toolkit', 'account']),
+  manager:      new Set(['index', 'overview', 'crm', 'toolkit', 'account']),
+  viewer:       new Set(['index', 'overview', 'crm', 'toolkit', 'account']),
   // Accountant / Site Engineer / Supervisor / Client — no CRM.
-  accountant:   new Set(['index', 'overview', 'toolkit', 'chats']),
-  siteEngineer: new Set(['index', 'overview', 'toolkit', 'chats']),
-  supervisor:   new Set(['index', 'overview', 'toolkit', 'chats']),
-  client:       new Set(['index', 'overview', 'toolkit', 'chats']),
+  accountant:   new Set(['index', 'overview', 'toolkit', 'account']),
+  siteEngineer: new Set(['index', 'overview', 'toolkit', 'account']),
+  supervisor:   new Set(['index', 'overview', 'toolkit', 'account']),
+  client:       new Set(['index', 'overview', 'toolkit', 'account']),
 };
 
 const EMPTY_BOTTOM_TABS = new Set<BottomTabKey>();

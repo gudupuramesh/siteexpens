@@ -1,93 +1,139 @@
 /**
- * Tutorials — all enabled tutorial videos grouped by category.
+ * Tutorials — v2 design.
  *
- * Shown in the More tab under LEARN → Tutorials. Videos are fetched
- * from `system/tutorialVideos` via TutorialsContext (mounted in the
- * authenticated layout, so no extra Firestore read here).
+ * Layout (top → bottom):
+ *   1. v2 header: back · "Tutorials" · count caption
+ *   2. Sectioned list — one section per category, each containing video
+ *      cards with thumbnail · play overlay · title · "Watch tutorial →"
+ *   3. v2 empty state when no enabled videos exist
  *
- * Layout:
- *   Header + back nav
- *   Per category: section label → list of video cards (same card style
- *   as TutorialEmptyState — thumbnail + title + "Watch tutorial →")
- *   Empty state if no videos are enabled yet
+ * Videos come from `system/tutorialVideos` via TutorialsContext (mounted
+ * in the authenticated layout) so this screen does no extra Firestore
+ * reads. YouTube URLs open in the system browser via `Linking.openURL`.
  */
 import { router, Stack } from 'expo-router';
-import { Image, Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  Image,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useTutorialsContext } from '@/src/features/tutorials/TutorialsContext';
 import type { TutorialVideoEntry } from '@/src/features/tutorials/types';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { color, screenInset, space } from '@/src/theme';
 
-// ── YouTube helpers ───────────────────────────────────────────────────
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 function extractYouTubeId(url: string): string | null {
   const m = url.match(/(?:v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
   return m ? m[1] : null;
 }
 
-// ── Video card ────────────────────────────────────────────────────────
-
 function VideoCard({ entry }: { entry: TutorialVideoEntry }) {
+  const t = useThemeV2();
   const videoId = extractYouTubeId(entry.youtubeUrl);
   const thumbnailUri = videoId
     ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
     : null;
-
-  const handleWatch = () => {
-    Linking.openURL(entry.youtubeUrl).catch(() => undefined);
-  };
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
 
   return (
     <Pressable
-      onPress={handleWatch}
-      style={({ pressed }) => [styles.card, pressed && { opacity: 0.82 }]}
+      onPress={() => Linking.openURL(entry.youtubeUrl).catch(() => undefined)}
+      style={({ pressed }) => [
+        styles.card,
+        {
+          backgroundColor: cardBg,
+          borderRadius: t.radii.card,
+          borderColor: cardBorder,
+          borderWidth: t.hairline,
+        },
+        pressed && { opacity: 0.92 },
+      ]}
       accessibilityRole="button"
       accessibilityLabel={`Watch tutorial: ${entry.title}`}
     >
-      {thumbnailUri ? (
-        <Image
-          source={{ uri: thumbnailUri }}
-          style={styles.thumbnail}
-          resizeMode="cover"
-          accessibilityIgnoresInvertColors
-        />
-      ) : (
-        <View style={styles.thumbnailPlaceholder}>
-          <Ionicons name="play-circle-outline" size={44} color={color.textFaint} />
-        </View>
-      )}
-      <View style={styles.meta}>
-        <View style={styles.titleRow}>
-          <Ionicons name="play-circle" size={15} color={color.primary} />
-          <Text
-            variant="bodyStrong"
-            color="text"
-            style={styles.titleText}
-            numberOfLines={2}
+      {/* Thumbnail */}
+      <View style={styles.thumbWrap}>
+        {thumbnailUri ? (
+          <Image
+            source={{ uri: thumbnailUri }}
+            style={styles.thumbnail}
+            resizeMode="cover"
+            accessibilityIgnoresInvertColors
+          />
+        ) : (
+          <View
+            style={[
+              styles.thumbnailPlaceholder,
+              { backgroundColor: t.colors.fill3 },
+            ]}
           >
-            {entry.title}
+            <Ionicons
+              name="videocam-outline"
+              size={32}
+              color={t.colors.tertiary}
+            />
+          </View>
+        )}
+        {/* Play overlay */}
+        <View pointerEvents="none" style={styles.playOverlay}>
+          <View
+            style={[
+              styles.playBtn,
+              { backgroundColor: t.palette.red.base },
+            ]}
+          >
+            <Ionicons name="play" size={18} color="#fff" />
+          </View>
+        </View>
+      </View>
+
+      {/* Meta */}
+      <View style={styles.meta}>
+        <Text
+          variant="body"
+          color="label"
+         
+          numberOfLines={2}
+        >
+          {entry.title}
+        </Text>
+        <View style={styles.metaFooter}>
+          <Ionicons
+            name="logo-youtube"
+            size={13}
+            color={t.palette.red.base}
+          />
+          <Text
+            variant="caption1"
+            style={{
+              color: t.palette.blue.base,
+              marginLeft: 6,
+              fontWeight: '600',
+            }}
+          >
+            Watch on YouTube →
           </Text>
         </View>
-        <Text variant="metaStrong" color="primary" style={styles.watchLabel}>
-          Watch tutorial →
-        </Text>
       </View>
     </Pressable>
   );
 }
 
-// ── Screen ────────────────────────────────────────────────────────────
-
 export default function TutorialsScreen() {
+  const t = useThemeV2();
   const { videos } = useTutorialsContext();
 
-  // Build a sorted map of category → entries (enabled only)
   const grouped: { category: string; entries: TutorialVideoEntry[] }[] = (() => {
     if (!videos) return [];
-
     const map = new Map<string, TutorialVideoEntry[]>();
     for (const entry of Object.values(videos)) {
       if (!entry.enabled) continue;
@@ -95,8 +141,6 @@ export default function TutorialsScreen() {
       if (!map.has(cat)) map.set(cat, []);
       map.get(cat)!.push(entry);
     }
-
-    // Sort categories alphabetically; entries within each category by title
     return Array.from(map.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([category, entries]) => ({
@@ -105,153 +149,191 @@ export default function TutorialsScreen() {
       }));
   })();
 
+  const totalVideos = grouped.reduce((sum, g) => sum + g.entries.length, 0);
   const hasVideos = grouped.length > 0;
 
   return (
-    <Screen bg="grouped" padded={false}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* Nav bar */}
-      <View style={styles.navBar}>
+      {/* Header — transparent so the AmbientBackground flows through */}
+      <View style={styles.header}>
         <Pressable
           onPress={() => router.back()}
-          style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
-          accessibilityRole="button"
-          accessibilityLabel="Go back"
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { backgroundColor: t.colors.fill3, borderRadius: 999 },
+            pressed && { opacity: 0.7 },
+          ]}
         >
-          <Ionicons name="chevron-back" size={22} color={color.text} />
+          <Ionicons name="chevron-back" size={18} color={t.colors.label} />
         </Pressable>
-        <View style={styles.navTitle}>
-          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>LEARN</Text>
-          <Text variant="title" color="text" style={styles.navTitleText}>Tutorials</Text>
+        <View style={{ flex: 1 }}>
+          <Text variant="headline" color="label">
+            Tutorials
+          </Text>
+          <Text
+            variant="caption2"
+            color="secondary"
+            style={{ letterSpacing: 0.5, marginTop: 1 }}
+          >
+            {hasVideos
+              ? `${totalVideos} ${totalVideos === 1 ? 'VIDEO' : 'VIDEOS'} · ${grouped.length} ${grouped.length === 1 ? 'CATEGORY' : 'CATEGORIES'}`
+              : 'LEARN'}
+          </Text>
         </View>
+        <View style={styles.iconBtn} />
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={{ paddingBottom: 32 }}
         showsVerticalScrollIndicator={false}
       >
         {hasVideos ? (
           grouped.map(({ category, entries }) => (
-            <View key={category} style={styles.section}>
-              <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-                {category.toUpperCase()}
-              </Text>
-              {entries.map((entry) => (
-                <VideoCard key={entry.youtubeUrl} entry={entry} />
-              ))}
+            <View key={category} style={{ marginTop: 24 }}>
+              <View style={styles.sectionHeader}>
+                <Text
+                  variant="caption2"
+                  color="secondary"
+                  style={{ letterSpacing: 0.4 }}
+                >
+                  {category.toUpperCase()}
+                </Text>
+                <Text variant="caption2" color="tertiary">
+                  {entries.length}
+                </Text>
+              </View>
+              <View style={styles.cardList}>
+                {entries.map((entry) => (
+                  <VideoCard key={entry.youtubeUrl} entry={entry} />
+                ))}
+              </View>
             </View>
           ))
         ) : (
-          <View style={styles.empty}>
-            <Ionicons name="play-circle-outline" size={36} color={color.textFaint} />
-            <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
+          <View style={{ paddingVertical: 64, paddingHorizontal: 32, alignItems: 'center' }}>
+            <View
+              style={[
+                styles.emptyIcon,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                  borderRadius: t.radii.tile + 4,
+                },
+              ]}
+            >
+              <Ionicons
+                name="play-circle-outline"
+                size={32}
+                color={t.palette.red.base}
+              />
+            </View>
+            <Text
+              variant="headline"
+              color="label"
+              style={{ marginTop: 12, fontWeight: '600' }}
+            >
               No tutorials yet
             </Text>
-            <Text variant="meta" color="textMuted" align="center" style={styles.emptySub}>
-              Your admin will add tutorial videos here to help you get started with each feature.
+            <Text
+              variant="footnote"
+              color="secondary"
+              style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}
+            >
+              Your studio admin will publish video walkthroughs here to help
+              your team get started with each feature.
             </Text>
           </View>
         )}
       </ScrollView>
-    </Screen>
+    </View>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  navBar: {
+  // Header
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: 4,
-    paddingBottom: 16,
-    gap: 8,
-    backgroundColor: color.bgGrouped,
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+    gap: 10,
   },
-  backBtn: {
-    width: 36,
-    height: 36,
+  iconBtn: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navTitle: { flex: 1 },
-  navEyebrow: { letterSpacing: 1.8, fontSize: 10, marginBottom: 1 },
-  navTitleText: { fontSize: 22, lineHeight: 27, letterSpacing: -0.4 },
 
-  scroll: {
-    paddingHorizontal: screenInset,
-    paddingBottom: 40,
-    gap: space.lg,
+  // Section
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingBottom: 8,
+  },
+  cardList: {
+    paddingHorizontal: 16,
+    gap: 12,
   },
 
-  section: {
-    gap: space.sm,
-  },
-  sectionLabel: {
-    letterSpacing: 0.4,
-    marginBottom: 2,
-  },
-
-  // Video card — mirrors TutorialEmptyState card styles
+  // Video card
   card: {
-    borderRadius: 12,
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.07,
-    shadowRadius: 4,
-    elevation: 2,
+  },
+  thumbWrap: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    position: 'relative',
   },
   thumbnail: {
     width: '100%',
-    aspectRatio: 16 / 9,
-    backgroundColor: color.surfaceAlt,
+    height: '100%',
   },
   thumbnailPlaceholder: {
     width: '100%',
-    aspectRatio: 16 / 9,
-    backgroundColor: color.surfaceAlt,
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  playOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  playBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingLeft: 3, // optical center the play triangle
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 4 },
   },
   meta: {
     paddingHorizontal: 14,
     paddingVertical: 12,
-    gap: 4,
   },
-  titleRow: {
+  metaFooter: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-  },
-  titleText: {
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 19,
-  },
-  watchLabel: {
-    marginTop: 2,
-    letterSpacing: 0.1,
+    alignItems: 'center',
+    marginTop: 6,
   },
 
-  // Empty state
-  empty: {
+  // Empty
+  emptyIcon: {
+    width: 72,
+    height: 72,
     alignItems: 'center',
-    paddingTop: 60,
-    paddingHorizontal: 32,
-    gap: space.sm,
-  },
-  emptyTitle: {
-    marginTop: 4,
-    textAlign: 'center',
-  },
-  emptySub: {
-    textAlign: 'center',
-    maxWidth: 280,
+    justifyContent: 'center',
   },
 });

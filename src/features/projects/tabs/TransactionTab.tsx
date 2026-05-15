@@ -1,3 +1,22 @@
+/**
+ * Transaction tab — v2 design.
+ *
+ * Layout:
+ *   1. Combined KPI strip — single card, three cells split by hairlines:
+ *      RECEIVED · SPENT · NET (compact, single-line height)
+ *   2. Pending-approval ribbon (caption note when relevant)
+ *   3. Filter bar — single "Filter" button (with active dot when filters set)
+ *      + result count + Clear (when filters active)
+ *   4. Connected-card transaction list — mirrors the studio Ledger row style:
+ *      left date pill (MONTH / DAY) · party/title + caption subline
+ *      (status · category · method · description) · +/− compact amount on the
+ *      right. First/last rows round the outer corners; middle rows are square
+ *      and joined by a hairline that starts after the date pill column.
+ *   5. Bottom action bar — Payment In + Payment Out (or Submit Expense for submit-only roles)
+ *
+ * Filter sheet shows all three facets (Type / Category / Method) inside one
+ * grouped picker — open from the single Filter button instead of three chips.
+ */
 import { useCallback, useMemo, useState } from 'react';
 import {
   FlatList,
@@ -11,10 +30,9 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useAuth } from '@/src/features/auth/useAuth';
 import { usePermissions } from '@/src/features/org/usePermissions';
-import { useProject } from '@/src/features/projects/useProject';
 import { useTransactions } from '@/src/features/transactions/useTransactions';
 import { useFirestoreRefresh } from '@/src/lib/useFirestoreRefresh';
 import {
@@ -28,26 +46,16 @@ import {
   type TransactionType,
   type PaymentMethod,
 } from '@/src/features/transactions/types';
-import { formatInr, formatDate } from '@/src/lib/format';
-import { Text } from '@/src/ui/Text';
-import { TutorialEmptyState } from '@/src/ui/TutorialEmptyState';
-import { color, radius, screenInset, space } from '@/src/theme';
+import { formatInr } from '@/src/lib/format';
 
-// ── Filter types ──
-
-type FilterTab = 'type' | 'category' | 'payment_method';
+import { Text } from '@/src/ui/v2/Text';
+import { inrCompact, useThemeV2 } from '@/src/theme/v2';
 
 type ActiveFilters = {
   type: TransactionType | 'all';
   category: TransactionCategory | 'all';
   paymentMethod: PaymentMethod | 'all';
 };
-
-const FILTER_TABS: { key: FilterTab; label: string }[] = [
-  { key: 'type', label: 'Transaction\nType' },
-  { key: 'category', label: 'Category' },
-  { key: 'payment_method', label: 'Mode of\nPayment' },
-];
 
 const TYPE_OPTIONS: { key: TransactionType | 'all'; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -65,19 +73,27 @@ const CAT_OPTIONS: { key: TransactionCategory | 'all'; label: string }[] = [
   ...TRANSACTION_CATEGORIES.map((c) => ({ key: c.key, label: c.label })),
 ];
 
-// ── Component ──
+function fmtTxnDate(ts: { toDate: () => Date } | null | undefined): {
+  day: string;
+  month: string;
+} {
+  if (!ts) return { day: '—', month: '' };
+  const d = ts.toDate();
+  return {
+    day: d.toLocaleDateString('en-IN', { day: '2-digit' }),
+    month: d.toLocaleDateString('en-IN', { month: 'short' }).toUpperCase(),
+  };
+}
 
 export function TransactionTab() {
+  const t = useThemeV2();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
-  const { user } = useAuth();
   const { can } = usePermissions();
-  const { data: project } = useProject(projectId);
   const { refreshing, refresh, refreshKey } = useFirestoreRefresh();
   const { data, loading, totals, pendingPaymentOutTotal, pendingApprovalCount } =
     useTransactions(projectId, { refreshKey });
 
-  const [showFilter, setShowFilter] = useState(false);
-  const [filterTab, setFilterTab] = useState<FilterTab>('type');
+  const [filterOpen, setFilterOpen] = useState(false);
   const [filters, setFilters] = useState<ActiveFilters>({
     type: 'all',
     category: 'all',
@@ -85,17 +101,16 @@ export function TransactionTab() {
   });
 
   const hasActiveFilter =
-    filters.type !== 'all' ||
-    filters.category !== 'all' ||
-    filters.paymentMethod !== 'all';
+    filters.type !== 'all'
+    || filters.category !== 'all'
+    || filters.paymentMethod !== 'all';
 
-  // Apply filters
   const filtered = useMemo(() => {
-    return data.filter((t) => {
-      const txnType = normalizeTransactionType(t.type);
+    return data.filter((tx) => {
+      const txnType = normalizeTransactionType(tx.type);
       if (filters.type !== 'all' && txnType !== filters.type) return false;
-      if (filters.category !== 'all' && t.category !== filters.category) return false;
-      if (filters.paymentMethod !== 'all' && t.paymentMethod !== filters.paymentMethod) return false;
+      if (filters.category !== 'all' && tx.category !== filters.category) return false;
+      if (filters.paymentMethod !== 'all' && tx.paymentMethod !== filters.paymentMethod) return false;
       return true;
     });
   }, [data, filters]);
@@ -104,683 +119,803 @@ export function TransactionTab() {
     setFilters({ type: 'all', category: 'all', paymentMethod: 'all' });
   }, []);
 
-  // Filter options based on selected tab
-  const filterOptions = useMemo(() => {
-    switch (filterTab) {
-      case 'type': return TYPE_OPTIONS;
-      case 'category': return CAT_OPTIONS;
-      case 'payment_method': return PM_OPTIONS;
-    }
-  }, [filterTab]);
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
 
-  const getFilterValue = (): string => {
-    switch (filterTab) {
-      case 'type': return filters.type;
-      case 'category': return filters.category;
-      case 'payment_method': return filters.paymentMethod;
-    }
-  };
-
-  const setFilterValue = (val: string) => {
-    switch (filterTab) {
-      case 'type':
-        setFilters((f) => ({ ...f, type: val as TransactionType | 'all' }));
-        break;
-      case 'category':
-        setFilters((f) => ({ ...f, category: val as TransactionCategory | 'all' }));
-        break;
-      case 'payment_method':
-        setFilters((f) => ({ ...f, paymentMethod: val as PaymentMethod | 'all' }));
-        break;
-    }
-  };
-
-  const renderItem = ({ item }: { item: Transaction }) => {
+  const renderItem = ({ item, index }: { item: Transaction; index: number }) => {
     const txnType = normalizeTransactionType(item.type);
     const isIn = txnType === 'payment_in';
-    const dateStr = item.date ? formatDate(item.date.toDate()) : '—';
-    const catLabel = item.category ? getCategoryLabel(item.category) : null;
-    const pmLabel = item.paymentMethod ? getPaymentMethodLabel(item.paymentMethod) : null;
-    const statusLabel = item.status?.toUpperCase?.() ?? '';
-    const addedByOwner = !!project?.ownerId && item.createdBy === project.ownerId;
-    const addedBySelf = !!user?.uid && item.createdBy === user.uid;
-    const addedByLabel = addedByOwner ? 'Owner' : addedBySelf ? 'You' : 'Team';
+    const catLabel = item.category
+      ? getCategoryLabel(item.category as TransactionCategory)
+      : null;
+    const pmLabel = item.paymentMethod
+      ? getPaymentMethodLabel(item.paymentMethod as PaymentMethod)
+      : null;
+    const title =
+      item.partyName || item.description || (isIn ? 'Payment In' : 'Payment Out');
+    // Avoid duplicating the title in the subline if description is what's
+    // already showing as the title.
+    const desc =
+      item.description && item.description !== title ? item.description : null;
+    const subline = [catLabel, pmLabel, desc].filter(Boolean).join(' · ');
+    const date = fmtTxnDate(item.date);
+    const tone = isIn ? t.palette.green : t.palette.red;
+
     const isPendingFlow = item.workflowStatus === 'pending_approval';
     const isRejectedFlow = item.workflowStatus === 'rejected';
-    const approvalLabel = isPendingFlow
-      ? 'Pending approval'
+    // Workflow status surfaces as a coloured prefix in the subline so the
+    // row stays at two lines (matching the studio Ledger). Approved /
+    // auto-posted transactions show no status word — the orange ribbon at
+    // the top of the screen already announces pending counts.
+    const statusWord = isPendingFlow
+      ? 'PENDING'
       : isRejectedFlow
-        ? 'Rejected'
-        : addedByOwner
-          ? 'Auto Approved'
-          : 'Approved';
-    const approvalIcon = isPendingFlow
-      ? 'time-outline'
+        ? 'REJECTED'
+        : null;
+    const statusColor = isPendingFlow
+      ? t.palette.orange.base
       : isRejectedFlow
-        ? 'close-circle-outline'
-        : 'shield-checkmark-outline';
-    const approvalTone = isRejectedFlow ? color.danger : isPendingFlow ? color.warning : color.success;
-    const auditPillBg = isPendingFlow
-      ? color.warningSoft
-      : isRejectedFlow
-        ? color.dangerSoft
-        : color.successSoft;
-    const auditPillBorder = isPendingFlow
-      ? color.warning
-      : isRejectedFlow
-        ? color.danger
-        : color.success;
+        ? t.palette.red.base
+        : null;
+
+    const isFirst = index === 0;
+    const isLast = index === filtered.length - 1;
 
     return (
       <Pressable
-        onPress={() => router.push(`/(app)/projects/${projectId}/transaction/${item.id}` as never)}
-        style={({ pressed }) => [styles.txnRow, pressed && { opacity: 0.7 }]}
+        onPress={() =>
+          router.push(`/(app)/projects/${projectId}/transaction/${item.id}` as never)
+        }
+        style={({ pressed }) => [
+          styles.row,
+          {
+            backgroundColor: pressed ? t.colors.fill3 : cardBg,
+            borderTopLeftRadius: isFirst ? t.radii.card : 0,
+            borderTopRightRadius: isFirst ? t.radii.card : 0,
+            borderBottomLeftRadius: isLast ? t.radii.card : 0,
+            borderBottomRightRadius: isLast ? t.radii.card : 0,
+            borderTopWidth: isFirst ? t.hairline : 0,
+            borderBottomWidth: isLast ? t.hairline : 0,
+            borderLeftWidth: t.hairline,
+            borderRightWidth: t.hairline,
+            borderColor: cardBorder,
+          },
+        ]}
       >
-        <View style={[styles.txnIcon, { backgroundColor: color.surface }]}>
-          <Ionicons
-            name={isIn ? 'wallet-outline' : 'receipt-outline'}
-            size={14}
-            color={isIn ? color.success : color.textMuted}
-          />
-        </View>
-        <View style={styles.txnBody}>
-          <View style={styles.titleRow}>
-            <Text variant="rowTitle" color="text" numberOfLines={2} style={styles.titleFlex}>
-              {item.description || item.partyName || (isIn ? 'Payment In' : 'Payment Out')}
-            </Text>
-            {isPendingFlow ? (
-              <View style={[styles.requestChip, styles.requestChipPending]}>
-                <Text variant="caption" style={styles.requestChipText}>
-                  REQUEST
-                </Text>
-              </View>
-            ) : null}
-            {isRejectedFlow ? (
-              <View style={[styles.requestChip, styles.requestChipRejected]}>
-                <Text variant="caption" style={styles.requestChipText}>
-                  REJECTED
-                </Text>
-              </View>
-            ) : null}
-          </View>
-          <Text variant="meta" color="textMuted" numberOfLines={1} style={styles.subCompact}>
-            {item.partyName ? `${item.partyName} · ${dateStr}` : dateStr}
+        {/* Date pill */}
+        <View
+          style={[
+            styles.datePill,
+            { backgroundColor: t.colors.fill3, borderRadius: t.radii.tile },
+          ]}
+        >
+          <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4 }}>
+            {date.month}
           </Text>
-          <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.metaCompact}>
-            {[catLabel, pmLabel, statusLabel].filter(Boolean).join(' · ')}
-          </Text>
-          <View style={styles.auditRow}>
-            <View
-              style={[
-                styles.auditPill,
-                { backgroundColor: auditPillBg, borderColor: auditPillBorder },
-              ]}
-            >
-              <Ionicons name={approvalIcon} size={12} color={approvalTone} />
-              <Text variant="caption" style={[styles.auditPillText, { color: approvalTone }]}>
-                {approvalLabel}
-              </Text>
-            </View>
-            <Text variant="caption" color="textMuted">Added by {addedByLabel}</Text>
-          </View>
-        </View>
-        <View style={styles.txnTrailing}>
           <Text
-            variant="metaStrong"
-            style={{ color: isIn ? color.success : color.danger }}
+            variant="headline"
+            color="label"
+            style={{ fontWeight: '700', marginTop: -1 }}
           >
-            {isIn ? '+' : '-'}{formatInr(item.amount)}
-          </Text>
-          <Text variant="caption" color="textMuted" style={styles.statusText}>
-            {item.status.charAt(0).toUpperCase() + item.status.slice(1)}
+            {date.day}
           </Text>
         </View>
+
+        {/* Body */}
+        <View style={{ flex: 1, marginLeft: 12 }}>
+          <Text variant="body" color="label" numberOfLines={1}>
+            {title}
+          </Text>
+          {statusWord || subline ? (
+            <Text
+              variant="caption1"
+              color="secondary"
+              numberOfLines={1}
+              style={{ marginTop: 2 }}
+            >
+              {statusWord ? (
+                <Text
+                  variant="caption1"
+                  style={{
+                    color: statusColor!,
+                    fontWeight: '700',
+                    letterSpacing: 0.3,
+                  }}
+                >
+                  {statusWord}
+                  {subline ? ' · ' : ''}
+                </Text>
+              ) : null}
+              {subline}
+            </Text>
+          ) : null}
+        </View>
+
+        {/* Amount */}
+        <Text
+          variant="callout"
+          style={{
+            color: tone.base,
+            fontWeight: '700',
+            fontVariant: ['tabular-nums'],
+            marginLeft: 8,
+          }}
+        >
+          {isIn ? '+' : '−'}
+          {inrCompact(Math.abs(item.amount))}
+        </Text>
+
+        {/* Hairline divider — sits at the inner edge of the date pill so
+            the date column reads as its own visual rail (matches Ledger). */}
+        {!isLast ? (
+          <View
+            style={[
+              styles.rowDivider,
+              { backgroundColor: t.colors.separator, left: 76 },
+            ]}
+          />
+        ) : null}
       </Pressable>
     );
   };
 
+  const canPostFull = can('transaction.write');
+  const canSubmit = can('transaction.submit');
+  const showBottomBar = canPostFull || canSubmit;
+
   return (
     <View style={styles.container}>
-      {/* Summary bar (InteriorOS expense ribbon style) */}
-      <View style={styles.summaryBar}>
-        <View style={styles.summaryCell}>
-          <Text variant="caption" color="textMuted">RECEIVED</Text>
-          <Text
-            variant="metaStrong"
-            style={{ color: color.success }}
-          >
-            +{formatInr(totals.income)}
-          </Text>
-        </View>
-        <View style={styles.divider} />
-        <View style={styles.summaryCell}>
-          <Text variant="caption" color="textMuted">SPENT</Text>
-          <Text variant="metaStrong" style={{ color: color.text }}>
-            -{formatInr(totals.expense)}
-          </Text>
-        </View>
-        <View style={styles.divider} />
-        <View style={styles.summaryCell}>
-          <Text variant="caption" color="textMuted">NET</Text>
-          <Text
-            variant="metaStrong"
-            style={{ color: totals.balance >= 0 ? color.primary : color.danger }}
-          >
-            {totals.balance >= 0 ? '+' : '-'}{formatInr(Math.abs(totals.balance))}
-          </Text>
+      {/* Combined KPI strip — single card with 3 cells */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+        <View
+          style={[
+            styles.kpiCard,
+            {
+              backgroundColor: cardBg,
+              borderRadius: t.radii.card,
+              borderColor: cardBorder,
+              borderWidth: t.hairline,
+            },
+          ]}
+        >
+          <KpiCell
+            label="RECEIVED"
+            value={`+${formatInr(totals.income)}`}
+            tone={t.palette.green.base}
+          />
+          <View style={[styles.kpiDivider, { backgroundColor: t.colors.separator }]} />
+          <KpiCell
+            label="SPENT"
+            value={`−${formatInr(totals.expense)}`}
+            tone={t.palette.red.base}
+          />
+          <View style={[styles.kpiDivider, { backgroundColor: t.colors.separator }]} />
+          <KpiCell
+            label="NET"
+            value={`${totals.balance >= 0 ? '+' : '−'}${formatInr(Math.abs(totals.balance))}`}
+            // Net swings green when healthy, red when overdrawn — the headline
+            // signal of the strip, so it earns the most direct colour.
+            tone={totals.balance < 0 ? t.palette.red.base : t.palette.green.base}
+          />
         </View>
       </View>
+
       {pendingApprovalCount > 0 ? (
-        <Text variant="caption" color="textMuted" style={styles.pendingRibbon}>
-          {pendingApprovalCount} pending approval
-          {pendingPaymentOutTotal > 0
-            ? ` · ${formatInr(pendingPaymentOutTotal)} payment out not in totals`
-            : ''}
-        </Text>
+        <View style={styles.pendingRibbonWrap}>
+          <View
+            style={[
+              styles.pendingRibbon,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft,
+                borderRadius: t.radii.card,
+                borderColor: t.palette.orange.base + '33',
+                borderWidth: t.hairline,
+              },
+            ]}
+          >
+            <Ionicons name="time-outline" size={12} color={t.palette.orange.base} />
+            <Text
+              variant="caption2"
+              style={{
+                color: t.palette.orange.base,
+                marginLeft: 6,
+                flex: 1,
+                fontWeight: '700',
+                letterSpacing: 0.3,
+              }}
+            >
+              {pendingApprovalCount} PENDING APPROVAL
+              {pendingPaymentOutTotal > 0
+                ? ` · ${formatInr(pendingPaymentOutTotal)} NOT IN TOTALS`
+                : ''}
+            </Text>
+          </View>
+        </View>
       ) : null}
 
-      {/* Filter chip row */}
+      {/* Filter row — single button + result count + clear */}
       <View style={styles.filterRow}>
-        <Text variant="caption" color="textMuted" style={styles.resultText}>
-          {filtered.length} RESULT{filtered.length === 1 ? '' : 'S'}
-        </Text>
-        <View style={styles.flex} />
-        {hasActiveFilter && (
-          <Pressable onPress={clearFilters} style={styles.clearBtn}>
-            <Text variant="meta" color="danger">Clear</Text>
-          </Pressable>
-        )}
         <Pressable
-          onPress={() => setShowFilter(true)}
-          style={[styles.filterBtn, hasActiveFilter && styles.filterBtnActive]}
+          onPress={() => setFilterOpen(true)}
+          hitSlop={6}
+          style={({ pressed }) => [
+            styles.filterBtn,
+            {
+              backgroundColor: hasActiveFilter
+                ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                : t.colors.fill3,
+              borderRadius: 999,
+              borderColor: hasActiveFilter ? t.palette.blue.base + '33' : 'transparent',
+              borderWidth: hasActiveFilter ? 1 : 0,
+            },
+            pressed && { opacity: 0.85 },
+          ]}
         >
           <Ionicons
-            name="filter"
-            size={16}
-            color={hasActiveFilter ? color.onPrimary : color.primary}
+            name="options-outline"
+            size={13}
+            color={hasActiveFilter ? t.palette.blue.base : t.colors.label}
           />
           <Text
-            variant="metaStrong"
-            style={{ color: hasActiveFilter ? color.onPrimary : color.primary }}
+            variant="caption2"
+            style={{
+              color: hasActiveFilter ? t.palette.blue.base : t.colors.label,
+              fontWeight: '700',
+              marginLeft: 5,
+              letterSpacing: 0.3,
+            }}
           >
-            Filter
+            FILTER
           </Text>
+          {hasActiveFilter ? (
+            <View
+              style={[
+                styles.filterDot,
+                { backgroundColor: t.palette.blue.base },
+              ]}
+            />
+          ) : null}
         </Pressable>
+        <Text
+          variant="caption2"
+          color="tertiary"
+          style={{ letterSpacing: 0.4, marginLeft: 10, fontSize: 9 }}
+        >
+          {filtered.length} RESULT{filtered.length === 1 ? '' : 'S'}
+        </Text>
+        <View style={{ flex: 1 }} />
+        {hasActiveFilter ? (
+          <Pressable onPress={clearFilters} hitSlop={6}>
+            <Text
+              variant="caption2"
+              style={{
+                color: t.palette.red.base,
+                fontWeight: '700',
+                letterSpacing: 0.4,
+                fontSize: 9,
+              }}
+            >
+              CLEAR
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
 
       {loading && data.length === 0 ? (
         <View style={styles.empty}>
-          <Text variant="meta" color="textMuted">Loading transactions…</Text>
+          <Text variant="footnote" color="secondary">Loading transactions…</Text>
         </View>
       ) : filtered.length === 0 ? (
-        <TutorialEmptyState
-          pageKey="transactions"
-          fallback={
-            <View style={styles.empty}>
-              <Ionicons name="receipt-outline" size={28} color={color.textFaint} />
-              <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
-                {hasActiveFilter ? 'No matching transactions' : 'No transactions yet'}
-              </Text>
-              <Text variant="meta" color="textMuted" align="center">
-                {hasActiveFilter
-                  ? 'Try changing your filters.'
-                  : 'Track all payments, expenses and invoices for this project.'}
-              </Text>
-            </View>
-          }
-        />
+        <View style={styles.empty}>
+          <Ionicons name="receipt-outline" size={28} color={t.colors.tertiary} />
+          <Text variant="callout" color="label" style={{ marginTop: 10, fontWeight: '600' }}>
+            {hasActiveFilter ? 'No matching transactions' : 'No transactions yet'}
+          </Text>
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 4, textAlign: 'center', paddingHorizontal: 32 }}
+          >
+            {hasActiveFilter
+              ? 'Try changing your filters.'
+              : 'Track all payments, expenses and invoices for this project.'}
+          </Text>
+        </View>
       ) : (
         <FlatList
           data={filtered}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContent}
+          contentContainerStyle={[
+            styles.listContent,
+            { paddingBottom: showBottomBar ? 90 : 16 },
+          ]}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={refresh} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={refresh}
+              tintColor={t.palette.blue.base}
+            />
           }
         />
       )}
 
-      {(() => {
-        // Submit-only roles (siteEngineer / supervisor) can record
-        // expenses for approval but cannot record income — there's
-        // no business case for a field user to add a `payment_in`,
-        // and the transactions create rule rejects it server-side.
-        // Hide the Payment In button entirely for those roles so
-        // they don't see a path that would just produce a
-        // permission-denied. Approver-tier roles (those with
-        // `transaction.write`) keep both options.
-        const canPostFull = can('transaction.write');
-        const canSubmit = can('transaction.submit');
-        if (!canPostFull && !canSubmit) return null;
-        return (
-          <View style={styles.bottomBar}>
-            {canPostFull ? (
-              <Pressable
-                onPress={() => {
-                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                  router.push(`/(app)/projects/${projectId}/add-transaction?type=payment_in` as never);
-                }}
-                style={({ pressed }) => [styles.bottomBtn, styles.bottomBtnIn, pressed && { opacity: 0.85 }]}
-              >
-                <Ionicons name="arrow-down-circle" size={20} color={color.success} />
-                <Text variant="metaStrong" style={{ color: color.success }}>Payment In</Text>
-              </Pressable>
-            ) : null}
+      {/* Bottom action bar */}
+      {showBottomBar ? (
+        <View
+          style={[
+            styles.bottomBar,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopColor: t.colors.separator,
+              borderTopWidth: t.hairline,
+            },
+          ]}
+        >
+          {/* Direction-coded action buttons — IN reads green (money coming
+              in is a positive event), OUT reads red (money going out).
+              The soft pastel fill keeps the buttons calm; the arrow + label
+              + accent colour all reinforce the same direction signal. */}
+          {canPostFull ? (
             <Pressable
               onPress={() => {
                 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                router.push(`/(app)/projects/${projectId}/add-transaction?type=payment_out` as never);
+                router.push(`/(app)/projects/${projectId}/add-transaction?type=payment_in` as never);
               }}
-              style={({ pressed }) => [styles.bottomBtn, styles.bottomBtnOut, pressed && { opacity: 0.85 }]}
+              style={({ pressed }) => [
+                styles.bottomBtn,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.green.softDark : t.palette.green.soft,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
             >
-              <Ionicons name="arrow-up-circle" size={20} color={color.danger} />
-              <Text variant="metaStrong" style={{ color: color.danger }}>
-                {canPostFull ? 'Payment Out' : 'Submit Expense'}
+              <Ionicons name="arrow-down-circle" size={18} color={t.palette.green.base} />
+              <Text
+                variant="footnote"
+                style={{
+                  color: t.palette.green.base,
+                  fontWeight: '600',
+                  marginLeft: 6,
+                }}
+              >
+                Payment In
               </Text>
             </Pressable>
-          </View>
-        );
-      })()}
-
-      {/* ── Filter Modal ── */}
-      <Modal
-        visible={showFilter}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setShowFilter(false)}
-      >
-        <Pressable style={styles.modalOverlay} onPress={() => setShowFilter(false)}>
-          <View />
-        </Pressable>
-        <View style={styles.modalSheet}>
-          {/* Clear Filter */}
-          <View style={styles.filterHeader}>
-            <View style={styles.modalHandle} />
-            <View style={styles.filterHeaderRow}>
-              <Text variant="bodyStrong" color="text">Filter Transactions</Text>
-              <Pressable onPress={clearFilters}>
-                <Text variant="metaStrong" color="primary">Clear Filter</Text>
-              </Pressable>
-            </View>
-            <Text variant="caption" color="textMuted">
-              {hasActiveFilter ? 'FILTERS ACTIVE' : 'NO FILTER APPLIED'}
-            </Text>
-          </View>
-
-          <View style={styles.filterBody}>
-            {/* Left tabs */}
-            <View style={styles.filterTabs}>
-              {FILTER_TABS.map((ft) => {
-                const active = filterTab === ft.key;
-                return (
-                  <Pressable
-                    key={ft.key}
-                    onPress={() => setFilterTab(ft.key)}
-                    style={[styles.filterTabItem, active && styles.filterTabItemActive]}
-                  >
-                    <Text
-                      variant="metaStrong"
-                      style={{ color: active ? color.primary : color.textMuted }}
-                      align="center"
-                    >
-                      {ft.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-
-            {/* Right options */}
-            <ScrollView style={styles.filterOptions} showsVerticalScrollIndicator={false}>
-              {filterOptions.map((opt) => {
-                const active = getFilterValue() === opt.key;
-                return (
-                  <Pressable
-                    key={opt.key}
-                    onPress={() => setFilterValue(opt.key)}
-                    style={styles.filterOption}
-                  >
-                    <Text variant="body" color="text">{opt.label}</Text>
-                    <View style={[styles.radio, active && styles.radioActive]}>
-                      {active && <Ionicons name="checkmark" size={12} color={color.primary} />}
-                    </View>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-
-          {/* View Result button */}
+          ) : null}
           <Pressable
-            onPress={() => setShowFilter(false)}
-            style={styles.viewResultBtn}
+            onPress={() => {
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+              router.push(`/(app)/projects/${projectId}/add-transaction?type=payment_out` as never);
+            }}
+            style={({ pressed }) => [
+              styles.bottomBtn,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                borderRadius: t.radii.field,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
           >
-            <Text variant="bodyStrong" color="onPrimary">SHOW RESULTS</Text>
+            <Ionicons name="arrow-up-circle" size={18} color={t.palette.red.base} />
+            <Text
+              variant="footnote"
+              style={{
+                color: t.palette.red.base,
+                fontWeight: '600',
+                marginLeft: 6,
+              }}
+            >
+              {canPostFull ? 'Payment Out' : 'Submit Expense'}
+            </Text>
           </Pressable>
         </View>
-      </Modal>
+      ) : null}
+
+      {/* Single combined filter sheet */}
+      <FilterSheet
+        open={filterOpen}
+        filters={filters}
+        onChange={setFilters}
+        onClear={clearFilters}
+        onClose={() => setFilterOpen(false)}
+      />
     </View>
   );
 }
 
-// ── Styles ──
+// ── Subcomponents ─────────────────────────────────────────────────────
+
+function KpiCell({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: string;
+}) {
+  return (
+    <View style={styles.kpiCell}>
+      <Text
+        variant="caption2"
+        color="tertiary"
+        style={{ letterSpacing: 0.4, fontSize: 9 }}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+      <Text
+        variant="footnote"
+        style={{
+          color: tone,
+          fontWeight: '700',
+          fontVariant: ['tabular-nums'],
+          marginTop: 2,
+        }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function FilterSheet({
+  open,
+  filters,
+  onChange,
+  onClear,
+  onClose,
+}: {
+  open: boolean;
+  filters: ActiveFilters;
+  onChange: (next: ActiveFilters) => void;
+  onClear: () => void;
+  onClose: () => void;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal
+      visible={open}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <Pressable style={styles.sheetBackdrop} onPress={onClose}>
+        <Pressable
+          onPress={(e) => e.stopPropagation()}
+          style={[
+            styles.sheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 8,
+              maxHeight: '85%',
+            },
+          ]}
+        >
+          {/* Grabber */}
+          <View
+            style={[styles.grabber, { backgroundColor: t.colors.tertiary }]}
+          />
+
+          {/* Header — Cancel · Title · Done */}
+          <View
+            style={[
+              styles.sheetHeader,
+              {
+                borderBottomColor: t.colors.separator,
+                borderBottomWidth: t.hairline,
+              },
+            ]}
+          >
+            <Pressable onPress={onClose} hitSlop={8} style={styles.sheetSideBtn}>
+              <Text variant="body" style={{ color: t.palette.blue.base }}>
+                Cancel
+              </Text>
+            </Pressable>
+            <Text
+              variant="headline"
+              color="label"
+              style={[styles.sheetTitle, { fontWeight: '600' }]}
+              numberOfLines={1}
+            >
+              Filter
+            </Text>
+            <Pressable onPress={onClose} hitSlop={8} style={[styles.sheetSideBtn, { alignItems: 'flex-end' }]}>
+              <Text variant="body" style={{ color: t.palette.blue.base, fontWeight: '700' }}>
+                Done
+              </Text>
+            </Pressable>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 12 }}>
+            <FilterSection
+              title="Type"
+              options={TYPE_OPTIONS}
+              selected={filters.type}
+              onPick={(k) => onChange({ ...filters, type: k as TransactionType | 'all' })}
+            />
+            <FilterSection
+              title="Category"
+              options={CAT_OPTIONS}
+              selected={filters.category}
+              onPick={(k) => onChange({ ...filters, category: k as TransactionCategory | 'all' })}
+            />
+            <FilterSection
+              title="Method"
+              options={PM_OPTIONS}
+              selected={filters.paymentMethod}
+              onPick={(k) => onChange({ ...filters, paymentMethod: k as PaymentMethod | 'all' })}
+            />
+
+            {/* Footer — Clear all */}
+            <Pressable
+              onPress={() => {
+                onClear();
+              }}
+              style={({ pressed }) => [
+                styles.clearAllBtn,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                  borderRadius: t.radii.field,
+                  borderColor: t.palette.red.base + '33',
+                  borderWidth: t.hairline,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Ionicons
+                name="close-circle-outline"
+                size={14}
+                color={t.palette.red.base}
+              />
+              <Text
+                variant="footnote"
+                style={{
+                  color: t.palette.red.base,
+                  fontWeight: '700',
+                  marginLeft: 6,
+                }}
+              >
+                Clear all filters
+              </Text>
+            </Pressable>
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function FilterSection<K extends string>({
+  title,
+  options,
+  selected,
+  onPick,
+}: {
+  title: string;
+  options: { key: K; label: string }[];
+  selected: K;
+  onPick: (k: K) => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <View style={styles.filterSection}>
+      <Text
+        variant="caption2"
+        color="secondary"
+        style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingBottom: 8 }}
+      >
+        {title.toUpperCase()}
+      </Text>
+      <View style={styles.filterChips}>
+        {options.map((opt) => {
+          const active = opt.key === selected;
+          return (
+            <Pressable
+              key={opt.key}
+              onPress={() => onPick(opt.key)}
+              hitSlop={6}
+              style={({ pressed }) => [
+                styles.filterChip,
+                {
+                  backgroundColor: active
+                    ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                    : t.colors.fill3,
+                  borderRadius: 999,
+                  borderColor: active ? t.palette.blue.base + '33' : 'transparent',
+                  borderWidth: active ? 1 : 0,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text
+                variant="caption1"
+                style={{
+                  color: active ? t.palette.blue.base : t.colors.secondary,
+                  fontWeight: active ? '700' : '600',
+                }}
+              >
+                {opt.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  flex: { flex: 1 },
 
-  summaryBar: {
+  // Combined KPI strip
+  kpiCard: {
     flexDirection: 'row',
-    backgroundColor: color.bg,
-    marginHorizontal: screenInset,
-    marginTop: space.sm,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.separator,
-    overflow: 'hidden',
-    paddingVertical: 0,
-    paddingHorizontal: 0,
+    alignItems: 'stretch',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+  },
+  kpiCell: {
+    flex: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 2,
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+  },
+  kpiDivider: {
+    width: 0.5,
+    marginVertical: 6,
+  },
+
+  pendingRibbonWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
   },
   pendingRibbon: {
-    marginHorizontal: screenInset,
-    marginTop: 6,
-    lineHeight: 16,
-  },
-  summaryCell: {
-    flex: 1,
-    alignItems: 'flex-start',
-    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 10,
-    gap: 2,
-  },
-  divider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: color.separator,
+    paddingVertical: 6,
   },
 
   // Filter row
   filterRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: 10,
-    gap: space.xs,
-    backgroundColor: color.bg,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 6,
   },
   filterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: space.sm,
+    paddingHorizontal: 11,
     paddingVertical: 6,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: hasAlpha(color.primary, 0.4),
-    backgroundColor: color.surface,
+    position: 'relative',
   },
-  filterBtnActive: {
-    backgroundColor: color.primary,
-  },
-  clearBtn: {
-    paddingHorizontal: space.xs,
-    paddingVertical: space.xxs,
+  filterDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginLeft: 6,
   },
 
-  // List
+  // List rows — connected card geometry to mirror the studio Ledger.
+  // No padding here; the row carries its own horizontal margin so the
+  // first/last rows can round their outer corners while middle rows
+  // sit flush against each other.
   listContent: {
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: space.sm,
+    paddingTop: 6,
   },
-  txnRow: {
+  row: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: color.bg,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-    gap: 8,
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    position: 'relative',
   },
-  txnIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+  datePill: {
+    width: 48,
+    paddingVertical: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 1,
   },
-  txnBody: {
-    flex: 1,
-    minWidth: 0,
-    gap: 1,
-  },
-  titleRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: space.xs,
-    width: '100%',
-  },
-  titleFlex: {
-    flex: 1,
-    minWidth: 0,
-  },
-  requestChip: {
-    flexShrink: 0,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderWidth: 1,
-    borderRadius: 8,
-  },
-  requestChipPending: {
-    backgroundColor: color.warningSoft,
-    borderColor: color.warning,
-  },
-  requestChipRejected: {
-    backgroundColor: color.dangerSoft,
-    borderColor: color.danger,
-  },
-  requestChipText: {
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 0.8,
-    color: color.text,
-  },
-  txnTrailing: {
-    alignItems: 'flex-end',
-    gap: 2,
-  },
-  statusText: {
-    textTransform: 'capitalize',
-  },
-  tagRow: {
-    flexDirection: 'row',
-    gap: 4,
-    marginTop: 2,
-  },
-  tag: {
-    paddingHorizontal: space.xs,
-    paddingVertical: 1,
-    borderRadius: radius.xs,
-    backgroundColor: color.bgGrouped,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.border,
-  },
-  resultText: {
-    letterSpacing: 0.8,
-  },
-  subCompact: {
-    lineHeight: 16,
-  },
-  metaCompact: {
-    letterSpacing: 0.6,
-    marginTop: 1,
-  },
-  auditRow: {
-    marginTop: 3,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  auditPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 5,
-    paddingVertical: 1,
-    borderWidth: 1,
-    borderRadius: 8,
-  },
-  auditPillText: {
-    letterSpacing: 0.4,
+  rowDivider: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    height: 0.5,
   },
 
-  // Empty
   empty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: screenInset * 2,
-    gap: space.xs,
+    paddingHorizontal: 16,
   },
-  emptyTitle: { marginTop: space.xxs },
 
   // Bottom action bar
   bottomBar: {
     flexDirection: 'row',
-    gap: space.sm,
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.bg,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 12,
   },
   bottomBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space.xs,
-    paddingVertical: space.sm,
-    borderRadius: 10,
-    borderWidth: 1,
-  },
-  bottomBtnIn: {
-    backgroundColor: color.successSoft,
-    borderColor: color.success,
-  },
-  bottomBtnOut: {
-    backgroundColor: color.dangerSoft,
-    borderColor: color.danger,
+    paddingVertical: 10,
   },
 
-  // Modal
-  modalOverlay: {
+  // Filter sheet
+  sheetBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.45)',
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
   },
-  modalSheet: {
-    backgroundColor: color.bg,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    borderTopWidth: 1,
-    borderColor: color.borderStrong,
-    paddingBottom: space.xxl,
-    maxHeight: '70%',
+  sheet: {
+    paddingTop: 8,
   },
-  modalHandle: {
+  grabber: {
     width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.borderStrong,
+    height: 5,
+    borderRadius: 3,
     alignSelf: 'center',
+    marginBottom: 8,
   },
-  filterHeader: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: space.xs,
-    gap: 6,
-  },
-  filterHeaderRow: {
+  sheetHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  sheetSideBtn: {
+    minWidth: 70,
+  },
+  sheetTitle: {
+    flex: 1,
+    textAlign: 'center',
   },
 
-  // Filter body
-  filterBody: {
+  filterSection: {
+    paddingTop: 16,
+  },
+  filterChips: {
     flexDirection: 'row',
-    minHeight: 300,
+    flexWrap: 'wrap',
+    gap: 6,
+    paddingHorizontal: 16,
   },
-  filterTabs: {
-    width: 132,
-    backgroundColor: color.surface,
-    borderRightWidth: 1,
-    borderRightColor: color.borderStrong,
+  filterChip: {
+    paddingHorizontal: 11,
+    paddingVertical: 6,
   },
-  filterTabItem: {
-    paddingVertical: space.md,
-    paddingHorizontal: space.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: color.separator,
-    backgroundColor: color.surface,
-  },
-  filterTabItemActive: {
-    backgroundColor: color.primarySoft,
-  },
-  filterOptions: {
-    flex: 1,
-    paddingHorizontal: 0,
-  },
-  filterOption: {
+
+  clearAllBtn: {
+    marginTop: 22,
+    marginHorizontal: 16,
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: space.sm,
-    paddingVertical: 12,
-    paddingHorizontal: space.md,
-    borderBottomWidth: 1,
-    borderBottomColor: color.separator,
-  },
-  radio: {
-    width: 18,
-    height: 18,
-    borderRadius: 4,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.bg,
-  },
-  radioActive: {
-    borderColor: color.primary,
-    backgroundColor: color.primarySoft,
-  },
-  viewResultBtn: {
-    marginHorizontal: screenInset,
-    marginTop: space.sm,
-    paddingVertical: space.sm,
-    borderRadius: 8,
-    backgroundColor: color.primary,
-    alignItems: 'center',
+    paddingVertical: 10,
   },
 });
-
-function hasAlpha(hex: string, alpha: number): string {
-  if (!hex.startsWith('#') || (hex.length !== 7 && hex.length !== 4)) return hex;
-  if (hex.length === 4) {
-    const r = hex[1] + hex[1];
-    const g = hex[2] + hex[2];
-    const b = hex[3] + hex[3];
-    return `rgba(${parseInt(r, 16)}, ${parseInt(g, 16)}, ${parseInt(b, 16)}, ${alpha})`;
-  }
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}

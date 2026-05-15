@@ -1,6 +1,20 @@
 /**
- * Add Party — comprehensive form matching Onsite-style grouped party types,
- * personal info, KYC documents, opening balance, and bank details.
+ * Add / Edit Party — v2 design.
+ *
+ * Layout:
+ *   1. SheetHeader: Cancel · "New party" / "Edit party" · Save
+ *   2. "Pick from contacts" pill (dashed blue)
+ *   3. FormGroup "Type" — opens TypePickerSheet (sectioned General/Vendor)
+ *   4. FormGroup "Identity" — Name + Phone + Email + Father + Joined date
+ *   5. FormGroup "Address" — Street + City + State + Pincode
+ *   6. FormGroup "Compliance (optional)" — Aadhar + PAN
+ *   7. FormGroup "Opening balance" — Amount + To-pay/To-receive pill row
+ *   8. FormGroup "Bank (optional)" — Holder + Bank + Account + IFSC + Branch + UPI + IBAN
+ *
+ * Preserves all existing schema validation, Firestore writes
+ * (createParty/updateParty), the contacts picker pipeline, and the
+ * defensive `safeDate` + `dropUndefined` helpers (Firestore rejects
+ * `undefined` values).
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as Contacts from 'expo-contacts';
@@ -20,25 +34,34 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { z } from 'zod';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
-import { createParty, updateParty } from '@/src/features/parties/parties';
+import {
+  createParty,
+  updateParty,
+  DuplicatePhoneError,
+  InvalidPhoneError,
+} from '@/src/features/parties/parties';
+import { setNewPartyOutbox } from '@/src/features/parties/newPartyOutbox';
 import { useParties } from '@/src/features/parties/useParties';
 import {
   ALL_PARTY_TYPES,
   PARTY_TYPE_GROUPS,
+  getPartyTypeLabel,
   type PartyType,
 } from '@/src/features/parties/types';
-import { Button } from '@/src/ui/Button';
-import { DatePickerModal } from '@/src/ui/DatePickerModal';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
-import { color, radius, screenInset, space } from '@/src/theme';
 
-// ── Schema ──
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const schema = z.object({
   name: z.string().trim().min(2, 'Name required').max(100),
@@ -67,14 +90,44 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-// ── Component ──
+function safeDate(input: string | undefined | null): Date | undefined {
+  if (!input) return undefined;
+  const d = new Date(input);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d;
+}
+
+function dropUndefined<T extends Record<string, unknown>>(o: T): Partial<T> {
+  const out: Partial<T> = {};
+  for (const k in o) {
+    if (o[k] !== undefined) out[k] = o[k];
+  }
+  return out;
+}
 
 export default function AddPartyScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
-  const { partyId } = useLocalSearchParams<{ partyId?: string }>();
+  const {
+    partyId,
+    prefillName,
+    prefillPhone,
+    returnSelection,
+  } = useLocalSearchParams<{
+    partyId?: string;
+    prefillName?: string;
+    prefillPhone?: string;
+    /** When '1', after a successful create (or duplicate match) the
+     * new/existing party is stashed in `newPartyOutbox` and the screen
+     * pops back so the originating screen (e.g. add-transaction) can
+     * auto-select it on focus. */
+    returnSelection?: string;
+  }>();
   const isEdit = !!partyId;
+  const shouldReturnSelection = returnSelection === '1';
 
   const { data: parties } = useParties(isEdit ? orgId : undefined);
   const existingParty = useMemo(
@@ -84,12 +137,6 @@ export default function AddPartyScreen() {
 
   const [submitError, setSubmitError] = useState<string>();
   const [showTypePicker, setShowTypePicker] = useState(false);
-  const [showAdditional, setShowAdditional] = useState(false);
-  const [showBalance, setShowBalance] = useState(false);
-  const [showBank, setShowBank] = useState(false);
-  // Visibility flag for the native date picker on the Date-of-Joining
-  // field. Free-text entry was letting users type things like
-  // "5000210" which then crashed Timestamp.fromDate on save.
   const [showDojPicker, setShowDojPicker] = useState(false);
 
   const {
@@ -129,12 +176,11 @@ export default function AddPartyScreen() {
 
   const selectedType = watch('partyType');
   const balanceType = watch('openingBalanceType');
+  const dojValue = watch('dateOfJoining');
 
-  const selectedTypeLabel =
-    ALL_PARTY_TYPES.find((t) => t.key === selectedType)?.label ?? '';
+  const selectedTypeMeta = ALL_PARTY_TYPES.find((tt) => tt.key === selectedType);
+  const selectedTypeLabel = selectedTypeMeta?.label ?? '';
 
-  // Prefill form when editing an existing party (runs once when the party is
-  // first resolved from the realtime list).
   const didPrefillRef = useRef(false);
   useEffect(() => {
     if (!isEdit || !existingParty || didPrefillRef.current) return;
@@ -143,9 +189,6 @@ export default function AddPartyScreen() {
     const doj = existingParty.dateOfJoining;
     const dojStr = doj ? doj.toDate().toISOString().slice(0, 10) : '';
     const bank = existingParty.bankDetails ?? {};
-    const hasBalance = !!(existingParty.openingBalance && existingParty.openingBalance > 0);
-    const hasKyc = !!(existingParty.aadharNumber || existingParty.panNumber);
-    const hasBank = Object.values(bank).some(Boolean);
 
     reset({
       name: existingParty.name,
@@ -160,7 +203,10 @@ export default function AddPartyScreen() {
       pincode: '',
       aadharNumber: existingParty.aadharNumber ?? '',
       panNumber: existingParty.panNumber ?? '',
-      openingBalance: hasBalance ? String(existingParty.openingBalance) : '',
+      openingBalance:
+        existingParty.openingBalance && existingParty.openingBalance > 0
+          ? String(existingParty.openingBalance)
+          : '',
       openingBalanceType: existingParty.openingBalanceType ?? 'to_pay',
       accountHolderName: bank.accountHolderName ?? '',
       accountNumber: bank.accountNumber ?? '',
@@ -170,14 +216,23 @@ export default function AddPartyScreen() {
       iban: bank.iban ?? '',
       upiId: bank.upiId ?? '',
     });
-
-    if (hasKyc) setShowAdditional(true);
-    if (hasBalance) setShowBalance(true);
-    if (hasBank) setShowBank(true);
   }, [isEdit, existingParty, reset]);
 
-  // ── Contact picker ──
+  // Prefill from query params when launched inline from another screen
+  // (e.g. tapping "Add 'X'" or "From contacts" inside the Add Transaction
+  // party picker). Skipped in edit mode — the existing-party prefill
+  // effect above wins. Runs once on mount.
+  const didPrefillFromParamsRef = useRef(false);
+  useEffect(() => {
+    if (isEdit) return;
+    if (didPrefillFromParamsRef.current) return;
+    if (!prefillName && !prefillPhone) return;
+    didPrefillFromParamsRef.current = true;
+    if (prefillName) setValue('name', prefillName, { shouldValidate: true });
+    if (prefillPhone) setValue('phone', prefillPhone, { shouldValidate: true });
+  }, [isEdit, prefillName, prefillPhone, setValue]);
 
+  // Contact picker
   const pickContact = useCallback(async () => {
     Keyboard.dismiss();
     try {
@@ -186,8 +241,6 @@ export default function AddPartyScreen() {
         Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
         return;
       }
-      // iOS: presenting CNContactPicker while a ScrollView/keyboard is active
-      // can freeze the UI. Let layout settle before the native modal.
       await new Promise<void>((resolve) => {
         InteractionManager.runAfterInteractions(() => {
           setTimeout(resolve, 320);
@@ -203,8 +256,9 @@ export default function AddPartyScreen() {
       if (contactName) setValue('name', contactName, { shouldValidate: true });
 
       const raw =
-        result.phoneNumbers?.find((p) => (p.number ?? p.digits ?? '').replace(/\D/g, '').length >= 10) ??
-        result.phoneNumbers?.[0];
+        result.phoneNumbers?.find(
+          (p) => (p.number ?? p.digits ?? '').replace(/\D/g, '').length >= 10,
+        ) ?? result.phoneNumbers?.[0];
       const phone = raw?.number ?? raw?.digits ?? '';
       if (phone) {
         setValue('phone', phone.replace(/[^\d+]/g, ''), { shouldValidate: true });
@@ -220,31 +274,6 @@ export default function AddPartyScreen() {
     }
   }, [setValue]);
 
-  // ── Submit ──
-
-  /** Defensive parse — accepts only YYYY-MM-DD or any string `new Date`
-   *  can resolve to a real timestamp. Returns undefined on garbage,
-   *  empty, or any value that would otherwise crash
-   *  `Timestamp.fromDate()` at the Firestore boundary. */
-  function safeDate(input: string | undefined | null): Date | undefined {
-    if (!input) return undefined;
-    const d = new Date(input);
-    if (Number.isNaN(d.getTime())) return undefined;
-    return d;
-  }
-
-  /** Strip keys whose value is `undefined`. Firestore rejects writes
-   *  containing any `undefined` field with "Unsupported field value:
-   *  undefined" — and an entire bank-details map can be all-undefined
-   *  when the user opened the section but didn't fill anything in. */
-  function dropUndefined<T extends Record<string, unknown>>(o: T): Partial<T> {
-    const out: Partial<T> = {};
-    for (const k in o) {
-      if (o[k] !== undefined) out[k] = o[k];
-    }
-    return out;
-  }
-
   async function onSubmit(data: FormData) {
     if (!user || !orgId) return;
     setSubmitError(undefined);
@@ -252,10 +281,7 @@ export default function AddPartyScreen() {
       const balance = data.openingBalance ? parseFloat(data.openingBalance) : undefined;
       const address =
         [data.address, data.city, data.state, data.pincode].filter(Boolean).join(', ') || undefined;
-      // Build the bank-details map, then strip undefined keys before
-      // we send it to Firestore (which refuses to write `undefined`).
-      // If every field is empty the whole map collapses to undefined
-      // so the parent payload omits the bankDetails key entirely.
+
       const bankDetailsRaw = {
         accountHolderName: data.accountHolderName || undefined,
         accountNumber: data.accountNumber || undefined,
@@ -269,10 +295,6 @@ export default function AddPartyScreen() {
       const bankDetails =
         Object.keys(bankDetailsClean).length > 0 ? bankDetailsClean : undefined;
 
-      // Build the payload, then strip undefined keys at the top level.
-      // Firestore rejects ANY undefined value with "Unsupported field
-      // value: undefined" -- so this guard runs even on fields the
-      // schema marks optional.
       const payload = dropUndefined({
         name: data.name,
         phone: data.phone,
@@ -291,943 +313,770 @@ export default function AddPartyScreen() {
       if (isEdit && partyId) {
         await updateParty(partyId, payload);
       } else {
-        await createParty({
+        const newId = await createParty({
           orgId,
           createdBy: user.uid,
           ...payload,
-          // The two required fields below are already in payload but
-          // TypeScript can't see that through Partial<...>, so re-state
-          // them so createParty's stricter signature is happy.
           name: data.name,
           phone: data.phone,
           partyType: data.partyType as PartyType,
         });
+        // Inline-from-transaction caller wants the new party id back.
+        if (shouldReturnSelection) {
+          setNewPartyOutbox({ id: newId, name: data.name });
+        }
       }
       // Snapshot-propagation buffer (see add-transaction.tsx).
       await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
+      // Duplicate phone — same person already exists in this org.
+      // If we were launched inline from another screen, hand the
+      // existing party back via the outbox so the caller can select
+      // it without forcing the user to re-do the work. Otherwise
+      // surface a friendly alert and stay on the form so the user
+      // can correct the phone or cancel.
+      if (err instanceof DuplicatePhoneError) {
+        if (shouldReturnSelection) {
+          setNewPartyOutbox({
+            id: err.existing.id,
+            name: err.existing.name,
+          });
+          await new Promise((r) => setTimeout(r, 200));
+          router.back();
+          return;
+        }
+        Alert.alert(
+          'Already saved',
+          `${err.existing.name} is already a ${getPartyTypeLabel(err.existing.partyType)}. Open them from the Parties tab to change details.`,
+        );
+        return;
+      }
+      if (err instanceof InvalidPhoneError) {
+        setSubmitError(err.message);
+        return;
+      }
       setSubmitError((err as Error).message);
     }
   }
 
-  // ── Render ──
+  // DoJ display helpers
+  const dojDate = dojValue ? new Date(`${dojValue}T00:00:00`) : null;
+  const dojLabel = dojDate
+    ? dojDate.toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      })
+    : 'Pick date';
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* Nav */}
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="close" size={22} color={color.text} />
-        </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-          {isEdit ? 'Edit Party' : 'Create New Party'}
-        </Text>
-        <View style={styles.navBtn} />
-      </View>
+      <SheetHeader
+        title={isEdit ? 'Edit party' : 'New party'}
+        cancelLabel="Cancel"
+        saveLabel="Save"
+        saveLoading={isSubmitting}
+        saveDisabled={!isValid || !orgId}
+        onCancel={() => router.back()}
+        onSave={() => void handleSubmit(onSubmit)()}
+      />
 
       <KeyboardAvoidingView
-        style={styles.flex}
-        // On Android `undefined` left the keyboard floating over the
-        // bottom inputs (Bank Address, IBAN, UPI). 'padding' both
-        // platforms tells RN to grow the bottom inset so the focused
-        // input scrolls above the keyboard.
-        behavior="padding"
-        // Header on top is ~50pt; this lets the avoidance lift the
-        // content the right amount on Android.
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
         keyboardVerticalOffset={Platform.OS === 'android' ? 24 : 0}
       >
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={{ paddingBottom: 60 + insets.bottom }}
           keyboardDismissMode="on-drag"
-          // Allow tapping the date picker / dropdowns / save button
-          // without the first tap just dismissing the keyboard.
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* ── Pick from contacts ── */}
-          <Pressable
-            onPress={pickContact}
-            style={({ pressed }) => [styles.contactBtn, pressed && { opacity: 0.7 }]}
-          >
-            <Ionicons name="person-add" size={20} color={color.primary} />
-            <Text variant="bodyStrong" color="primary">Pick from Contacts</Text>
-          </Pressable>
+          {/* Pick from Contacts */}
+          {!isEdit ? (
+            <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+              <Pressable
+                onPress={pickContact}
+                style={({ pressed }) => [
+                  styles.contactBtn,
+                  {
+                    backgroundColor:
+                      t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                    borderRadius: t.radii.field,
+                    borderColor: t.palette.blue.base + '33',
+                    borderWidth: t.hairline,
+                    borderStyle: 'dashed',
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Ionicons name="person-add" size={18} color={t.palette.blue.base} />
+                <Text
+                  variant="callout"
+                  style={{
+                    color: t.palette.blue.base,
+                    fontWeight: '700',
+                    marginLeft: 8,
+                  }}
+                >
+                  Pick from contacts
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
 
-          <View style={styles.orRow}>
-            <View style={styles.orLine} />
-            <Text variant="caption" color="textMuted">OR ENTER MANUALLY</Text>
-            <View style={styles.orLine} />
-          </View>
+          {/* Type */}
+          <FormGroup header="Type">
+            <Row
+              label="Party type"
+              value={selectedTypeLabel || 'Select'}
+              valueColor={selectedTypeLabel ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setShowTypePicker(true)}
+              divider={false}
+            />
+          </FormGroup>
+          {errors.partyType?.message ? (
+            <FieldNote text={errors.partyType.message} />
+          ) : null}
 
-          {/* ── Party Type selector ── */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-            PARTY TYPE *
-          </Text>
-          <Pressable
-            onPress={() => setShowTypePicker(true)}
-            style={[
-              styles.typeSelector,
-              selectedType ? styles.typeSelectorActive : undefined,
-            ]}
-          >
-            {selectedType ? (
-              <View style={styles.typeSelectorInner}>
-                <Ionicons
-                  name={ALL_PARTY_TYPES.find((t) => t.key === selectedType)?.icon as any ?? 'person'}
-                  size={18}
-                  color={color.primary}
+          {/* Identity */}
+          <FormGroup header="Identity">
+            <Controller
+              control={control}
+              name="name"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Name"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. Ramesh Kumar"
+                  autoCapitalize="words"
                 />
-                <Text variant="body" color="text">{selectedTypeLabel}</Text>
-              </View>
-            ) : (
-              <Text variant="body" color="textFaint">Select party type</Text>
-            )}
-            <Ionicons name="chevron-down" size={18} color={color.textMuted} />
-          </Pressable>
-          {errors.partyType?.message && (
-            <Text variant="caption" color="danger" style={{ marginTop: 4 }}>
-              {errors.partyType.message}
-            </Text>
-          )}
-
-          {/* ── Basic fields ── */}
-          <Controller
-            control={control}
-            name="name"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Party Name *"
-                placeholder="e.g. Ramesh Kumar"
-                autoCapitalize="words"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.name?.message}
-              />
-            )}
-          />
-
-          <Controller
-            control={control}
-            name="phone"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Phone Number *"
-                placeholder="e.g. 9876543210"
-                keyboardType="phone-pad"
-                value={value}
-                onChangeText={(t) => onChange(t.replace(/[^\d+]/g, ''))}
-                onBlur={onBlur}
-                error={errors.phone?.message}
-              />
-            )}
-          />
-
-          <Controller
-            control={control}
-            name="email"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Email"
-                placeholder="e.g. ramesh@email.com"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.email?.message}
-              />
-            )}
-          />
-
-          <Controller
-            control={control}
-            name="fatherName"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Father Name"
-                placeholder="e.g. Suresh Kumar"
-                autoCapitalize="words"
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-              />
-            )}
-          />
-
-          <Controller
-            control={control}
-            name="dateOfJoining"
-            render={({ field: { onChange, value } }) => {
-              // Value is stored as ISO YYYY-MM-DD (set only via the
-              // picker, never free-typed) so save-time parsing always
-              // produces a valid Date.
-              const selected = value ? new Date(`${value}T00:00:00`) : null;
-              const display = selected
-                ? selected.toLocaleDateString('en-IN', {
-                    day: '2-digit',
-                    month: 'short',
-                    year: 'numeric',
-                  })
-                : 'Pick date';
-              return (
-                <View>
-                  <Text variant="caption" color="textMuted" style={styles.dateLabel}>
-                    DATE OF JOINING
-                  </Text>
-                  <Pressable
-                    onPress={() => setShowDojPicker(true)}
-                    style={({ pressed }) => [
-                      styles.dateBtn,
-                      pressed && { opacity: 0.7 },
-                    ]}
-                  >
-                    <Ionicons
-                      name="calendar-outline"
-                      size={16}
-                      color={color.textMuted}
-                    />
-                    <Text
-                      variant="body"
-                      color={selected ? 'text' : 'textFaint'}
-                      style={styles.dateBtnText}
-                    >
-                      {display}
-                    </Text>
-                    {selected ? (
-                      <Pressable
-                        onPress={(e) => {
-                          e.stopPropagation();
-                          onChange('');
-                        }}
-                        hitSlop={8}
-                      >
-                        <Ionicons
-                          name="close-circle"
-                          size={16}
-                          color={color.textFaint}
-                        />
-                      </Pressable>
-                    ) : null}
-                  </Pressable>
-                  <DatePickerModal
-                    visible={showDojPicker}
-                    value={selected ?? new Date()}
-                    maximumDate={new Date()}
-                    onClose={() => setShowDojPicker(false)}
-                    onConfirm={(picked) => {
-                      const yyyy = picked.getFullYear();
-                      const mm = String(picked.getMonth() + 1).padStart(2, '0');
-                      const dd = String(picked.getDate()).padStart(2, '0');
-                      onChange(`${yyyy}-${mm}-${dd}`);
-                    }}
-                  />
-                </View>
-              );
-            }}
-          />
-
-          {/* ── Address ── */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-            ADDRESS
-          </Text>
-
-          <Controller
-            control={control}
-            name="address"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Street / Locality"
-                placeholder="e.g. 12, MG Road, Near Bus Stand"
-                multiline
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-              />
-            )}
-          />
-
-          <View style={styles.rowFields}>
-            <View style={styles.rowFieldHalf}>
-              <Controller
-                control={control}
-                name="city"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="City"
-                    placeholder="e.g. Hyderabad"
-                    autoCapitalize="words"
-                    value={value ?? ''}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                  />
-                )}
-              />
-            </View>
-            <View style={styles.rowFieldHalf}>
-              <Controller
-                control={control}
-                name="state"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="State"
-                    placeholder="e.g. Telangana"
-                    autoCapitalize="words"
-                    value={value ?? ''}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                  />
-                )}
-              />
-            </View>
-          </View>
-
-          <Controller
-            control={control}
-            name="pincode"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Pincode"
-                placeholder="e.g. 500001"
-                keyboardType="numeric"
-                value={value ?? ''}
-                onChangeText={(t) => onChange(t.replace(/\D/g, '').slice(0, 6))}
-                onBlur={onBlur}
-              />
-            )}
-          />
-
-          {/* ── Additional Fields (Aadhar / PAN) ── */}
-          <Pressable
-            onPress={() => setShowAdditional(!showAdditional)}
-            style={styles.expandHeader}
-          >
-            <View style={styles.expandHeaderLeft}>
-              <Ionicons name="document-text-outline" size={18} color={color.primary} />
-              <Text variant="bodyStrong" color="text">Additional Fields</Text>
-            </View>
-            <Ionicons
-              name={showAdditional ? 'chevron-up' : 'chevron-down'}
-              size={18}
-              color={color.textMuted}
+              )}
             />
-          </Pressable>
-
-          {showAdditional && (
-            <View style={styles.expandContent}>
-              <Controller
-                control={control}
-                name="aadharNumber"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <View>
-                    <TextField
-                      label="Aadhar Number"
-                      placeholder="XXXX XXXX XXXX"
-                      keyboardType="numeric"
-                      value={value ?? ''}
-                      onChangeText={(t) => {
-                        // Auto-format with spaces every 4 digits
-                        const digits = t.replace(/\D/g, '').slice(0, 12);
-                        const formatted = digits.replace(/(\d{4})(?=\d)/g, '$1 ');
-                        onChange(formatted);
-                      }}
-                      onBlur={onBlur}
-                    />
-                    <Pressable style={styles.uploadBtn}>
-                      <Ionicons name="cloud-upload-outline" size={16} color={color.primary} />
-                      <Text variant="meta" color="primary">Upload Aadhar</Text>
-                    </Pressable>
-                  </View>
-                )}
-              />
-
-              <Controller
-                control={control}
-                name="panNumber"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <View>
-                    <TextField
-                      label="PAN Number"
-                      placeholder="ABCDE1234F"
-                      autoCapitalize="characters"
-                      value={value ?? ''}
-                      onChangeText={(t) => onChange(t.toUpperCase().slice(0, 10))}
-                      onBlur={onBlur}
-                    />
-                    <Pressable style={styles.uploadBtn}>
-                      <Ionicons name="cloud-upload-outline" size={16} color={color.primary} />
-                      <Text variant="meta" color="primary">Upload PAN</Text>
-                    </Pressable>
-                  </View>
-                )}
-              />
-            </View>
-          )}
-
-          {/* ── Opening Balance ── */}
-          <Pressable
-            onPress={() => setShowBalance(!showBalance)}
-            style={styles.expandHeader}
-          >
-            <View style={styles.expandHeaderLeft}>
-              <Ionicons name="wallet-outline" size={18} color={color.primary} />
-              <Text variant="bodyStrong" color="text">Opening Balance</Text>
-            </View>
-            <Ionicons
-              name={showBalance ? 'chevron-up' : 'chevron-down'}
-              size={18}
-              color={color.textMuted}
+            <Controller
+              control={control}
+              name="phone"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Phone"
+                  value={value}
+                  onChangeText={(tx) => onChange(tx.replace(/[^\d+]/g, ''))}
+                  onBlur={onBlur}
+                  placeholder="9876543210"
+                  keyboardType="phone-pad"
+                />
+              )}
             />
-          </Pressable>
-
-          {showBalance && (
-            <View style={styles.expandContent}>
-              <Text variant="meta" color="textMuted" style={{ marginBottom: space.sm }}>
-                If this party already has a pending balance before using Interior OS, enter it here.
-              </Text>
-
-              <Controller
-                control={control}
-                name="openingBalance"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="Amount (₹)"
-                    placeholder="0"
-                    keyboardType="numeric"
-                    value={value ?? ''}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                  />
-                )}
-              />
-
-              <Text variant="caption" color="textMuted" style={{ marginBottom: space.xs }}>
-                WHO OWES WHOM?
-              </Text>
-              <View style={styles.balanceTypeRow}>
-                <Pressable
-                  onPress={() => setValue('openingBalanceType', 'to_pay')}
-                  style={[
-                    styles.balanceChip,
-                    balanceType === 'to_pay' && styles.balanceChipPay,
-                  ]}
-                >
-                  <Ionicons
-                    name="arrow-up-circle-outline"
-                    size={16}
-                    color={balanceType === 'to_pay' ? color.danger : color.textMuted}
-                  />
-                  <Text
-                    variant="metaStrong"
-                    style={{ color: balanceType === 'to_pay' ? color.danger : color.textMuted }}
-                  >
-                    You Owe Them
-                  </Text>
-                  <Text
-                    variant="caption"
-                    style={{ color: balanceType === 'to_pay' ? color.danger : color.textFaint }}
-                  >
-                    (To Pay)
-                  </Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => setValue('openingBalanceType', 'to_receive')}
-                  style={[
-                    styles.balanceChip,
-                    balanceType === 'to_receive' && styles.balanceChipReceive,
-                  ]}
-                >
-                  <Ionicons
-                    name="arrow-down-circle-outline"
-                    size={16}
-                    color={balanceType === 'to_receive' ? color.success : color.textMuted}
-                  />
-                  <Text
-                    variant="metaStrong"
-                    style={{ color: balanceType === 'to_receive' ? color.success : color.textMuted }}
-                  >
-                    They Owe You
-                  </Text>
-                  <Text
-                    variant="caption"
-                    style={{ color: balanceType === 'to_receive' ? color.success : color.textFaint }}
-                  >
-                    (To Receive)
-                  </Text>
-                </Pressable>
-              </View>
-            </View>
-          )}
-
-          {/* ── Bank Details ── */}
-          <Pressable
-            onPress={() => setShowBank(!showBank)}
-            style={styles.expandHeader}
-          >
-            <View style={styles.expandHeaderLeft}>
-              <Ionicons name="business-outline" size={18} color={color.primary} />
-              <Text variant="bodyStrong" color="text">Bank Details</Text>
-            </View>
-            <Ionicons
-              name={showBank ? 'chevron-up' : 'chevron-down'}
-              size={18}
-              color={color.textMuted}
+            <Controller
+              control={control}
+              name="email"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Email"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Optional"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              )}
             />
-          </Pressable>
+            <Controller
+              control={control}
+              name="fatherName"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Father"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Optional"
+                  autoCapitalize="words"
+                />
+              )}
+            />
+            <Row
+              label="Joined"
+              value={dojLabel}
+              valueColor={dojDate ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setShowDojPicker(true)}
+              divider={false}
+            />
+          </FormGroup>
+          {errors.name?.message ? <FieldNote text={errors.name.message} /> : null}
+          {errors.phone?.message ? <FieldNote text={errors.phone.message} /> : null}
+          {errors.email?.message ? <FieldNote text={errors.email.message} /> : null}
 
-          {showBank && (
-            <View style={styles.expandContent}>
-              <Controller
-                control={control}
-                name="accountHolderName"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="Account Holder Name"
-                    placeholder="As per bank records"
-                    autoCapitalize="words"
-                    value={value ?? ''}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                  />
-                )}
+          {/* Address */}
+          <FormGroup header="Address">
+            <Controller
+              control={control}
+              name="address"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Street"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Optional"
+                  autoCapitalize="sentences"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="city"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="City"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder=""
+                  autoCapitalize="words"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="state"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="State"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder=""
+                  autoCapitalize="words"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="pincode"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="PIN"
+                  value={value ?? ''}
+                  onChangeText={(tx) => onChange(tx.replace(/\D/g, '').slice(0, 6))}
+                  onBlur={onBlur}
+                  placeholder=""
+                  keyboardType="number-pad"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+
+          {/* Compliance */}
+          <FormGroup header="Compliance (optional)">
+            <Controller
+              control={control}
+              name="aadharNumber"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Aadhar"
+                  value={value ?? ''}
+                  onChangeText={(tx) => {
+                    const digits = tx.replace(/\D/g, '').slice(0, 12);
+                    const formatted = digits.replace(/(\d{4})(?=\d)/g, '$1 ');
+                    onChange(formatted);
+                  }}
+                  onBlur={onBlur}
+                  placeholder="XXXX XXXX XXXX"
+                  keyboardType="numeric"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="panNumber"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="PAN"
+                  value={value ?? ''}
+                  onChangeText={(tx) => onChange(tx.toUpperCase().slice(0, 10))}
+                  onBlur={onBlur}
+                  placeholder="ABCDE1234F"
+                  autoCapitalize="characters"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+
+          {/* Opening balance */}
+          <FormGroup
+            header="Opening balance"
+            footer="If this party already has a pending balance before using Interior OS, enter it here."
+          >
+            <Controller
+              control={control}
+              name="openingBalance"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Amount"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="0"
+                  keyboardType="numeric"
+                />
+              )}
+            />
+            <View style={styles.balanceRow}>
+              <BalancePill
+                active={balanceType === 'to_pay'}
+                tone={t.palette.red}
+                label="You owe them"
+                sub="To pay"
+                onPress={() => setValue('openingBalanceType', 'to_pay')}
               />
-
-              <Controller
-                control={control}
-                name="accountNumber"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="Account Number"
-                    placeholder="Enter account number"
-                    keyboardType="numeric"
-                    value={value ?? ''}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                  />
-                )}
-              />
-
-              <Controller
-                control={control}
-                name="ifsc"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="IFSC Code"
-                    placeholder="e.g. SBIN0001234"
-                    autoCapitalize="characters"
-                    value={value ?? ''}
-                    onChangeText={(t) => onChange(t.toUpperCase())}
-                    onBlur={onBlur}
-                  />
-                )}
-              />
-
-              <Controller
-                control={control}
-                name="bankName"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="Bank Name"
-                    placeholder="e.g. State Bank of India"
-                    autoCapitalize="words"
-                    value={value ?? ''}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                  />
-                )}
-              />
-
-              <Controller
-                control={control}
-                name="bankAddress"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="Bank Address"
-                    placeholder="Branch address"
-                    multiline
-                    value={value ?? ''}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                  />
-                )}
-              />
-
-              <Controller
-                control={control}
-                name="iban"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="IBAN Number"
-                    placeholder="International bank account number"
-                    autoCapitalize="characters"
-                    value={value ?? ''}
-                    onChangeText={(t) => onChange(t.toUpperCase())}
-                    onBlur={onBlur}
-                  />
-                )}
-              />
-
-              <Controller
-                control={control}
-                name="upiId"
-                render={({ field: { onChange, onBlur, value } }) => (
-                  <TextField
-                    label="UPI ID"
-                    placeholder="e.g. name@upi"
-                    autoCapitalize="none"
-                    value={value ?? ''}
-                    onChangeText={onChange}
-                    onBlur={onBlur}
-                  />
-                )}
+              <BalancePill
+                active={balanceType === 'to_receive'}
+                tone={t.palette.green}
+                label="They owe you"
+                sub="To receive"
+                onPress={() => setValue('openingBalanceType', 'to_receive')}
               />
             </View>
-          )}
+          </FormGroup>
 
-          {submitError && (
-            <Text variant="caption" color="danger" style={{ marginTop: space.sm }}>
-              {submitError}
-            </Text>
-          )}
+          {/* Bank */}
+          <FormGroup header="Bank (optional)">
+            <Controller
+              control={control}
+              name="accountHolderName"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Holder"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="As per bank records"
+                  autoCapitalize="words"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="bankName"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Bank"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. HDFC Bank"
+                  autoCapitalize="words"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="accountNumber"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Account"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Account number"
+                  keyboardType="numeric"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="ifsc"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="IFSC"
+                  value={value ?? ''}
+                  onChangeText={(tx) => onChange(tx.toUpperCase())}
+                  onBlur={onBlur}
+                  placeholder="HDFC0000123"
+                  autoCapitalize="characters"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="bankAddress"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Branch"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Branch address"
+                  autoCapitalize="words"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="upiId"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="UPI"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="name@bank"
+                  autoCapitalize="none"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="iban"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="IBAN"
+                  value={value ?? ''}
+                  onChangeText={(tx) => onChange(tx.toUpperCase())}
+                  onBlur={onBlur}
+                  placeholder="International A/c"
+                  autoCapitalize="characters"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+
+          {submitError ? <FieldNote text={submitError} /> : null}
         </ScrollView>
-
-        {/* Sticky footer */}
-        <View style={styles.footer}>
-          <Button
-            label={isEdit ? 'Save Changes' : 'Save Party'}
-            onPress={handleSubmit(onSubmit)}
-            loading={isSubmitting}
-            disabled={!isValid || !orgId}
-          />
-        </View>
       </KeyboardAvoidingView>
 
-      {/* ── Party Type Picker Modal ── */}
-      <Modal
+      {/* Type picker sheet */}
+      <TypePickerSheet
         visible={showTypePicker}
-        animationType="slide"
-        transparent
-        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
-        onRequestClose={() => setShowTypePicker(false)}
-      >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
-          keyboardVerticalOffset={0}
-        >
-          <Pressable style={styles.modalOverlay} onPress={() => setShowTypePicker(false)}>
-            <View />
-          </Pressable>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-              Select Party Type
-            </Text>
+        selected={selectedType as PartyType | ''}
+        onPick={(k) => {
+          setValue('partyType', k, { shouldValidate: true });
+          setShowTypePicker(false);
+        }}
+        onClose={() => setShowTypePicker(false)}
+      />
 
-            <ScrollView
-              showsVerticalScrollIndicator={false}
-              style={styles.modalScroll}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="on-drag"
+      {/* DoJ date picker */}
+      <DateTimeSheet
+        open={showDojPicker}
+        value={dojDate ?? new Date()}
+        mode="date"
+        title="Date of joining"
+        onChange={(d) => {
+          const yyyy = d.getFullYear();
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          setValue('dateOfJoining', `${yyyy}-${mm}-${dd}`, { shouldValidate: true });
+        }}
+        onClose={() => setShowDojPicker(false)}
+      />
+    </View>
+  );
+}
+
+function FieldNote({ text }: { text: string }) {
+  const t = useThemeV2();
+  return (
+    <Text
+      variant="caption2"
+      style={{
+        color: t.palette.red.base,
+        paddingHorizontal: 32,
+        marginTop: 8,
+      }}
+    >
+      {text}
+    </Text>
+  );
+}
+
+function BalancePill({
+  active,
+  tone,
+  label,
+  sub,
+  onPress,
+}: {
+  active: boolean;
+  tone: { base: string; soft: string; softDark: string };
+  label: string;
+  sub: string;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.balancePill,
+        {
+          backgroundColor: active
+            ? t.mode === 'dark'
+              ? tone.softDark
+              : tone.soft
+            : t.colors.fill3,
+          borderRadius: t.radii.field,
+          borderColor: active ? tone.base + '33' : 'transparent',
+          borderWidth: 1,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Ionicons
+        name={active ? 'checkmark-circle' : 'ellipse-outline'}
+        size={16}
+        color={active ? tone.base : t.colors.tertiary}
+      />
+      <View style={{ marginLeft: 8 }}>
+        <Text
+          variant="footnote"
+          style={{
+            color: active ? tone.base : t.colors.label,
+            fontWeight: active ? '700' : '500',
+          }}
+        >
+          {label}
+        </Text>
+        <Text
+          variant="caption2"
+          style={{
+            color: active ? tone.base : t.colors.tertiary,
+            marginTop: 1,
+          }}
+        >
+          {sub}
+        </Text>
+      </View>
+    </Pressable>
+  );
+}
+
+// ── Type Picker Sheet ──
+
+function TypePickerSheet({
+  visible,
+  selected,
+  onPick,
+  onClose,
+}: {
+  visible: boolean;
+  selected: PartyType | '';
+  onPick: (k: PartyType) => void;
+  onClose: () => void;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            sheetStyles.sheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 8,
+              maxHeight: '85%',
+            },
+          ]}
+        >
+          <View
+            style={[sheetStyles.grabber, { backgroundColor: t.colors.tertiary }]}
+          />
+          <View
+            style={[
+              sheetStyles.header,
+              {
+                borderBottomColor: t.colors.separator,
+                borderBottomWidth: t.hairline,
+              },
+            ]}
+          >
+            <Pressable onPress={onClose} hitSlop={8} style={sheetStyles.sideBtn}>
+              <Text variant="body" style={{ color: t.palette.blue.base }}>
+                Cancel
+              </Text>
+            </Pressable>
+            <Text
+              variant="headline"
+              color="label"
+              style={[sheetStyles.title, { fontWeight: '600' }]}
             >
+              Select party type
+            </Text>
+            <View style={sheetStyles.sideBtn} />
+          </View>
+
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: 16 }}
+            showsVerticalScrollIndicator={false}
+          >
             {PARTY_TYPE_GROUPS.map((group) => (
-              <View key={group.label} style={styles.typeGroup}>
-                <Text variant="caption" color="textMuted" style={styles.typeGroupLabel}>
+              <View key={group.label} style={{ marginTop: 16 }}>
+                <Text
+                  variant="caption2"
+                  color="secondary"
+                  style={{
+                    paddingHorizontal: 32,
+                    paddingBottom: 6,
+                    letterSpacing: 0.4,
+                  }}
+                >
                   {group.label.toUpperCase()}
                 </Text>
-                {group.types.map((t) => {
-                  const active = selectedType === t.key;
+                {group.types.map((tt, idx) => {
+                  const sel = selected === tt.key;
+                  const last = idx === group.types.length - 1;
                   return (
                     <Pressable
-                      key={t.key}
-                      onPress={() => {
-                        setValue('partyType', t.key, { shouldValidate: true });
-                        setShowTypePicker(false);
-                      }}
+                      key={tt.key}
+                      onPress={() => onPick(tt.key)}
                       style={({ pressed }) => [
-                        styles.typeOption,
-                        active && styles.typeOptionActive,
-                        pressed && { opacity: 0.7 },
+                        sheetStyles.optionRow,
+                        pressed && { backgroundColor: t.colors.fill3 },
                       ]}
                     >
-                      <View style={[styles.typeIconWrap, active && styles.typeIconWrapActive]}>
+                      <View
+                        style={[
+                          sheetStyles.iconTile,
+                          {
+                            backgroundColor: sel
+                              ? t.mode === 'dark'
+                                ? t.palette.blue.softDark
+                                : t.palette.blue.soft
+                              : t.colors.fill3,
+                            borderRadius: t.radii.tile,
+                          },
+                        ]}
+                      >
                         <Ionicons
-                          name={t.icon as any}
-                          size={18}
-                          color={active ? color.onPrimary : color.textMuted}
+                          name={tt.icon as keyof typeof Ionicons.glyphMap}
+                          size={16}
+                          color={sel ? t.palette.blue.base : t.colors.secondary}
                         />
                       </View>
                       <Text
                         variant="body"
-                        color={active ? 'primary' : 'text'}
-                        style={active ? { fontWeight: '600' } : undefined}
+                        color="label"
+                        style={{
+                          flex: 1,
+                          marginLeft: 12,
+                          fontWeight: sel ? '600' : '400',
+                        }}
                       >
-                        {t.label}
+                        {tt.label}
                       </Text>
-                      {active && (
+                      {sel ? (
                         <Ionicons
-                          name="checkmark-circle"
+                          name="checkmark"
                           size={20}
-                          color={color.primary}
-                          style={{ marginLeft: 'auto' }}
+                          color={t.palette.blue.base}
                         />
-                      )}
+                      ) : null}
+                      {!last ? (
+                        <View
+                          style={[
+                            sheetStyles.divider,
+                            { backgroundColor: t.colors.separator, left: 60 },
+                          ]}
+                        />
+                      ) : null}
                     </Pressable>
                   );
                 })}
               </View>
             ))}
-            </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
-    </Screen>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
-// ── Styles ──
-
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-
-  navBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingBottom: space.xs,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
-  },
-  navBtn: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navTitle: { flex: 1, textAlign: 'center' },
-
-  scroll: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.md,
-    // Tall bottom padding so the last inputs (Bank Address, IBAN, UPI
-    // ID) can scroll well clear of the on-screen keyboard. ~280 covers
-    // a stock Samsung Gboard plus the suggestion strip.
-    paddingBottom: 280,
-  },
-
-  // Contact picker
   contactBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space.xs,
-    backgroundColor: color.primarySoft,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.primary,
-    paddingVertical: space.sm,
-    borderStyle: 'dashed',
-  },
-  orRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    marginVertical: space.md,
-  },
-  orLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.separator,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
   },
 
-  // Section label
-  sectionLabel: {
-    marginTop: space.sm,
-    marginBottom: space.xs,
-  },
-
-  // Date-of-Joining picker button (replaces the broken numeric TextField).
-  dateLabel: {
-    marginBottom: 4,
-    letterSpacing: 0.6,
-  },
-  dateBtn: {
+  // Balance pill row
+  balanceRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 12,
     gap: 8,
-    minHeight: 44,
-    paddingHorizontal: space.sm,
-    paddingVertical: 10,
-    backgroundColor: color.bgGrouped,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    borderRadius: radius.sm,
   },
-  dateBtnText: { flex: 1 },
-
-  // Type selector
-  typeSelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.border,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    minHeight: 48,
-  },
-  typeSelectorActive: {
-    borderColor: color.primary,
-    backgroundColor: color.primarySoft,
-  },
-  typeSelectorInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
-  },
-
-  // Row fields (side by side)
-  rowFields: {
-    flexDirection: 'row',
-    gap: space.sm,
-  },
-  rowFieldHalf: {
+  balancePill: {
     flex: 1,
-  },
-
-  // Expandable sections
-  expandHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    marginTop: space.md,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
-  expandHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
-  },
-  expandContent: {
-    paddingTop: space.xs,
-  },
+});
 
-  // Upload button
-  uploadBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    alignSelf: 'flex-start',
-    paddingVertical: space.xs,
-    paddingHorizontal: space.sm,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.primary,
-    borderStyle: 'dashed',
-    marginBottom: space.sm,
-  },
-
-  // Balance type
-  balanceTypeRow: {
-    flexDirection: 'row',
-    gap: space.xs,
-    marginBottom: space.sm,
-  },
-  balanceChip: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 2,
-    paddingVertical: space.sm,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.border,
-    backgroundColor: color.surface,
-  },
-  balanceChipPay: {
-    borderColor: color.danger,
-    backgroundColor: color.dangerSoft,
-  },
-  balanceChipReceive: {
-    borderColor: color.success,
-    backgroundColor: color.successSoft,
-  },
-
-  // Footer
-  footer: {
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
-  },
-
-  // Modal
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  modalSheet: {
-    backgroundColor: color.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.xxl,
-    maxHeight: '70%',
-  },
-  modalHandle: {
+const sheetStyles = StyleSheet.create({
+  sheet: { paddingTop: 8 },
+  grabber: {
     width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.border,
+    height: 5,
+    borderRadius: 3,
     alignSelf: 'center',
-    marginBottom: space.sm,
+    marginBottom: 8,
   },
-  modalTitle: {
-    textAlign: 'center',
-    marginBottom: space.md,
-  },
-  modalScroll: {
-    paddingHorizontal: screenInset,
-  },
-
-  // Type groups
-  typeGroup: {
-    marginBottom: space.md,
-  },
-  typeGroupLabel: {
-    marginBottom: space.xs,
-    letterSpacing: 0.5,
-  },
-  typeOption: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.xs,
-    borderRadius: radius.sm,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
-  typeOptionActive: {
-    backgroundColor: color.primarySoft,
+  sideBtn: { minWidth: 70 },
+  title: { flex: 1, textAlign: 'center' },
+
+  optionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    minHeight: 48,
+    position: 'relative',
   },
-  typeIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: color.bgGrouped,
+  iconTile: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  typeIconWrapActive: {
-    backgroundColor: color.primary,
+  divider: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    height: 0.5,
   },
 });

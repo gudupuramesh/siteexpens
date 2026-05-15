@@ -25,9 +25,8 @@
  * 3.1.1). Reachable from the bottom of this screen AND the More tab
  * Account section (TODO: add there if not present).
  */
-import { ActivityIndicator, Alert, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import Constants from 'expo-constants';
 import { router, Stack } from 'expo-router';
 import { useState } from 'react';
 import Purchases, { type PurchasesPackage } from 'react-native-purchases';
@@ -46,7 +45,8 @@ import { ENTITLEMENT_ID, productIdFor } from '@/src/features/billing/productIds'
 import { useSubscription } from '@/src/features/billing/useSubscription';
 import { usePermissions } from '@/src/features/org/usePermissions';
 import type { PlanTier, SubscriptionPeriod, SubscriptionStatus } from '@/src/features/billing/types';
-import { Text } from '@/src/ui/Text';
+import { openLegalUrl } from '@/src/lib/openLegalUrl';
+import { Text } from '@/src/ui/v2/Text';
 import { color, fontFamily, screenInset, space } from '@/src/theme/tokens';
 
 // ── Helpers ─────────────────────────────────────────────────────────
@@ -173,31 +173,10 @@ async function restorePurchases(): Promise<void> {
 // ── Legal links ────────────────────────────────────────────────────
 //
 // Apple requires Privacy Policy + Terms of Service to be reachable
-// from the purchase screen. URLs come from app.json's expo block —
-// same source the More tab uses, so what we surface in-app matches
-// what was submitted to App Store / Play Store review.
-
-async function openLegalUrl(
-  key: 'privacyPolicy' | 'termsOfService',
-  label: string,
-): Promise<void> {
-  const expoExtra = (Constants.expoConfig ?? {}) as Record<string, unknown>;
-  const url = typeof expoExtra[key] === 'string' ? (expoExtra[key] as string) : '';
-  if (!url) {
-    Alert.alert(label, `${label} link is not configured yet.`);
-    return;
-  }
-  try {
-    const ok = await Linking.canOpenURL(url);
-    if (!ok) {
-      Alert.alert(label, `Cannot open ${url}`);
-      return;
-    }
-    await Linking.openURL(url);
-  } catch (err) {
-    Alert.alert(label, (err as Error).message);
-  }
-}
+// from any subscription purchase surface. The opener lives in
+// `src/lib/openLegalUrl.ts` so the More tab, this screen, and the
+// PaywallSheet teaser all read from the same `expo.privacyPolicy`
+// / `expo.termsOfService` source of truth in `app.json`.
 
 // ── Screen ──────────────────────────────────────────────────────────
 
@@ -274,9 +253,9 @@ export default function SubscriptionScreen() {
           accessibilityLabel="Back"
         >
           <Ionicons name="chevron-back" size={22} color={color.primary} />
-          <Text variant="body" color="primary">Back</Text>
+          <Text variant="body" color="label">Back</Text>
         </Pressable>
-        <Text variant="rowTitle" color="text" style={styles.headerTitle}>
+        <Text variant="callout" color="label" style={styles.headerTitle}>
           Subscription
         </Text>
         <View style={styles.headerSpacer} />
@@ -352,14 +331,14 @@ export default function SubscriptionScreen() {
                   onPress={() => void openLegalUrl('privacyPolicy', 'Privacy Policy')}
                   hitSlop={8}
                 >
-                  <Text variant="metaStrong" color="primary">Privacy Policy</Text>
+                  <Text variant="footnote" color="label">Privacy Policy</Text>
                 </Pressable>
-                <Text variant="meta" color="textFaint"> · </Text>
+                <Text variant="caption1" color="tertiary"> · </Text>
                 <Pressable
                   onPress={() => void openLegalUrl('termsOfService', 'Terms of Service')}
                   hitSlop={8}
                 >
-                  <Text variant="metaStrong" color="primary">Terms of Service</Text>
+                  <Text variant="footnote" color="label">Terms of Service</Text>
                 </Pressable>
               </View>
             </View>
@@ -383,7 +362,7 @@ export default function SubscriptionScreen() {
               ) : (
                 <Ionicons name="refresh" size={16} color={color.primary} />
               )}
-              <Text variant="bodyStrong" color="primary">
+              <Text variant="headline" color="label">
                 {restoring ? 'Restoring…' : 'Restore purchase'}
               </Text>
             </Pressable>
@@ -398,10 +377,10 @@ export default function SubscriptionScreen() {
           <View style={styles.adminOnlyNote}>
             <Ionicons name="lock-closed-outline" size={16} color={color.textMuted} />
             <View style={styles.adminOnlyBody}>
-              <Text variant="bodyStrong" color="text">
+              <Text variant="headline" color="label">
                 Plan changes are managed by the Studio Owner
               </Text>
-              <Text variant="meta" color="textMuted" style={styles.adminOnlyHint}>
+              <Text variant="caption1" color="secondary" style={styles.adminOnlyHint}>
                 Subscriptions are tied to the Apple ID on the owner's device,
                 so only the Studio Owner can upgrade or downgrade. Ask your
                 owner to change the plan from their phone.
@@ -451,7 +430,7 @@ function CurrentPlanCard(props: CurrentPlanCardProps) {
   return (
     <View style={styles.usageCard}>
       <View style={styles.usageHead}>
-        <Text variant="title" color="text">{PLAN_LABELS[props.tier]}</Text>
+        <Text variant="title1" color="label">{PLAN_LABELS[props.tier]}</Text>
         <View style={[styles.statusPill, { backgroundColor: tone.bg }]}>
           <Text style={[styles.statusPillText, { color: tone.fg }]}>
             {tone.label}
@@ -459,7 +438,7 @@ function CurrentPlanCard(props: CurrentPlanCardProps) {
         </View>
       </View>
       {renewalLine ? (
-        <Text variant="meta" color="textMuted" style={{ marginTop: 4 }}>
+        <Text variant="caption1" color="secondary" style={{ marginTop: 4 }}>
           {renewalLine}
         </Text>
       ) : null}
@@ -468,8 +447,8 @@ function CurrentPlanCard(props: CurrentPlanCardProps) {
 
       {/* Storage */}
       <View style={styles.usageRow}>
-        <Text variant="caption" color="textMuted">STORAGE</Text>
-        <Text variant="metaStrong" color="text">
+        <Text variant="caption1" color="secondary">STORAGE</Text>
+        <Text variant="footnote" color="label">
           {formatBytes(props.storageBytes)}
           <Text style={{ color: color.textFaint }}>
             {' / '}
@@ -490,8 +469,8 @@ function CurrentPlanCard(props: CurrentPlanCardProps) {
 
       {/* Members */}
       <View style={[styles.usageRow, { marginTop: 14 }]}>
-        <Text variant="caption" color="textMuted">MEMBERS</Text>
-        <Text variant="metaStrong" color="text">
+        <Text variant="caption1" color="secondary">MEMBERS</Text>
+        <Text variant="footnote" color="label">
           {props.memberCount}
           <Text style={{ color: color.textFaint }}>
             {' / '}
@@ -502,8 +481,8 @@ function CurrentPlanCard(props: CurrentPlanCardProps) {
 
       {/* Projects */}
       <View style={[styles.usageRow, { marginTop: 8 }]}>
-        <Text variant="caption" color="textMuted">PROJECTS</Text>
-        <Text variant="metaStrong" color="text">
+        <Text variant="caption1" color="secondary">PROJECTS</Text>
+        <Text variant="footnote" color="label">
           {props.projectCount}
           <Text style={{ color: color.textFaint }}>
             {' / '}
@@ -607,7 +586,7 @@ function PlanCard({
     >
       {/* Title + pill */}
       <View style={styles.cardHead}>
-        <Text variant="title" color="text">{PLAN_LABELS[tier]}</Text>
+        <Text variant="title1" color="label">{PLAN_LABELS[tier]}</Text>
         {isCurrent ? (
           <View style={styles.cardPillCurrent}>
             <Text style={styles.cardPillCurrentText}>CURRENT</Text>
@@ -618,14 +597,14 @@ function PlanCard({
           </View>
         ) : null}
       </View>
-      <Text variant="meta" color="textMuted" style={styles.cardTagline}>
+      <Text variant="caption1" color="secondary" style={styles.cardTagline}>
         {PLAN_TAGLINES[tier]}
       </Text>
 
       {/* Price block */}
       <View style={styles.priceBlock}>
         <Text style={styles.priceMain}>{headlinePrice.main}</Text>
-        <Text variant="caption" color="textMuted" style={styles.priceSub}>
+        <Text variant="caption1" color="secondary" style={styles.priceSub}>
           {headlinePrice.sub}
         </Text>
       </View>
@@ -792,7 +771,7 @@ const styles = StyleSheet.create({
 
   // Section labels (mono caps)
   sectionLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 10,
     fontWeight: '700',
     color: color.textFaint,
@@ -844,7 +823,7 @@ const styles = StyleSheet.create({
     borderRadius: 9999,
   },
   statusPillText: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '700',
     letterSpacing: 1,
@@ -906,7 +885,7 @@ const styles = StyleSheet.create({
     borderColor: color.borderStrong,
   },
   cardPillCurrentText: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '700',
     color: color.textMuted,
@@ -919,7 +898,7 @@ const styles = StyleSheet.create({
     backgroundColor: color.primarySoft,
   },
   cardPillSuggestedText: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '700',
     color: color.primary,
@@ -931,7 +910,6 @@ const styles = StyleSheet.create({
     marginTop: 12,
   },
   priceMain: {
-    fontFamily: fontFamily.sans,
     fontSize: 22,
     fontWeight: '700',
     color: color.text,
@@ -974,14 +952,12 @@ const styles = StyleSheet.create({
     borderColor: color.primary,
   },
   ctaTextHollow: {
-    fontFamily: fontFamily.sans,
     fontSize: 14,
     fontWeight: '700',
     color: color.text,
     letterSpacing: -0.2,
   },
   ctaTextPrimary: {
-    fontFamily: fontFamily.sans,
     fontSize: 14,
     fontWeight: '700',
     color: '#fff',
@@ -1007,7 +983,6 @@ const styles = StyleSheet.create({
     backgroundColor: color.primary,
   },
   toggleLabel: {
-    fontFamily: fontFamily.sans,
     fontSize: 12,
     fontWeight: '600',
     color: color.text,
@@ -1028,14 +1003,13 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   termsTitle: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 10,
     fontWeight: '700',
     color: color.textMuted,
     letterSpacing: 1.4,
   },
   termsBody: {
-    fontFamily: fontFamily.sans,
     fontSize: 12,
     lineHeight: 17,
     color: color.textMuted,
@@ -1048,7 +1022,6 @@ const styles = StyleSheet.create({
 
   // Footer
   fineprint: {
-    fontFamily: fontFamily.sans,
     fontSize: 11,
     lineHeight: 16,
     color: color.textFaint,

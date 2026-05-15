@@ -1,19 +1,24 @@
 /**
- * Files tab — versioned file library for a project.
+ * Files tab — v2 design.
  *
- * Replaces the old separate Design + MOM + Files tabs. Every uploaded
- * doc lands here (2D, 3D, layouts, MOMs, agreements, anything else),
- * filtered by the chip row at the top. Each row shows a category
- * badge so users can scan the list at a glance.
+ * Versioned file library for a project. Schema lives at
+ * `designs/{designId}` for back-compat — the user-facing label is "Files".
  *
- * Schema lives at `designs/{designId}` for back-compat — the user
- * facing label is "Files".
+ * Layout:
+ *   1. Filter chip rail — All · 2D · 3D · Layout · MOM · Agreement · Other
+ *      (auto-scrolls the tapped chip into view)
+ *   2. List of file rows — surface card with:
+ *      - 56×56 thumbnail (image preview or red PDF placeholder)
+ *      - Title + category pill
+ *      - Relative-time meta + optional description
+ *   3. FAB — Upload file (per design.write capability)
  */
 import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Image,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   useWindowDimensions,
@@ -33,8 +38,11 @@ import {
   type FileCategory,
 } from '@/src/features/designs/types';
 import { Can } from '@/src/ui/Can';
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, screenInset, shadow, space } from '@/src/theme';
+
+import { FAB } from '@/src/ui/v2/FAB';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
+import { useThemeV2 } from '@/src/theme/v2';
 
 function formatRelative(d: Date): string {
   const ms = Date.now() - d.getTime();
@@ -49,56 +57,130 @@ function formatRelative(d: Date): string {
 }
 
 function FileRow({ item, projectId }: { item: Design; projectId: string }) {
+  const t = useThemeV2();
   const updated = item.updatedAt?.toDate();
   const ago = updated ? formatRelative(updated).toUpperCase() : '—';
-  // No more versions on the doc — meta is just the timestamp now,
-  // since the category badge already shows the category in the title row.
-  const meta = ago;
   const categoryLabel = getCategoryLabel(item.category);
+
   return (
     <Pressable
       onPress={() =>
         router.push(`/(app)/projects/${projectId}/design/${item.id}` as never)
       }
-      style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+      style={({ pressed }) => [
+        styles.row,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: t.radii.card,
+          borderColor:
+            t.mode === 'dark'
+              ? 'rgba(255,255,255,0.05)'
+              : 'rgba(0,0,0,0.04)',
+          borderWidth: t.hairline,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
     >
-      <View style={styles.thumb}>
+      <View
+        style={[
+          styles.thumb,
+          {
+            backgroundColor: t.colors.fill3,
+            borderRadius: t.radii.tile,
+          },
+        ]}
+      >
         {item.thumbnailUrl ? (
-          <Image source={{ uri: item.thumbnailUrl }} style={styles.thumbImg} resizeMode="cover" />
+          <Image
+            source={{ uri: item.thumbnailUrl }}
+            style={styles.thumbImg}
+            resizeMode="cover"
+          />
         ) : (
           <View style={styles.thumbPdf}>
-            <Ionicons name="document-text-outline" size={20} color={color.danger} />
-            <Text style={styles.thumbBadge}>PDF</Text>
+            <Ionicons
+              name="document-text-outline"
+              size={20}
+              color={t.palette.red.base}
+            />
+            <Text
+              variant="caption2"
+              style={{
+                color: t.palette.red.base,
+                fontWeight: '700',
+                letterSpacing: 0.6,
+                marginTop: 2,
+              }}
+            >
+              PDF
+            </Text>
           </View>
         )}
       </View>
+
       <View style={styles.body}>
         <View style={styles.titleRow}>
-          <Text variant="rowTitle" color="text" numberOfLines={1} style={{ flex: 1, minWidth: 0 }}>
+          <Text
+            variant="callout"
+            color="label"
+            style={{ flex: 1, fontWeight: '600' }}
+            numberOfLines={1}
+          >
             {item.title}
           </Text>
-          {/* Category badge — small, mono, uppercase. */}
-          <View style={styles.categoryBadge}>
-            <Text style={styles.categoryBadgeText}>{categoryLabel.toUpperCase()}</Text>
+          <View
+            style={[
+              styles.categoryBadge,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                borderRadius: 999,
+              },
+            ]}
+          >
+            <Text
+              variant="caption2"
+              style={{
+                color: t.palette.blue.base,
+                fontWeight: '700',
+                letterSpacing: 0.4,
+              }}
+            >
+              {categoryLabel.toUpperCase()}
+            </Text>
           </View>
         </View>
-        <Text style={styles.meta} numberOfLines={1}>{meta}</Text>
+        <Text
+          variant="caption2"
+          color="tertiary"
+          style={{ letterSpacing: 0.5, marginTop: 4 }}
+          numberOfLines={1}
+        >
+          {ago}
+        </Text>
         {item.description ? (
-          <Text variant="meta" color="textMuted" numberOfLines={1} style={{ marginTop: 2 }}>
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 4 }}
+            numberOfLines={1}
+          >
             {item.description}
           </Text>
         ) : null}
       </View>
-      <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
+
+      <Ionicons name="chevron-forward" size={14} color={t.colors.tertiary} />
     </Pressable>
   );
 }
 
-/** Special filter chip for "All". */
 const ALL_KEY = 'all' as const;
 type FilterKey = typeof ALL_KEY | FileCategory;
 
 export function DesignTab() {
+  const t = useThemeV2();
+  const refresh = usePullToRefresh();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
@@ -106,13 +188,7 @@ export function DesignTab() {
 
   const [filter, setFilter] = useState<FilterKey>(ALL_KEY);
 
-  // Auto-scroll the chip row to keep the tapped chip fully visible.
-  // The chip strip routinely overflows the screen (7 chips, some with
-  // long labels), so without this the user can land on a chip that
-  // sits half off-screen and not realise siblings exist past the edge.
   const chipScrollRef = useRef<ScrollView | null>(null);
-  /** Per-chip layout cache: x = offset from start of contentContainer,
-   *  w = chip width. Filled by each FilterChip's onLayout. */
   const chipLayoutsRef = useRef<Map<FilterKey, { x: number; w: number }>>(new Map());
   const { width: screenW } = useWindowDimensions();
 
@@ -125,10 +201,6 @@ export function DesignTab() {
     (key: FilterKey) => {
       const layout = chipLayoutsRef.current.get(key);
       if (!layout) return;
-      // Center the chip in the viewport when possible. The viewport
-      // width matches the screen since the strip spans the full row.
-      // Math.max keeps us from scrolling negative when the chip is
-      // already near the start.
       const target = Math.max(0, layout.x + layout.w / 2 - screenW / 2);
       chipScrollRef.current?.scrollTo({ x: target, animated: true });
     },
@@ -143,8 +215,6 @@ export function DesignTab() {
     [scrollChipIntoView],
   );
 
-  // Per-category counts, used both for the filter chips' badges and
-  // for the empty state message when a category is empty.
   const categoryCounts = useMemo(() => {
     const map = new Map<FileCategory | 'other', number>();
     for (const d of designs) {
@@ -161,8 +231,7 @@ export function DesignTab() {
 
   return (
     <View style={styles.container}>
-      {/* Chip row — All + one chip per category. Horizontally scroll
-          so the row stays single-line on small screens. */}
+      {/* Filter chip rail */}
       <ScrollView
         ref={chipScrollRef}
         horizontal
@@ -176,10 +245,6 @@ export function DesignTab() {
           onPress={() => selectFilter(ALL_KEY)}
           onLayout={(e) => onChipLayout(ALL_KEY, e)}
         />
-        {/* Always render every category chip — even ones with zero
-            files — so the user can see and scroll through the full
-            taxonomy (2D / 3D / Layout / MOM / Agreement / Other)
-            without categories vanishing once empty. */}
         {FILE_CATEGORIES.map((c) => {
           const count = categoryCounts.get(c.key) ?? 0;
           return (
@@ -196,17 +261,20 @@ export function DesignTab() {
 
       {loading && designs.length === 0 ? (
         <View style={styles.empty}>
-          <Text variant="meta" color="textMuted">Loading files…</Text>
+          <Text variant="footnote" color="secondary">Loading files…</Text>
         </View>
       ) : visible.length === 0 ? (
         <View style={styles.empty}>
-          <Ionicons name="document-outline" size={28} color={color.textFaint} />
-          <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
+          <Ionicons name="document-outline" size={32} color={t.colors.tertiary} />
+          <Text variant="callout" color="label" style={{ marginTop: 12, fontWeight: '600' }}>
             {filter === ALL_KEY ? 'No files uploaded' : 'No files in this category'}
           </Text>
-          <Text variant="meta" color="textMuted" align="center">
-            Add 2D layouts, 3D renders, PDFs, MOMs, agreements — anything.
-            Each upload creates a new version; old versions stay available.
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 4, textAlign: 'center', paddingHorizontal: 32, maxWidth: 320 }}
+          >
+            Add 2D layouts, 3D renders, PDFs, MOMs, agreements — anything. Each upload creates a new version.
           </Text>
         </View>
       ) : (
@@ -214,23 +282,23 @@ export function DesignTab() {
           data={visible}
           keyExtractor={(d) => d.id}
           renderItem={({ item }) => <FileRow item={item} projectId={projectId!} />}
-          ItemSeparatorComponent={() => <View style={styles.rowDivider} />}
+          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl {...refresh.props} />}
         />
       )}
 
       <Can capability="design.write">
-        <Pressable
+        <FAB
+          icon="add"
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             router.push(`/(app)/projects/${projectId}/add-design` as never);
           }}
-          style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
+          bottomOffset={24}
           accessibilityLabel="Upload file"
-        >
-          <Ionicons name="add" size={24} color={color.onPrimary} />
-        </Pressable>
+        />
       </Can>
     </View>
   );
@@ -245,17 +313,35 @@ function FilterChip({
   label: string;
   active: boolean;
   onPress: () => void;
-  /** Hooks into the parent's chip-position cache so the row can
-   *  auto-scroll the active chip into view when tapped. */
   onLayout?: (e: LayoutChangeEvent) => void;
 }) {
+  const t = useThemeV2();
   return (
     <Pressable
       onPress={onPress}
       onLayout={onLayout}
-      style={[styles.chip, active && styles.chipActive]}
+      hitSlop={6}
+      style={({ pressed }) => [
+        styles.chip,
+        {
+          backgroundColor: active
+            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+            : t.colors.fill3,
+          borderRadius: 999,
+          borderColor: active ? t.palette.blue.base + '33' : 'transparent',
+          borderWidth: active ? 1 : 0,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
     >
-      <Text style={active ? styles.chipTextActive : styles.chipText}>
+      <Text
+        variant="caption2"
+        style={{
+          color: active ? t.palette.blue.base : t.colors.secondary,
+          fontWeight: '700',
+          letterSpacing: 0.5,
+        }}
+      >
         {label}
       </Text>
     </Pressable>
@@ -263,130 +349,69 @@ function FilterChip({
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: color.bgGrouped },
+  container: { flex: 1 },
 
-  // Chip filter row — sits above the list, scrolls horizontally.
+  // Chip rail
   chipScrollWrap: {
     flexGrow: 0,
-    backgroundColor: color.bgGrouped,
-    paddingTop: space.sm,
-    paddingBottom: 2,
+    paddingTop: 12,
+    paddingBottom: 4,
   },
   chipScroll: {
-    paddingHorizontal: screenInset,
+    paddingHorizontal: 16,
     gap: 6,
   },
   chip: {
-    paddingHorizontal: space.sm,
-    paddingVertical: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-    borderRadius: 8,
-  },
-  chipActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
-  },
-  chipText: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.text,
-    letterSpacing: 1.2,
-  },
-  chipTextActive: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#fff',
-    letterSpacing: 1.2,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
 
   // Row
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.bg,
-  },
-  rowDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.borderStrong,
-    marginHorizontal: screenInset,
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   thumb: {
-    width: 56, height: 56,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
+    width: 56,
+    height: 56,
     overflow: 'hidden',
   },
-  thumbImg: { width: '100%', height: '100%' },
+  thumbImg: {
+    width: '100%',
+    height: '100%',
+  },
   thumbPdf: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 2,
   },
-  thumbBadge: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: color.danger,
-    letterSpacing: 1.2,
+  body: {
+    flex: 1,
+    minWidth: 0,
   },
-  body: { flex: 1, minWidth: 0, gap: 2 },
   titleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
   },
   categoryBadge: {
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
     paddingVertical: 2,
-    backgroundColor: color.primarySoft,
-    borderRadius: radius.sm,
-  },
-  categoryBadgeText: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: color.primary,
-    letterSpacing: 0.8,
-  },
-  meta: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.primary,
-    letterSpacing: 0.8,
-    marginTop: 2,
+    flexShrink: 0,
   },
 
-  listContent: { paddingTop: space.sm, paddingBottom: 100 },
-
+  listContent: {
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 100,
+  },
   empty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: screenInset * 2,
-    gap: space.xs,
-  },
-  emptyTitle: { marginTop: space.xxs },
-
-  fab: {
-    position: 'absolute',
-    right: screenInset,
-    bottom: space.xl,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: color.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadow.fab,
+    paddingHorizontal: 16,
   },
 });

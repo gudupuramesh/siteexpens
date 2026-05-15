@@ -1,19 +1,17 @@
 /**
- * File detail — read-only view of one Files entry.
+ * File detail / preview — v2 design.
  *
  * Layout:
- *   - Top bar: back, eyebrow (CATEGORY), title, edit + delete actions
- *   - Identity strip: icon, title, created-by
- *   - Single-file viewer:
- *       Image → big tap-to-zoom preview (ImageViewer)
- *       PDF   → big tap-to-open card (PdfViewer)
- *   - Description (when present)
- *
- * Edit pushes to /edit-design/[designId]; Delete removes the doc and
- * cleans the R2 object.
+ *   1. Header — back · "File" · edit · delete (circular buttons)
+ *   2. Identity hero card — file icon + title + filename · author meta
+ *   3. Big single-file viewer:
+ *        Image → tap-to-zoom (ImageViewer)
+ *        PDF   → tap-to-open card (PdfViewer)
+ *   4. Note card (when description present)
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   Pressable,
@@ -23,18 +21,22 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useState } from 'react';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useDesign } from '@/src/features/designs/useDesigns';
 import { deleteDesign } from '@/src/features/designs/designs';
 import { getCategoryLabel } from '@/src/features/designs/types';
 import { deleteR2Object } from '@/src/lib/r2Delete';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
 import { ImageViewer } from '@/src/ui/ImageViewer';
 import { PdfViewer } from '@/src/ui/PdfViewer';
-import { color, fontFamily, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 export default function DesignDetailScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const { id: projectId, designId } = useLocalSearchParams<{
     id: string;
     designId: string;
@@ -42,11 +44,10 @@ export default function DesignDetailScreen() {
 
   const { data: design, loading } = useDesign(designId);
 
-  // Viewer state — image and PDF have separate modal mounts.
   const [imageOpen, setImageOpen] = useState(false);
   const [pdfOpen, setPdfOpen] = useState(false);
 
-  function confirmDeleteDesign() {
+  function confirmDelete() {
     if (!design) return;
     Alert.alert(
       'Delete file?',
@@ -82,139 +83,219 @@ export default function DesignDetailScreen() {
     );
   }
 
-  // ── Render ────────────────────────────────────────────────────────
-
   if (loading && !design) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
+        <Header onBack={() => router.back()} title="File" />
         <View style={styles.center}>
-          <Text variant="meta" color="textMuted">Loading…</Text>
+          <ActivityIndicator color={t.palette.blue.base} />
         </View>
-      </Screen>
+      </View>
     );
   }
-
   if (!design) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.navBar}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="chevron-back" size={22} color={color.text} />
-          </Pressable>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>File</Text>
-          <View style={styles.navBtn} />
-        </View>
+        <AmbientBackground />
+        <Header onBack={() => router.back()} title="File" />
         <View style={styles.center}>
-          <Text variant="meta" color="textMuted">File not found.</Text>
+          <Text variant="body" color="secondary">File not found.</Text>
         </View>
-      </Screen>
+      </View>
     );
   }
 
   const isPdf = design.fileContentType === 'application/pdf';
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="chevron-back" size={22} color={color.text} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>
-            {getCategoryLabel(design.category).toUpperCase()}
-          </Text>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle} numberOfLines={1}>
-            {design.title}
-          </Text>
-        </View>
-        <View style={styles.navActions}>
-          <Pressable
-            onPress={() =>
-              router.push(`/(app)/projects/${projectId}/edit-design/${designId}` as never)
-            }
-            hitSlop={12}
-            style={styles.navBtnSm}
-            accessibilityLabel="Edit file"
-          >
-            <Ionicons name="create-outline" size={20} color={color.primary} />
-          </Pressable>
-          <Pressable
-            onPress={confirmDeleteDesign}
-            hitSlop={12}
-            style={styles.navBtnSm}
-            accessibilityLabel="Delete file"
-          >
-            <Ionicons name="trash-outline" size={20} color={color.danger} />
-          </Pressable>
-        </View>
-      </View>
+      <Header
+        onBack={() => router.back()}
+        title="File"
+        right={
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+            <CircleBtn
+              icon="create-outline"
+              onPress={() =>
+                router.push(`/(app)/projects/${projectId}/edit-design/${designId}` as never)
+              }
+              tint={t.palette.blue.base}
+            />
+            <CircleBtn
+              icon="trash-outline"
+              onPress={confirmDelete}
+              tint={t.palette.red.base}
+            />
+          </View>
+        }
+      />
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Identity strip */}
-        <View style={styles.identityStrip}>
-          <View style={styles.avatarSm}>
-            <Ionicons
-              name={isPdf ? 'document-text-outline' : 'image-outline'}
-              size={20}
-              color={color.primary}
-            />
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text variant="bodyStrong" color="text" numberOfLines={1}>
+        {/* Identity hero */}
+        <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+          <View
+            style={[
+              styles.heroCard,
+              {
+                backgroundColor: cardBg,
+                borderRadius: t.radii.hero,
+                borderColor: cardBorder,
+                borderWidth: t.hairline,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.categoryPill,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                  borderRadius: 999,
+                },
+              ]}
+            >
+              <Text
+                variant="caption2"
+                style={{
+                  color: t.palette.blue.base,
+                  fontWeight: '700',
+                  letterSpacing: 0.4,
+                }}
+              >
+                {getCategoryLabel(design.category).toUpperCase()}
+              </Text>
+            </View>
+            <Text
+              variant="title3"
+              color="label"
+              style={{ marginTop: 8, fontWeight: '700' }}
+            >
               {design.title}
             </Text>
-            <Text style={styles.identityMeta}>
-              {design.fileName ? design.fileName.toUpperCase() : 'FILE'}
-              {design.createdByName ? `  ·  ${design.createdByName.toUpperCase()}` : ''}
-            </Text>
+            <View style={styles.metaRow}>
+              <Ionicons
+                name={isPdf ? 'document-text-outline' : 'image-outline'}
+                size={13}
+                color={isPdf ? t.palette.red.base : t.palette.blue.base}
+              />
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ marginLeft: 5, letterSpacing: 0.4, flex: 1 }}
+                numberOfLines={1}
+              >
+                {(design.fileName || 'FILE').toUpperCase()}
+                {design.createdByName ? `  ·  ${design.createdByName.toUpperCase()}` : ''}
+              </Text>
+            </View>
           </View>
         </View>
 
-        {/* Single-file viewer */}
-        {isPdf ? (
-          <Pressable
-            onPress={() => setPdfOpen(true)}
-            style={({ pressed }) => [styles.pdfCard, pressed && { opacity: 0.85 }]}
-          >
-            <Ionicons name="document-text-outline" size={48} color={color.danger} />
-            <Text variant="bodyStrong" color="text">Open PDF</Text>
-            <Text variant="caption" color="textMuted">
-              Tap to view in-app
-            </Text>
-          </Pressable>
-        ) : (
-          <Pressable
-            onPress={() => setImageOpen(true)}
-            style={({ pressed }) => [styles.imageCard, pressed && { opacity: 0.95 }]}
-          >
-            <Image
-              source={{ uri: design.fileUrl }}
-              style={styles.imageFull}
-              resizeMode="cover"
-            />
-          </Pressable>
-        )}
+        {/* Viewer */}
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+          {isPdf ? (
+            <Pressable
+              onPress={() => setPdfOpen(true)}
+              style={({ pressed }) => [
+                styles.pdfCard,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: t.radii.card,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <View
+                style={[
+                  styles.pdfIconWrap,
+                  {
+                    backgroundColor:
+                      t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="document-text-outline"
+                  size={32}
+                  color={t.palette.red.base}
+                />
+              </View>
+              <Text variant="callout" color="label" style={{ marginTop: 14, fontWeight: '700' }}>
+                Open PDF
+              </Text>
+              <Text variant="caption1" color="secondary" style={{ marginTop: 4 }}>
+                Tap to view in-app
+              </Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={() => setImageOpen(true)}
+              style={({ pressed }) => [
+                styles.imageWrap,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: t.radii.card,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+                pressed && { opacity: 0.95 },
+              ]}
+            >
+              <Image
+                source={{ uri: design.fileUrl }}
+                style={styles.imageFull}
+                resizeMode="cover"
+              />
+              <View style={styles.expandHint}>
+                <Ionicons name="expand-outline" size={13} color="#fff" />
+              </View>
+            </Pressable>
+          )}
+        </View>
 
-        {/* Description */}
+        {/* Note */}
         {design.description ? (
-          <View style={styles.descriptionCard}>
-            <Text variant="caption" color="textMuted" style={styles.descriptionLabel}>
+          <View style={{ marginTop: 22 }}>
+            <Text
+              variant="caption2"
+              color="secondary"
+              style={{ letterSpacing: 0.5, paddingHorizontal: 32, paddingBottom: 8 }}
+            >
               NOTE
             </Text>
-            <Text variant="body" color="text" style={styles.descriptionBody}>
-              {design.description}
-            </Text>
+            <View style={{ paddingHorizontal: 16 }}>
+              <View
+                style={[
+                  styles.noteCard,
+                  {
+                    backgroundColor: cardBg,
+                    borderRadius: t.radii.card,
+                    borderColor: cardBorder,
+                    borderWidth: t.hairline,
+                  },
+                ]}
+              >
+                <Text variant="body" color="label" style={{ lineHeight: 22 }}>
+                  {design.description}
+                </Text>
+              </View>
+            </View>
           </View>
         ) : null}
-
-        <View style={{ height: space.xl }} />
       </ScrollView>
 
       <ImageViewer
@@ -229,90 +310,147 @@ export default function DesignDetailScreen() {
         visible={pdfOpen}
         onClose={() => setPdfOpen(false)}
       />
-    </Screen>
+    </View>
   );
 }
 
-// ── Styles ───────────────────────────────────────────────────────────
+function Header({
+  onBack,
+  title,
+  right,
+}: {
+  onBack: () => void;
+  title: string;
+  right?: React.ReactNode;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      style={[
+        styles.header,
+        {
+          paddingTop: insets.top + 8,
+          borderBottomColor: t.colors.separator,
+          borderBottomWidth: t.hairline,
+        },
+      ]}
+    >
+      <CircleBtn
+        icon="chevron-back"
+        onPress={onBack}
+        tint={t.colors.label}
+      />
+      <Text
+        variant="headline"
+        color="label"
+        style={{ flex: 1, textAlign: 'center', fontWeight: '600' }}
+        numberOfLines={1}
+      >
+        {title}
+      </Text>
+      {right ?? <View style={{ width: 32 }} />}
+    </View>
+  );
+}
+
+function CircleBtn({
+  icon,
+  onPress,
+  tint,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  tint: string;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={10}
+      style={({ pressed }) => [
+        styles.circleBtn,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: 999,
+          borderColor:
+            t.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+          borderWidth: t.hairline,
+        },
+        t.shadows.resting,
+        pressed && { opacity: 0.7 },
+      ]}
+    >
+      <Ionicons name={icon} size={16} color={tint} />
+    </Pressable>
+  );
+}
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-  navBar: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: 8,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    gap: 8,
   },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navBtnSm: { width: 32, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navActions: { flexDirection: 'row', alignItems: 'center' },
-  navCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  navEyebrow: { letterSpacing: 1.1 },
-  navTitle: { textAlign: 'center' },
+  circleBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-  scroll: { padding: screenInset, gap: space.sm },
+  scroll: {},
 
-  identityStrip: {
+  heroCard: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  categoryPill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: color.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-  },
-  avatarSm: {
-    width: 36, height: 36,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.primarySoft,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  identityMeta: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 1.2,
-    marginTop: 2,
+    marginTop: 8,
   },
 
-  imageCard: {
-    backgroundColor: color.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    overflow: 'hidden',
-  },
+  imageWrap: { overflow: 'hidden' },
   imageFull: {
     width: '100%',
     aspectRatio: 1,
-    backgroundColor: color.surface,
+  },
+  expandHint: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: 'rgba(15,23,42,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
   pdfCard: {
-    backgroundColor: color.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    paddingVertical: space.xl,
+    paddingVertical: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space.xs,
+  },
+  pdfIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  descriptionCard: {
-    backgroundColor: color.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    gap: 4,
+  noteCard: {
+    padding: 14,
   },
-  descriptionLabel: { letterSpacing: 1.2 },
-  descriptionBody: { lineHeight: 20 },
 });

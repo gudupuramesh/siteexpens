@@ -1,0 +1,19 @@
+{
+  "ignore_dirs": [
+    "ios/build",
+    "ios/Pods/Headers",
+    "ios/Pods/Target Support Files",
+    "android/build",
+    "android/.gradle",
+    "android/.cxx",
+    "android/app/build",
+    "android/app/.cxx",
+    "node_modules/.cache",
+    ".expo",
+    "dist",
+    "web-admin/dist",
+    "functions/lib",
+    ".git/objects",
+    "DerivedData"
+  ]
+}

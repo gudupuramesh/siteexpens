@@ -19,6 +19,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   View,
@@ -39,7 +40,8 @@ import {
 } from '@/src/features/transactions/types';
 import { generateFinanceReport } from '@/src/features/finance/reports/financeReportPdf';
 import { DashboardCharts } from '@/src/features/finance/tabs/DashboardCharts';
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
 import { color, fontFamily, radius, screenInset, space } from '@/src/theme';
 
 type PeriodKey = 'month' | 'lastMonth' | 'quarter' | 'year' | 'custom';
@@ -131,6 +133,7 @@ function categoryLabel(c: OrgFinanceCategory): string {
 }
 
 export function DashboardTab() {
+  const refresh = usePullToRefresh();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? undefined;
   const [period, setPeriod] = useState<PeriodKey>('month');
@@ -236,6 +239,7 @@ export function DashboardTab() {
       style={styles.container}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
+      refreshControl={<RefreshControl {...refresh.props} />}
     >
       {/* Top row — period dropdown (left) + Export PDF (right). The
           dropdown opens a modal sheet listing all preset periods plus
@@ -250,7 +254,7 @@ export function DashboardTab() {
           accessibilityLabel="Change period"
         >
           <Ionicons name="calendar-outline" size={14} color={color.text} />
-          <Text variant="metaStrong" color="text" numberOfLines={1} style={{ flex: 1 }}>
+          <Text variant="footnote" color="label" numberOfLines={1} style={{ flex: 1 }}>
             {currentPeriodLabel}
           </Text>
           <Ionicons name="chevron-down" size={14} color={color.textMuted} />
@@ -271,7 +275,7 @@ export function DashboardTab() {
           ) : (
             <Ionicons name="document-text-outline" size={14} color={color.primary} />
           )}
-          <Text variant="metaStrong" color="primary">
+          <Text variant="footnote" color="label">
             {generating ? '…' : 'Export PDF'}
           </Text>
         </Pressable>
@@ -279,40 +283,42 @@ export function DashboardTab() {
 
       <Text style={styles.periodLabel}>{range.label.toUpperCase()}</Text>
 
-      {/* Income/Expense summary card — single bordered card, hairline dividers */}
+      {/* Income/Expense summary card — single bordered card, hairline
+          dividers. All four values render in the neutral label colour per
+          the 90/10 discipline; the LABELS (INCOME / PROJECT OUT / OFFICE
+          OUT / SALARIES) carry the meaning, no colour needed on the
+          numbers. */}
       <View style={styles.summaryCard}>
         <SummaryCell
           label="INCOME"
           value={inrCompact(totals.income + totals.officeIncome)}
-          tone={color.success}
         />
         <View style={styles.summaryDivider} />
         <SummaryCell
           label="PROJECT OUT"
           value={inrCompact(totals.projectExpense)}
-          tone={color.danger}
         />
         <View style={styles.summaryDivider} />
         <SummaryCell
           label="OFFICE OUT"
           value={inrCompact(totals.officeExpense)}
-          tone={color.danger}
         />
         <View style={styles.summaryDivider} />
         <SummaryCell
           label="SALARIES"
           value={inrCompact(totals.salariesPaid)}
-          tone={color.text}
         />
       </View>
 
-      {/* Net profit — single inline row, no colored background */}
+      {/* Net profit — single inline row. 90/10 discipline: positive
+          profit reads in the neutral label colour (the row is "fine"); a
+          negative profit (loss) earns red because it's an alarm. */}
       <View style={styles.profitRow}>
         <Text style={styles.profitLabel}>NET PROFIT</Text>
         <Text
           style={[
             styles.profitValue,
-            { color: totals.profit >= 0 ? color.success : color.danger },
+            { color: totals.profit < 0 ? color.danger : color.text },
           ]}
           numberOfLines={1}
         >
@@ -337,7 +343,7 @@ export function DashboardTab() {
       <Text style={styles.sectionLabel}>OFFICE EXPENSE BY CATEGORY</Text>
       {totals.breakdown.length === 0 ? (
         <View style={styles.empty}>
-          <Text variant="meta" color="textMuted">
+          <Text variant="caption1" color="secondary">
             No office expenses in this period.
           </Text>
         </View>
@@ -348,7 +354,7 @@ export function DashboardTab() {
               key={row.cat}
               style={[styles.breakdownRow, i > 0 && styles.breakdownDivider]}
             >
-              <Text variant="body" color="text" style={styles.breakdownName} numberOfLines={1}>
+              <Text variant="body" color="label" style={styles.breakdownName} numberOfLines={1}>
                 {categoryLabel(row.cat)}
               </Text>
               <Text style={styles.breakdownPct}>{row.pct.toFixed(0)}%</Text>
@@ -364,7 +370,7 @@ export function DashboardTab() {
           <Text style={styles.sectionLabel}>OFFICE INCOME</Text>
           <View style={styles.breakdownCard}>
             <View style={styles.breakdownRow}>
-              <Text variant="body" color="text" style={styles.breakdownName}>
+              <Text variant="body" color="label" style={styles.breakdownName}>
                 Logged office income
               </Text>
               <Text style={[styles.breakdownAmount, { color: color.success }]}>
@@ -392,9 +398,9 @@ export function DashboardTab() {
           <View style={styles.modalSheet}>
             <View style={styles.modalHandle} />
             <View style={styles.modalHeader}>
-              <Text variant="bodyStrong" color="text">Period</Text>
+              <Text variant="headline" color="label">Period</Text>
               <Pressable onPress={() => setPeriodPickerOpen(false)} hitSlop={12}>
-                <Text variant="metaStrong" color="primary">Done</Text>
+                <Text variant="footnote" color="label">Done</Text>
               </Pressable>
             </View>
             {PERIODS.map((p) => {
@@ -411,7 +417,7 @@ export function DashboardTab() {
                     pressed && { backgroundColor: color.bgGrouped },
                   ]}
                 >
-                  <Text variant="body" color="text" style={{ flex: 1 }}>
+                  <Text variant="body" color="label" style={{ flex: 1 }}>
                     {p.label}
                   </Text>
                   {on ? (
@@ -423,7 +429,7 @@ export function DashboardTab() {
 
             {period === 'custom' ? (
               <View style={styles.customRangeWrap}>
-                <Text variant="caption" color="textMuted" style={styles.customRangeLabel}>
+                <Text variant="caption1" color="secondary" style={styles.customRangeLabel}>
                   CUSTOM DATE RANGE
                 </Text>
                 <View style={styles.customRangeRow}>
@@ -432,7 +438,7 @@ export function DashboardTab() {
                     style={[styles.dateInput, { flex: 1 }]}
                   >
                     <Ionicons name="calendar-outline" size={14} color={color.primary} />
-                    <Text variant="meta" color={customFrom ? 'text' : 'textMuted'}>
+                    <Text variant="caption1" color={customFrom ? 'text' : 'textMuted'}>
                       {customFrom ? fmtShortDate(customFrom) : 'From'}
                     </Text>
                   </Pressable>
@@ -441,13 +447,13 @@ export function DashboardTab() {
                     style={[styles.dateInput, { flex: 1 }]}
                   >
                     <Ionicons name="calendar-outline" size={14} color={color.primary} />
-                    <Text variant="meta" color={customTo ? 'text' : 'textMuted'}>
+                    <Text variant="caption1" color={customTo ? 'text' : 'textMuted'}>
                       {customTo ? fmtShortDate(customTo) : 'To'}
                     </Text>
                   </Pressable>
                 </View>
                 {customFrom && customTo && customFrom > customTo ? (
-                  <Text variant="caption" color="danger" style={{ marginTop: 4 }}>
+                  <Text variant="caption1" color="danger" style={{ marginTop: 4 }}>
                     From date must be before To date.
                   </Text>
                 ) : null}
@@ -489,11 +495,11 @@ export function DashboardTab() {
             <View style={styles.modalSheet}>
               <View style={styles.modalHandle} />
               <View style={styles.modalHeader}>
-                <Text variant="bodyStrong" color="text">
+                <Text variant="headline" color="label">
                   {datePickerFor === 'from' ? 'From date' : 'To date'}
                 </Text>
                 <Pressable onPress={() => setDatePickerFor(null)} hitSlop={12}>
-                  <Text variant="metaStrong" color="primary">Done</Text>
+                  <Text variant="footnote" color="label">Done</Text>
                 </Pressable>
               </View>
               <DateTimePicker
@@ -521,15 +527,23 @@ function SummaryCell({
 }: {
   label: string;
   value: string;
+  /** @deprecated value renders in neutral label colour. */
   tone?: string;
 }) {
   return (
     <View style={styles.summaryCell}>
-      <Text style={styles.summaryLabel}>{label}</Text>
+      {/* numberOfLines={1} + adjustsFontSizeToFit keeps multi-word labels
+          ("PROJECT OUT") on a single line so all four cells share the same
+          height. The label shrinks slightly rather than wrapping. */}
       <Text
-        style={tone ? [styles.summaryValue, { color: tone }] : styles.summaryValue}
+        style={styles.summaryLabel}
         numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
       >
+        {label}
+      </Text>
+      <Text style={styles.summaryValue} numberOfLines={1}>
         {value}
       </Text>
     </View>
@@ -570,9 +584,9 @@ const styles = StyleSheet.create({
     backgroundColor: color.primarySoft,
   },
   periodLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.4,
     marginBottom: space.sm,
@@ -653,16 +667,15 @@ const styles = StyleSheet.create({
   summaryCell: { flex: 1, paddingVertical: 12, paddingHorizontal: 8, gap: 4 },
   summaryDivider: { width: StyleSheet.hairlineWidth, backgroundColor: color.borderStrong },
   summaryLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.0,
   },
   summaryValue: {
-    fontFamily: fontFamily.mono,
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.text,
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.2,
@@ -682,21 +695,19 @@ const styles = StyleSheet.create({
     marginTop: space.sm,
   },
   profitLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textMuted,
     letterSpacing: 1.2,
   },
   profitValue: {
-    fontFamily: fontFamily.mono,
     fontSize: 22,
-    fontWeight: '800',
+    fontWeight: '600',
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.5,
   },
   profitFootnote: {
-    fontFamily: fontFamily.sans,
     fontSize: 11,
     color: color.textFaint,
     marginTop: 6,
@@ -705,9 +716,9 @@ const styles = StyleSheet.create({
 
   // Section labels
   sectionLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.4,
     marginTop: space.lg,
@@ -735,7 +746,6 @@ const styles = StyleSheet.create({
   },
   breakdownName: { flex: 1, minWidth: 0 },
   breakdownPct: {
-    fontFamily: fontFamily.mono,
     fontSize: 11,
     fontWeight: '600',
     color: color.textFaint,
@@ -744,9 +754,8 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   breakdownAmount: {
-    fontFamily: fontFamily.mono,
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.danger,
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.2,

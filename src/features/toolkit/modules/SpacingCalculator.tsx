@@ -10,8 +10,8 @@
 import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -27,16 +27,15 @@ export function SpacingCalculator({
 }) {
   // Inputs in inches because most fittings (sconces, hooks, frames)
   // are sized in inches on the spec sheet.
-  const [wall, setWall] = useState('120');     // wall length in inches
-  const [obj, setObj] = useState('6');         // object width in inches
-  const [count, setCount] = useState('3');     // number of objects
+  const [wall, setWall] = useState('120');
+  const [obj, setObj] = useState('6');
+  const [count, setCount] = useState('3');
+  const t = useThemeV2();
 
   const result = useMemo(() => {
     const W = parseNum(wall) ?? 0;
     const O = parseNum(obj) ?? 0;
     const N = parseNum(count) ?? 0;
-    // Edge cases: divide-by-zero on count=0; negative gap when objects
-    // wider than wall (call out to the user instead of silently flipping).
     if (N <= 0 || W <= 0) {
       return { gap: 0, totalUsed: 0, ok: false, reason: '' };
     }
@@ -55,12 +54,7 @@ export function SpacingCalculator({
   }, [wall, obj, count]);
 
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="Equidistant Spacing"
-      eyebrow="LAYOUT"
-    >
+    <ToolModal visible={visible} onClose={onClose} title="Equidistant spacing">
       <Section title="Inputs">
         <NumberField
           label="Wall length"
@@ -109,17 +103,33 @@ export function SpacingCalculator({
             />
           </>
         ) : (
-          <Text style={styles.warn}>
-            {result.reason || 'Enter a wall length and a positive object count to compute spacing.'}
-          </Text>
+          <View
+            style={[
+              styles.warn,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft,
+                borderColor: t.palette.orange.base + '33',
+                borderWidth: t.hairline,
+                borderRadius: t.radii.field,
+              },
+            ]}
+          >
+            <Text
+              variant="footnote"
+              style={{ color: t.palette.orange.base, lineHeight: 18 }}
+            >
+              {result.reason || 'Enter a wall length and a positive object count to compute spacing.'}
+            </Text>
+          </View>
         )}
       </Section>
     </ToolModal>
   );
 }
 
-/** Tiny ASCII-style diagram showing wall + objects + gaps to the user
- *  visualises the layout. Built with plain Views for portability. */
+/** Visualises the layout — bar of alternating gap/object segments
+ *  proportional to the computed spacing. */
 function SpacingDiagram({
   wall,
   obj,
@@ -131,8 +141,9 @@ function SpacingDiagram({
   count: number;
   gap: number;
 }) {
+  const t = useThemeV2();
   if (wall <= 0 || count <= 0) return null;
-  // Build a flat array of widths in order: gap, obj, gap, obj, …, gap.
+
   const segments: { kind: 'gap' | 'obj'; w: number }[] = [];
   for (let i = 0; i < count; i++) {
     segments.push({ kind: 'gap', w: gap });
@@ -142,21 +153,33 @@ function SpacingDiagram({
 
   return (
     <View style={styles.diagramWrap}>
-      <View style={styles.diagramBar}>
+      <View
+        style={[
+          styles.diagramBar,
+          {
+            borderColor:
+              t.mode === 'dark'
+                ? 'rgba(255,255,255,0.05)'
+                : 'rgba(0,0,0,0.04)',
+            borderWidth: t.hairline,
+            borderRadius: 8,
+          },
+        ]}
+      >
         {segments.map((s, i) => (
           <View
             key={i}
             style={{
               flex: s.w,
               backgroundColor:
-                s.kind === 'obj' ? color.primary : color.surfaceAlt,
+                s.kind === 'obj' ? t.palette.blue.base : t.colors.fill3,
             }}
           />
         ))}
       </View>
       <View style={styles.diagramLegend}>
-        <Legend swatch={color.primary} label="object" />
-        <Legend swatch={color.surfaceAlt} label="gap" />
+        <Legend swatch={t.palette.blue.base} label="object" />
+        <Legend swatch={t.colors.fill3} label="gap" />
       </View>
     </View>
   );
@@ -166,43 +189,30 @@ function Legend({ swatch, label }: { swatch: string; label: string }) {
   return (
     <View style={styles.legendRow}>
       <View style={[styles.swatch, { backgroundColor: swatch }]} />
-      <Text style={styles.legendText}>{label}</Text>
+      <Text variant="caption2" color="secondary" style={{ letterSpacing: 0.4 }}>
+        {label.toUpperCase()}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row2: { flexDirection: 'row', gap: space.sm },
+  row2: { flexDirection: 'row', gap: 10 },
   col: { flex: 1 },
   warn: {
-    fontSize: 13,
-    color: color.warning,
-    fontFamily: fontFamily.sans,
-    padding: space.sm,
-    backgroundColor: color.warningSoft,
-    borderRadius: 8,
+    padding: 12,
   },
-  diagramWrap: { gap: 6, marginTop: 4 },
+  diagramWrap: { gap: 8, marginTop: 4 },
   diagramBar: {
     flexDirection: 'row',
-    height: 28,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
+    height: 32,
     overflow: 'hidden',
   },
-  diagramLegend: { flexDirection: 'row', gap: 16, marginTop: 4 },
+  diagramLegend: { flexDirection: 'row', gap: 16, marginTop: 2 },
   legendRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   swatch: {
     width: 14,
     height: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-  },
-  legendText: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    color: color.textMuted,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
+    borderRadius: 2,
   },
 });

@@ -16,8 +16,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { ToolModal } from '../components/ToolModal';
 import {
@@ -33,6 +33,7 @@ export function StandardDimensions({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
+  const t = useThemeV2();
 
   const sections = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -43,7 +44,6 @@ export function StandardDimensions({
       }));
     }
     return DIMENSION_GROUPS.map((g) => {
-      // Whole-section match → keep all items.
       if (g.title.toLowerCase().includes(q)) {
         return { title: g.title, data: g.items };
       }
@@ -61,147 +61,187 @@ export function StandardDimensions({
     <ToolModal
       visible={visible}
       onClose={onClose}
-      title="Standard Dimensions"
-      eyebrow="REFERENCE"
+      title="Standard dimensions"
       scroll={false}
     >
-      <View style={styles.searchWrap}>
-        <Ionicons name="search" size={16} color={color.textFaint} />
-        <TextInput
-          value={query}
-          onChangeText={setQuery}
-          placeholder="Search counter, 24, wardrobe…"
-          placeholderTextColor={color.textFaint}
-          style={styles.searchInput}
-          autoCorrect={false}
-          autoCapitalize="none"
-        />
-        {query ? (
-          <Pressable onPress={() => setQuery('')} hitSlop={10}>
-            <Ionicons name="close-circle" size={16} color={color.textFaint} />
-          </Pressable>
-        ) : null}
+      {/* Search field — v2 SearchBar shape */}
+      <View style={styles.searchOuter}>
+        <View
+          style={[
+            styles.searchWrap,
+            {
+              backgroundColor: t.colors.fill3,
+              borderRadius: t.radii.field,
+            },
+          ]}
+        >
+          <Ionicons name="search" size={16} color={t.colors.tertiary} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Search counter, 24, wardrobe…"
+            placeholderTextColor={t.colors.tertiary}
+            style={[
+              styles.searchInput,
+              { color: t.colors.label, ...t.type.callout },
+            ]}
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {query ? (
+            <Pressable onPress={() => setQuery('')} hitSlop={10}>
+              <Ionicons
+                name="close-circle"
+                size={16}
+                color={t.colors.tertiary}
+              />
+            </Pressable>
+          ) : null}
+        </View>
       </View>
 
       <SectionList
         sections={sections}
         keyExtractor={(item) => item.id}
-        renderItem={({ item }) => <DimensionRow item={item} />}
+        renderItem={({ item, index, section }) => (
+          <DimensionRow
+            item={item}
+            isLast={index === section.data.length - 1}
+          />
+        )}
         renderSectionHeader={({ section }) => (
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>{section.title.toUpperCase()}</Text>
+          <View
+            style={[
+              styles.sectionHeader,
+              { backgroundColor: t.colors.bg },
+            ]}
+          >
+            <Text
+              variant="caption2"
+              color="secondary"
+              style={{ letterSpacing: 0.5 }}
+            >
+              {section.title.toUpperCase()}
+            </Text>
           </View>
         )}
-        ItemSeparatorComponent={() => <View style={styles.sep} />}
-        SectionSeparatorComponent={() => <View style={{ height: 4 }} />}
         ListEmptyComponent={
           <View style={styles.empty}>
-            <Ionicons name="search-outline" size={28} color={color.textFaint} />
-            <Text style={styles.emptyText}>No dimensions match "{query}".</Text>
+            <Ionicons name="search-outline" size={32} color={t.colors.tertiary} />
+            <Text variant="footnote" color="secondary">
+              No dimensions match "{query}".
+            </Text>
           </View>
         }
         stickySectionHeadersEnabled
         contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
       />
     </ToolModal>
   );
 }
 
-function DimensionRow({ item }: { item: StandardDimension }) {
+function DimensionRow({
+  item,
+  isLast,
+}: {
+  item: StandardDimension;
+  isLast: boolean;
+}) {
+  const t = useThemeV2();
   return (
-    <View style={styles.row}>
-      <View style={styles.rowMain}>
-        <Text style={styles.rowLabel} numberOfLines={2}>
-          {item.label}
-        </Text>
-        {item.note ? (
-          <Text style={styles.rowNote} numberOfLines={2}>
-            {item.note}
+    <View style={styles.rowOuter}>
+      <View
+        style={[
+          styles.rowInner,
+          {
+            backgroundColor: t.colors.surface,
+            borderTopLeftRadius: 0,
+            borderTopRightRadius: 0,
+            borderBottomLeftRadius: isLast ? t.radii.group : 0,
+            borderBottomRightRadius: isLast ? t.radii.group : 0,
+            borderBottomColor: isLast ? 'transparent' : t.colors.separator,
+            borderBottomWidth: isLast ? 0 : t.hairline,
+          },
+        ]}
+      >
+        <View style={styles.rowMain}>
+          <Text variant="callout" color="label" numberOfLines={2}>
+            {item.label}
           </Text>
-        ) : null}
+          {item.note ? (
+            <Text
+              variant="caption1"
+              color="secondary"
+              style={{ marginTop: 2 }}
+              numberOfLines={2}
+            >
+              {item.note}
+            </Text>
+          ) : null}
+        </View>
+        <Text
+          variant="footnote"
+          style={{
+            color: t.palette.blue.base,
+            fontWeight: '700',
+            textAlign: 'right',
+            fontVariant: ['tabular-nums'],
+            maxWidth: 160,
+          }}
+          numberOfLines={1}
+        >
+          {item.value}
+        </Text>
       </View>
-      <Text style={styles.rowValue} numberOfLines={1}>
-        {item.value}
-      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  searchOuter: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 12,
+  },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
   searchInput: {
     flex: 1,
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    color: color.text,
-    paddingVertical: 4,
+    paddingVertical: 0,
+    margin: 0,
   },
+
   listContent: { paddingBottom: 60 },
+
+  // Section header above the grouped card
   sectionHeader: {
-    backgroundColor: color.bg,
-    paddingHorizontal: space.md,
-    paddingTop: space.md,
-    paddingBottom: 6,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.border,
+    paddingHorizontal: 32,
+    paddingTop: 22,
+    paddingBottom: 7,
   },
-  sectionTitle: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 1.4,
+
+  // Each row: 16-px wide inset card edges to align with FormGroup feel
+  rowOuter: {
+    paddingHorizontal: 16,
   },
-  row: {
+  rowInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: space.md,
+    gap: 12,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    backgroundColor: color.bg,
-    gap: space.sm,
   },
   rowMain: { flex: 1 },
-  rowLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    fontWeight: '600',
-    color: color.text,
-  },
-  rowNote: {
-    fontSize: 12,
-    color: color.textMuted,
-    marginTop: 2,
-  },
-  rowValue: {
-    fontFamily: fontFamily.mono,
-    fontSize: 12,
-    fontWeight: '600',
-    color: color.primary,
-    textAlign: 'right',
-    fontVariant: ['tabular-nums'],
-    maxWidth: 160,
-  },
-  sep: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.border,
-    marginLeft: space.md,
-  },
+
   empty: {
     paddingTop: 60,
     alignItems: 'center',
-    gap: 8,
-  },
-  emptyText: {
-    fontSize: 13,
-    color: color.textMuted,
+    gap: 10,
   },
 });

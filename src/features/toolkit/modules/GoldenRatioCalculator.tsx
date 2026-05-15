@@ -10,10 +10,10 @@
  *                     placement.
  */
 import { useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -28,8 +28,9 @@ export function GoldenRatioCalculator({
   visible: boolean;
   onClose: () => void;
 }) {
-  const [total, setTotal] = useState('120'); // arbitrary unit (in / cm / mm)
+  const [total, setTotal] = useState('120');
   const [unit, setUnit] = useState('in');
+  const t = useThemeV2();
 
   const result = useMemo(() => {
     const T = parseNum(total) ?? 0;
@@ -44,26 +45,16 @@ export function GoldenRatioCalculator({
   }, [total]);
 
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="Proportion Calculator"
-      eyebrow="LAYOUT"
-    >
+    <ToolModal visible={visible} onClose={onClose} title="Proportion calculator">
       <Section title="Total dimension">
-        <View style={styles.row}>
-          <View style={{ flex: 3 }}>
-            <NumberField
-              label="Wall length / ceiling height"
-              value={total}
-              onChangeText={setTotal}
-              size="lg"
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <UnitToggle value={unit} onChange={setUnit} />
-          </View>
-        </View>
+        <NumberField
+          label="Wall length / ceiling height"
+          unit={unit}
+          value={total}
+          onChangeText={setTotal}
+          size="lg"
+        />
+        <UnitToggle value={unit} onChange={setUnit} />
       </Section>
 
       <Section title="60 / 30 / 10 split">
@@ -85,7 +76,11 @@ export function GoldenRatioCalculator({
         />
         <ProportionBar
           fractions={[0.6, 0.3, 0.1]}
-          colors={[color.primary, color.primarySoft, color.surfaceAlt]}
+          colors={[
+            t.palette.blue.base,
+            t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+            t.colors.fill3,
+          ]}
         />
       </Section>
 
@@ -104,7 +99,7 @@ export function GoldenRatioCalculator({
         />
         <ProportionBar
           fractions={[1 / (1 + PHI), PHI / (1 + PHI)]}
-          colors={[color.surfaceAlt, color.primary]}
+          colors={[t.colors.fill3, t.palette.blue.base]}
         />
       </Section>
     </ToolModal>
@@ -119,20 +114,44 @@ function UnitToggle({
   onChange: (v: string) => void;
 }) {
   const opts = ['in', 'ft', 'cm', 'mm', 'm'];
+  const t = useThemeV2();
   return (
-    <View style={styles.unitWrap}>
-      <Text style={styles.label}>UNIT</Text>
-      <View style={styles.unitRow}>
-        {opts.map((o) => (
-          <Text
+    <View
+      style={[
+        styles.unitRow,
+        {
+          backgroundColor: t.colors.fill3,
+          borderRadius: t.radii.field,
+          padding: 3,
+        },
+      ]}
+    >
+      {opts.map((o) => {
+        const active = value === o;
+        return (
+          <Pressable
             key={o}
             onPress={() => onChange(o)}
-            style={value === o ? { ...styles.unitBtn, ...styles.unitBtnActive } : styles.unitBtn}
+            style={({ pressed }) => [
+              styles.unitBtn,
+              {
+                backgroundColor: active ? t.colors.surface : 'transparent',
+                borderRadius: t.radii.field - 2,
+                ...(active ? t.shadows.resting : null),
+              },
+              pressed && !active && { opacity: 0.7 },
+            ]}
           >
-            {o}
-          </Text>
-        ))}
-      </View>
+            <Text
+              variant="footnote"
+              color={active ? 'label' : 'secondary'}
+              style={{ fontWeight: active ? '700' : '500' }}
+            >
+              {o}
+            </Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
@@ -144,12 +163,23 @@ function ProportionBar({
   fractions: number[];
   colors: string[];
 }) {
+  const t = useThemeV2();
   return (
-    <View style={styles.bar}>
+    <View
+      style={[
+        styles.bar,
+        {
+          borderColor:
+            t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+          borderWidth: t.hairline,
+          borderRadius: 8,
+        },
+      ]}
+    >
       {fractions.map((f, i) => (
         <View
           key={i}
-          style={{ flex: f, backgroundColor: colors[i] ?? color.surface }}
+          style={{ flex: f, backgroundColor: colors[i] ?? t.colors.surface }}
         />
       ))}
     </View>
@@ -157,41 +187,19 @@ function ProportionBar({
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', gap: space.sm, alignItems: 'flex-end' },
-  unitWrap: { gap: 6 },
-  label: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.textMuted,
-    letterSpacing: 1.2,
-  },
   unitRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
+    alignSelf: 'flex-start',
+    gap: 0,
   },
   unitBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    fontFamily: fontFamily.mono,
-    fontSize: 11,
-    fontWeight: '600',
-    color: color.textMuted,
-    backgroundColor: color.surface,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-  },
-  unitBtnActive: {
-    backgroundColor: color.primary,
-    color: '#fff',
-    borderColor: color.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    alignItems: 'center',
   },
   bar: {
     flexDirection: 'row',
-    height: 24,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
+    height: 28,
     overflow: 'hidden',
     marginTop: 4,
   },

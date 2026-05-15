@@ -32,6 +32,8 @@
  */
 import { useCallback, useRef, useState } from 'react';
 
+import { haptic } from './haptics';
+
 const SPIN_DURATION_MS = 800;
 
 export type FirestoreRefreshState = {
@@ -50,6 +52,7 @@ export function useFirestoreRefresh(): FirestoreRefreshState {
 
   const refresh = useCallback(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    haptic.lightImpact();
     setRefreshing(true);
     setRefreshKey((k) => k + 1);
     timeoutRef.current = setTimeout(() => {

@@ -30,7 +30,7 @@ import {
 } from '@/src/features/transactions/types';
 import { Screen } from '@/src/ui/Screen';
 import { Spinner } from '@/src/ui/Spinner';
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
 import { color, fontFamily } from '@/src/theme/tokens';
 
 type PeriodKey = 'all' | 'today' | 'week' | 'month' | 'lastMonth';
@@ -546,14 +546,12 @@ const styles = StyleSheet.create({
   },
   navTitleWrap: { flex: 1 },
   navTitle: {
-    fontFamily: fontFamily.sans,
     fontSize: 16,
     fontWeight: '700',
     color: color.text,
     letterSpacing: -0.3,
   },
   navSub: {
-    fontFamily: fontFamily.sans,
     fontSize: 10,
     fontWeight: '500',
     color: color.textMuted,
@@ -568,7 +566,6 @@ const styles = StyleSheet.create({
   },
 
   sectionLabel: {
-    fontFamily: fontFamily.sans,
     fontSize: 10,
     fontWeight: '700',
     color: color.textMuted,
@@ -593,7 +590,6 @@ const styles = StyleSheet.create({
     borderColor: color.primary,
   },
   periodChipText: {
-    fontFamily: fontFamily.sans,
     fontSize: 12,
     fontWeight: '600',
     color: color.textMuted,
@@ -627,14 +623,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   presetTitle: {
-    fontFamily: fontFamily.sans,
     fontSize: 13,
     fontWeight: '700',
     color: color.text,
     textAlign: 'center',
   },
   presetDesc: {
-    fontFamily: fontFamily.sans,
     fontSize: 11,
     color: color.textMuted,
     textAlign: 'center',
@@ -652,7 +646,6 @@ const styles = StyleSheet.create({
     backgroundColor: color.border,
   },
   dividerText: {
-    fontFamily: fontFamily.sans,
     fontSize: 11,
     color: color.textMuted,
     fontWeight: '500',
@@ -672,7 +665,6 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   filterLabel: {
-    fontFamily: fontFamily.sans,
     fontSize: 10,
     fontWeight: '700',
     color: color.textMuted,
@@ -693,7 +685,6 @@ const styles = StyleSheet.create({
     borderColor: color.primary,
   },
   chipText: {
-    fontFamily: fontFamily.sans,
     fontSize: 12,
     fontWeight: '500',
     color: color.textMuted,
@@ -714,7 +705,6 @@ const styles = StyleSheet.create({
     backgroundColor: color.bg,
   },
   pickerBtnText: {
-    fontFamily: fontFamily.sans,
     fontSize: 13,
     color: color.text,
   },
@@ -730,7 +720,6 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   clearAllText: {
-    fontFamily: fontFamily.sans,
     fontSize: 12,
     fontWeight: '600',
     color: color.primary,
@@ -747,7 +736,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   generateBtnText: {
-    fontFamily: fontFamily.sans,
     fontSize: 14,
     fontWeight: '700',
     color: '#fff',
@@ -783,7 +771,6 @@ const styles = StyleSheet.create({
     paddingBottom: 10,
   },
   modalTitle: {
-    fontFamily: fontFamily.sans,
     fontSize: 16,
     fontWeight: '700',
     color: color.text,
@@ -798,7 +785,6 @@ const styles = StyleSheet.create({
     borderTopColor: color.border,
   },
   partyName: {
-    fontFamily: fontFamily.sans,
     fontSize: 14,
     color: color.text,
   },

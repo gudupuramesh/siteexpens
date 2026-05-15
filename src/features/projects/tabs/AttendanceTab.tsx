@@ -1,15 +1,24 @@
+/**
+ * Attendance tab — v2 design.
+ *
+ * Layout:
+ *   1. Date pager — prev · "SELECTED DATE" + label · next + calendar btn
+ *   2. Day-total summary card with Present/Half/Absent pill grid
+ *   3. Bulk-mark CTA (when there are unmarked rows)
+ *   4. List of labour rows — avatar + name/role/pay + status pill + P/H/A toggle
+ *   5. FAB — Add labour
+ *   6. Calendar sheet — v2 DateTimeSheet (with Done button)
+ */
 import { memo, useState, useCallback, useEffect, useMemo } from 'react';
 import {
   ActivityIndicator,
   FlatList,
-  Modal,
-  Platform,
   Pressable,
+  RefreshControl,
   StyleSheet,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
 
@@ -20,14 +29,18 @@ import type { AttendanceRecord, AttendanceStatus, AttendanceUiStatus } from '@/s
 import { useEffectiveProjectLabour } from '@/src/features/attendance/useEffectiveProjectLabour';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { Can } from '@/src/ui/Can';
-import { Text } from '@/src/ui/Text';
-import { color, radius, screenInset, shadow, space } from '@/src/theme';
+
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FAB } from '@/src/ui/v2/FAB';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
+import { useThemeV2 } from '@/src/theme/v2';
 
 function toDateString(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`; // local YYYY-MM-DD (timezone-safe)
+  return `${y}-${m}-${day}`;
 }
 
 function addDays(base: Date, delta: number): Date {
@@ -48,8 +61,6 @@ type AttendanceRow = {
   sourceRecord?: AttendanceRecord;
 };
 
-type DisplayStatus = AttendanceUiStatus;
-
 const StatusToggle = memo(function StatusToggle({
   status,
   onToggle,
@@ -57,35 +68,59 @@ const StatusToggle = memo(function StatusToggle({
   status: AttendanceUiStatus;
   onToggle: (s: AttendanceStatus) => void;
 }) {
+  const t = useThemeV2();
   const busy = status === 'loading';
+
+  const renderBtn = (
+    label: 'P' | 'A' | 'H',
+    target: AttendanceStatus,
+    activeBg: string,
+  ) => {
+    const active =
+      (label === 'P' && status === 'present')
+      || (label === 'A' && status === 'absent')
+      || (label === 'H' && status === 'half_day');
+    return (
+      <Pressable
+        key={label}
+        disabled={busy}
+        onPress={() => onToggle(target)}
+        style={({ pressed }) => [
+          styles.toggleBtn,
+          {
+            backgroundColor: active ? activeBg : t.colors.fill3,
+            borderRadius: 8,
+          },
+          busy && { opacity: 0.4 },
+          pressed && { opacity: 0.7 },
+        ]}
+      >
+        <Text
+          variant="caption2"
+          style={{
+            color: active ? '#fff' : t.colors.secondary,
+            fontWeight: '700',
+            letterSpacing: 0.5,
+          }}
+        >
+          {label}
+        </Text>
+      </Pressable>
+    );
+  };
+
   return (
     <View style={styles.toggleRow}>
-      <Pressable
-        disabled={busy}
-        onPress={() => onToggle('present')}
-        style={[styles.toggleBtn, status === 'present' && styles.togglePresent, busy && styles.toggleDisabled]}
-      >
-        <Text variant="caption" style={{ color: status === 'present' ? '#fff' : color.success }}>P</Text>
-      </Pressable>
-      <Pressable
-        disabled={busy}
-        onPress={() => onToggle('absent')}
-        style={[styles.toggleBtn, status === 'absent' && styles.toggleAbsent, busy && styles.toggleDisabled]}
-      >
-        <Text variant="caption" style={{ color: status === 'absent' ? '#fff' : color.danger }}>A</Text>
-      </Pressable>
-      <Pressable
-        disabled={busy}
-        onPress={() => onToggle('half_day')}
-        style={[styles.toggleBtn, status === 'half_day' && styles.toggleHalf, busy && styles.toggleDisabled]}
-      >
-        <Text variant="caption" style={{ color: status === 'half_day' ? '#fff' : color.warning }}>H</Text>
-      </Pressable>
+      {renderBtn('P', 'present', t.palette.green.base)}
+      {renderBtn('H', 'half_day', t.palette.orange.base)}
+      {renderBtn('A', 'absent', t.palette.red.base)}
     </View>
   );
 }, (prev, next) => prev.status === next.status);
 
 export function AttendanceTab() {
+  const t = useThemeV2();
+  const refresh = usePullToRefresh();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -99,6 +134,7 @@ export function AttendanceTab() {
   const { data: roster, loading: rosterLoading } = useEffectiveProjectLabour(projectId, orgId || undefined);
   const [optimisticByLabour, setOptimisticByLabour] = useState<Map<string, AttendanceStatus>>(new Map());
   const [actionError, setActionError] = useState<string>();
+  const [showCalendar, setShowCalendar] = useState(false);
 
   const handleToggle = useCallback(async (row: AttendanceRow, newStatus: AttendanceStatus) => {
     if (row.status === 'loading') return;
@@ -140,9 +176,6 @@ export function AttendanceTab() {
     }
   }, [dateStr, isFutureDate, orgId, projectId, user]);
 
-  const [showCalendar, setShowCalendar] = useState(false);
-
-  // Scroll the strip so the selected date sits near the centre.
   useEffect(() => {
     setOptimisticByLabour(new Map());
     setActionError(undefined);
@@ -178,7 +211,6 @@ export function AttendanceTab() {
     for (const rec of dayRecords) {
       dayByLabour.set(rec.labourId, rec);
     }
-
     const merged: AttendanceRow[] = roster.map((labour) => {
       const day = dayByLabour.get(labour.labourId);
       const optimistic = optimisticByLabour.get(labour.labourId);
@@ -207,8 +239,6 @@ export function AttendanceTab() {
         status: fallbackStatus,
       };
     });
-
-    // Show legacy day records that may not yet be in roster.
     for (const day of dayRecords) {
       if (merged.some((m) => m.labourId === day.labourId)) continue;
       const optimistic = optimisticByLabour.get(day.labourId);
@@ -224,7 +254,6 @@ export function AttendanceTab() {
         sourceRecord: day,
       });
     }
-
     merged.sort((a, b) => a.labourName.localeCompare(b.labourName));
     return merged;
   }, [dayLoading, dayRecords, optimisticByLabour, roster]);
@@ -275,141 +304,316 @@ export function AttendanceTab() {
     }
   }, [dateStr, isFutureDate, orgId, projectId, rows, user]);
 
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
   const renderItem = useCallback(({ item }: { item: AttendanceRow }) => {
     const initial = item.labourName.charAt(0).toUpperCase();
     const payText =
       item.payRate && item.payRate > 0
         ? ` · ₹${item.payRate}/${item.payUnit === 'hour' ? 'hr' : 'day'}`
         : '';
-    const displayStatus: DisplayStatus = item.status;
+
     const statusMeta =
-      displayStatus === 'loading'
-        ? { label: '…', bg: color.surfaceAlt, fg: color.textFaint }
-        : displayStatus === 'present'
-          ? { label: 'PRESENT', bg: color.successSoft, fg: color.success }
-          : displayStatus === 'half_day'
-            ? { label: 'HALF', bg: color.warningSoft, fg: color.warning }
-            : displayStatus === 'absent'
-              ? { label: 'ABSENT', bg: color.dangerSoft, fg: color.danger }
-              : { label: 'UNMARKED', bg: color.surfaceAlt, fg: color.textMuted };
+      item.status === 'loading'
+        ? { label: '…', bg: t.colors.fill3, fg: t.colors.tertiary }
+        : item.status === 'present'
+          ? {
+              // 90/10: Present is the default-good state — reads in neutral.
+              label: 'PRESENT',
+              bg: t.colors.fill3,
+              fg: t.colors.secondary,
+            }
+          : item.status === 'half_day'
+            ? {
+                label: 'HALF',
+                bg: t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft,
+                fg: t.palette.orange.base,
+              }
+            : item.status === 'absent'
+              ? {
+                  label: 'ABSENT',
+                  bg: t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                  fg: t.palette.red.base,
+                }
+              : { label: 'UNMARKED', bg: t.colors.fill3, fg: t.colors.secondary };
+
     return (
-      <View style={styles.row}>
-        <View style={styles.avatar}>
-          <Text variant="metaStrong" style={{ color: color.primary }}>{initial}</Text>
+      <View
+        style={[
+          styles.row,
+          {
+            backgroundColor: cardBg,
+            borderRadius: t.radii.card,
+            borderColor: cardBorder,
+            borderWidth: t.hairline,
+          },
+        ]}
+      >
+        <View
+          style={[
+            styles.avatar,
+            {
+              backgroundColor:
+                t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+            },
+          ]}
+        >
+          <Text variant="footnote" style={{ color: t.palette.blue.base, fontWeight: '700' }}>
+            {initial}
+          </Text>
         </View>
         <Pressable
-          onPress={() => router.push({
-            pathname: '/(app)/projects/[id]/attendance/[recordId]',
-            params: { id: projectId, recordId: item.labourId },
-          })}
+          onPress={() =>
+            router.push({
+              pathname: '/(app)/projects/[id]/attendance/[recordId]',
+              params: { id: projectId, recordId: item.labourId },
+            })
+          }
           style={({ pressed }) => [styles.rowBody, pressed && { opacity: 0.85 }]}
         >
-          <Text variant="rowTitle" color="text" numberOfLines={1}>{item.labourName}</Text>
+          <Text variant="callout" color="label" numberOfLines={1}>
+            {item.labourName}
+          </Text>
           <View style={styles.rowMetaLine}>
-            <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.rowMetaText}>
+            <Text variant="caption1" color="secondary" numberOfLines={1} style={{ flex: 1 }}>
               {item.labourRole}{payText}
             </Text>
-            <View style={[styles.statePill, { backgroundColor: statusMeta.bg }]}>
-              <Text variant="caption" style={{ color: statusMeta.fg }}>{statusMeta.label}</Text>
+            <View
+              style={[
+                styles.statePill,
+                { backgroundColor: statusMeta.bg, borderRadius: 999 },
+              ]}
+            >
+              <Text
+                variant="caption2"
+                style={{
+                  color: statusMeta.fg,
+                  fontWeight: '700',
+                  letterSpacing: 0.4,
+                }}
+              >
+                {statusMeta.label}
+              </Text>
             </View>
           </View>
         </Pressable>
-        <StatusToggle
-          status={item.status}
-          onToggle={(s) => handleToggle(item, s)}
-        />
+        <StatusToggle status={item.status} onToggle={(s) => handleToggle(item, s)} />
       </View>
     );
-  }, [handleToggle, projectId]);
+  }, [cardBg, cardBorder, handleToggle, projectId, t]);
 
   return (
     <View style={styles.container}>
+      {/* Date pager */}
       <View style={styles.dateNavWrap}>
-        <Pressable onPress={goToPreviousDay} style={styles.dateNavBtn} accessibilityLabel="Previous day">
-          <Ionicons name="chevron-back" size={16} color={color.textMuted} />
-        </Pressable>
-        <View style={styles.dateNavCenter}>
-          <Text variant="caption" color="textMuted" style={styles.dateNavKicker}>
-            SELECTED DATE
-          </Text>
-          <Text variant="bodyStrong" color="text">
-            {date.toLocaleDateString('en-IN', {
-              weekday: 'short',
-              day: 'numeric',
-              month: 'short',
-              year: 'numeric',
-            })}
-          </Text>
-        </View>
-        <Pressable
-          onPress={goToNextDay}
-          disabled={dateStr >= todayKey}
-          style={[styles.dateNavBtn, dateStr >= todayKey && styles.dateNavBtnDisabled]}
-          accessibilityLabel="Next day"
+        <View
+          style={[
+            styles.dateNav,
+            {
+              backgroundColor: cardBg,
+              borderRadius: t.radii.card,
+              borderColor: cardBorder,
+              borderWidth: t.hairline,
+            },
+          ]}
         >
-          <Ionicons name="chevron-forward" size={16} color={dateStr >= todayKey ? color.textFaint : color.textMuted} />
-        </Pressable>
+          <Pressable
+            onPress={goToPreviousDay}
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.dateNavBtn,
+              { backgroundColor: t.colors.fill3, borderRadius: 999 },
+              pressed && { opacity: 0.7 },
+            ]}
+            accessibilityLabel="Previous day"
+          >
+            <Ionicons name="chevron-back" size={16} color={t.colors.label} />
+          </Pressable>
+          <View style={styles.dateNavCenter}>
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={{ letterSpacing: 0.5 }}
+            >
+              SELECTED DATE
+            </Text>
+            <Text
+              variant="callout"
+              color="label"
+              style={{ fontWeight: '700', marginTop: 1 }}
+            >
+              {date.toLocaleDateString('en-IN', {
+                weekday: 'short',
+                day: 'numeric',
+                month: 'short',
+                year: 'numeric',
+              })}
+            </Text>
+          </View>
+          <Pressable
+            onPress={() => setShowCalendar(true)}
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.dateNavBtn,
+              { backgroundColor: t.colors.fill3, borderRadius: 999 },
+              pressed && { opacity: 0.7 },
+            ]}
+            accessibilityLabel="Open calendar"
+          >
+            <Ionicons name="calendar-outline" size={15} color={t.colors.label} />
+          </Pressable>
+          <Pressable
+            onPress={goToNextDay}
+            disabled={dateStr >= todayKey}
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.dateNavBtn,
+              { backgroundColor: t.colors.fill3, borderRadius: 999 },
+              pressed && { opacity: 0.7 },
+              dateStr >= todayKey && { opacity: 0.4 },
+            ]}
+            accessibilityLabel="Next day"
+          >
+            <Ionicons
+              name="chevron-forward"
+              size={16}
+              color={dateStr >= todayKey ? t.colors.tertiary : t.colors.label}
+            />
+          </Pressable>
+        </View>
       </View>
 
-      <View style={styles.summaryCard}>
-        <View style={styles.summaryHead}>
-          <View style={styles.summaryHeadText}>
-            <Text variant="caption" color="textMuted" style={styles.summaryKicker} numberOfLines={1}>
+      {/* Day-total summary */}
+      <View style={{ paddingHorizontal: 16, paddingTop: 10 }}>
+        <View
+          style={[
+            styles.summaryCard,
+            {
+              backgroundColor: cardBg,
+              borderRadius: t.radii.card,
+              borderColor: cardBorder,
+              borderWidth: t.hairline,
+            },
+          ]}
+        >
+          <View style={styles.summaryHead}>
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={{ letterSpacing: 0.5 }}
+            >
               DAY TOTAL · PAYABLE
             </Text>
-            <View style={styles.summaryMainRow}>
-              <Text variant="bodyStrong" color="text" style={styles.summaryMain} numberOfLines={1}>
-                {summary.total} workers · {estimatedHours} hrs
+            {dayLoading && roster.length > 0 ? (
+              <ActivityIndicator size="small" color={t.colors.tertiary} />
+            ) : null}
+          </View>
+          <Text
+            variant="callout"
+            color="label"
+            style={{ fontWeight: '700', marginTop: 4 }}
+            numberOfLines={1}
+          >
+            {summary.total} workers · {estimatedHours} hrs
+          </Text>
+
+          {actionError ? (
+            <View
+              style={[
+                styles.errorPill,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                  borderRadius: 999,
+                },
+              ]}
+            >
+              <Text variant="caption2" style={{ color: t.palette.red.base, fontWeight: '700' }}>
+                {actionError}
               </Text>
-              {dayLoading && roster.length > 0 ? (
-                <ActivityIndicator size="small" color={color.textMuted} style={styles.summarySpinner} />
-              ) : null}
             </View>
+          ) : null}
+
+          {hasUnmarked && !isFutureDate ? (
+            <Pressable
+              onPress={markAllUnmarkedPresent}
+              style={({ pressed }) => [
+                styles.bulkMarkBtn,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                  borderRadius: 999,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Ionicons
+                name="checkmark-done-outline"
+                size={13}
+                color={t.palette.blue.base}
+              />
+              <Text
+                variant="caption2"
+                style={{
+                  color: t.palette.blue.base,
+                  fontWeight: '700',
+                  marginLeft: 4,
+                  letterSpacing: 0.4,
+                }}
+              >
+                MARK ALL UNMARKED AS PRESENT
+              </Text>
+            </Pressable>
+          ) : null}
+
+          <View style={styles.summaryGrid}>
+            {/* 90/10: Present neutralised; Half + Absent keep their action
+                tones (orange / red). */}
+            <SummaryPill
+              label={`${summary.present} Present`}
+              tone={t.colors.secondary}
+              bg={t.colors.fill3}
+            />
+            <SummaryPill
+              label={`${summary.halfDay} Half`}
+              tone={t.palette.orange.base}
+              bg={t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft}
+            />
+            <SummaryPill
+              label={`${summary.absent} Absent`}
+              tone={t.palette.red.base}
+              bg={t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft}
+            />
           </View>
-          <Pressable onPress={() => setShowCalendar(true)} style={styles.calendarBtn}>
-            <Ionicons name="calendar-outline" size={16} color={color.textMuted} />
-          </Pressable>
+          <Text
+            variant="caption2"
+            color="tertiary"
+            style={{ marginTop: 8, letterSpacing: 0.5 }}
+            numberOfLines={1}
+          >
+            {payableUnits.toFixed(1)} PAYABLE UNITS
+          </Text>
         </View>
-        {actionError ? (
-          <View style={styles.errorPill}>
-            <Text variant="caption" style={styles.errorPillText}>{actionError}</Text>
-          </View>
-        ) : null}
-        {hasUnmarked && !isFutureDate ? (
-          <Pressable onPress={markAllUnmarkedPresent} style={styles.bulkMarkBtn}>
-            <Ionicons name="checkmark-done-outline" size={14} color={color.primary} />
-            <Text variant="caption" color="primary">
-              MARK ALL UNMARKED AS PRESENT
-            </Text>
-          </Pressable>
-        ) : null}
-        <View style={styles.summaryGrid}>
-          <View style={[styles.summaryCell, { backgroundColor: color.successSoft }]}>
-            <Text variant="caption" style={{ color: color.success }}>{summary.present} Present</Text>
-          </View>
-          <View style={[styles.summaryCell, { backgroundColor: color.warningSoft }]}>
-            <Text variant="caption" style={{ color: color.warning }}>{summary.halfDay} Half</Text>
-          </View>
-          <View style={[styles.summaryCell, { backgroundColor: color.dangerSoft }]}>
-            <Text variant="caption" style={{ color: color.danger }}>{summary.absent} Absent</Text>
-          </View>
-        </View>
-        <Text variant="caption" color="textMuted" style={styles.summarySubline} numberOfLines={1}>
-          {payableUnits.toFixed(1)} PAYABLE UNITS
-        </Text>
       </View>
 
+      {/* List */}
       {loading && rows.length === 0 ? (
         <View style={styles.empty}>
-          <Text variant="meta" color="textMuted">Loading…</Text>
+          <Text variant="footnote" color="secondary">Loading…</Text>
         </View>
       ) : rows.length === 0 ? (
         <View style={styles.empty}>
-          <Ionicons name="calendar-outline" size={28} color={color.textFaint} />
-          <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
+          <Ionicons name="people-outline" size={32} color={t.colors.tertiary} />
+          <Text variant="callout" color="label" style={{ marginTop: 12, fontWeight: '600' }}>
             No labourers added
           </Text>
-          <Text variant="meta" color="textMuted" align="center">
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 4, textAlign: 'center', paddingHorizontal: 32 }}
+          >
             Add daily workers and contractors to track attendance.
           </Text>
         </View>
@@ -418,221 +622,153 @@ export function AttendanceTab() {
           data={rows}
           keyExtractor={(item) => item.labourId}
           renderItem={renderItem}
+          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
           showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl {...refresh.props} />}
           contentContainerStyle={styles.listContent}
         />
       )}
 
       {!isFutureDate ? (
         <Can capability="attendance.write">
-          <Pressable
+          <FAB
+            icon="add"
             onPress={() => {
               Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
               router.push(`/(app)/projects/${projectId}/add-labour` as never);
             }}
-            style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
+            bottomOffset={24}
             accessibilityLabel="Add labour"
-          >
-            <Ionicons name="add" size={24} color={color.onPrimary} />
-          </Pressable>
+          />
         </Can>
       ) : null}
 
-      {showCalendar ? (
-        Platform.OS === 'ios' ? (
-          <Modal
-            visible={showCalendar}
-            transparent
-            animationType="slide"
-            onRequestClose={() => setShowCalendar(false)}
-          >
-            <Pressable style={styles.modalOverlay} onPress={() => setShowCalendar(false)}>
-              <View />
-            </Pressable>
-            <View style={styles.modalSheet}>
-              <DateTimePicker
-                value={date}
-                mode="date"
-                display="spinner"
-                maximumDate={today}
-                onChange={(_: DateTimePickerEvent, next?: Date) => {
-                  if (next && toDateString(next) <= todayKey) {
-                    requestAnimationFrame(() => setDate(next));
-                  }
-                }}
-              />
-              <Pressable onPress={() => setShowCalendar(false)} style={styles.doneBtn}>
-                <Text variant="bodyStrong" color="primary">Done</Text>
-              </Pressable>
-            </View>
-          </Modal>
-        ) : (
-          <DateTimePicker
-            value={date}
-            mode="date"
-            display="default"
-            maximumDate={today}
-            onChange={(event: DateTimePickerEvent, next?: Date) => {
-              if (event.type !== 'dismissed' && next && toDateString(next) <= todayKey) {
-                requestAnimationFrame(() => setDate(next));
-              }
-              setShowCalendar(false);
-            }}
-          />
-        )
-      ) : null}
+      <DateTimeSheet
+        open={showCalendar}
+        value={date}
+        onChange={(d) => {
+          if (toDateString(d) <= todayKey) {
+            requestAnimationFrame(() => setDate(d));
+          }
+        }}
+        onClose={() => setShowCalendar(false)}
+        mode="date"
+        title="Select date"
+      />
+    </View>
+  );
+}
+
+function SummaryPill({
+  label,
+  tone,
+  bg,
+}: {
+  label: string;
+  tone: string;
+  bg: string;
+}) {
+  return (
+    <View
+      style={[
+        styles.summaryPill,
+        { backgroundColor: bg, borderRadius: 999 },
+      ]}
+    >
+      <Text
+        variant="caption2"
+        style={{
+          color: tone,
+          fontWeight: '700',
+          letterSpacing: 0.3,
+        }}
+      >
+        {label}
+      </Text>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+
+  // Date pager
   dateNavWrap: {
-    marginTop: 8,
-    marginHorizontal: screenInset,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+  },
+  dateNav: {
     flexDirection: 'row',
     alignItems: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    borderRadius: 10,
-    padding: 8,
     gap: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
   },
   dateNavBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
+    width: 30,
+    height: 30,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.bgGrouped,
-  },
-  dateNavBtnDisabled: {
-    opacity: 0.45,
   },
   dateNavCenter: {
     flex: 1,
     alignItems: 'center',
   },
-  dateNavKicker: {
-    letterSpacing: 0.8,
-    marginBottom: 2,
-  },
+
+  // Summary card
   summaryCard: {
-    paddingHorizontal: screenInset,
+    paddingHorizontal: 14,
     paddingVertical: 12,
-    marginHorizontal: screenInset,
-    marginTop: 6,
-    marginBottom: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    borderRadius: 10,
-  },
-  summaryKicker: {
-    letterSpacing: 1,
   },
   summaryHead: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    justifyContent: 'space-between',
   },
-  summaryHeadText: {
-    flex: 1,
-    minWidth: 0,
+  errorPill: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginTop: 8,
   },
-  summaryMain: {
-    marginTop: 2,
-    flex: 1,
-    minWidth: 0,
-  },
-  summaryMainRow: {
-    marginTop: 2,
+  bulkMarkBtn: {
+    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-  },
-  summarySpinner: {
-    marginTop: 2,
-  },
-  calendarBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: color.bgGrouped,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    marginTop: 10,
   },
   summaryGrid: {
     marginTop: 10,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    alignItems: 'center',
-  },
-  bulkMarkBtn: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    flexDirection: 'row',
-    alignItems: 'center',
     gap: 6,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bgGrouped,
-    paddingHorizontal: 8,
+    alignItems: 'center',
+  },
+  summaryPill: {
+    paddingHorizontal: 10,
     paddingVertical: 4,
-    borderRadius: 8,
   },
-  errorPill: {
-    marginTop: 10,
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: color.danger,
-    backgroundColor: color.dangerSoft,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  errorPillText: {
-    color: color.danger,
-  },
-  summaryCell: {
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xxs,
-    borderRadius: radius.pill,
-  },
-  summarySubline: {
-    marginTop: 8,
-    letterSpacing: 0.8,
-  },
+
+  // List rows
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingVertical: 12,
-    backgroundColor: color.surface,
-    gap: space.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    borderRadius: 12,
-    marginBottom: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 10,
   },
   avatar: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: color.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
   rowBody: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
   },
   rowMetaLine: {
     marginTop: 2,
@@ -640,85 +776,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
-  rowMetaText: {
-    flex: 1,
-  },
   statePill: {
-    paddingHorizontal: 6,
+    paddingHorizontal: 7,
     paddingVertical: 2,
-    borderRadius: radius.pill,
   },
+
+  // Status toggle
   toggleRow: {
     flexDirection: 'row',
     gap: 4,
   },
   toggleBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+    width: 30,
+    height: 30,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.bgGrouped,
   },
-  togglePresent: {
-    backgroundColor: color.success,
-    borderColor: color.success,
-  },
-  toggleAbsent: {
-    backgroundColor: color.danger,
-    borderColor: color.danger,
-  },
-  toggleHalf: {
-    backgroundColor: color.warning,
-    borderColor: color.warning,
-  },
-  toggleDisabled: {
-    opacity: 0.4,
-  },
+
   listContent: {
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: 80,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 100,
   },
   empty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: screenInset * 2,
-    gap: space.xs,
-  },
-  emptyTitle: { marginTop: space.xxs },
-  fab: {
-    position: 'absolute',
-    right: screenInset,
-    bottom: space.xl,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: color.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadow.fab,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.35)',
-  },
-  modalSheet: {
-    backgroundColor: color.bgGrouped,
-    borderTopLeftRadius: 12,
-    borderTopRightRadius: 12,
-    paddingTop: 8,
-    paddingBottom: 20,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.borderStrong,
-  },
-  doneBtn: {
-    alignSelf: 'center',
-    marginTop: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 32,
   },
 });

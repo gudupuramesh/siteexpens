@@ -1,10 +1,26 @@
 /**
- * Create or edit a CRM lead — InteriorOS layout.
+ * Create or edit a CRM lead — v2 design.
  *
- * Uses io.tsx primitives (Group / InputRow / PickerRow / SelectModal /
- * PrimaryButton) so the form matches the InteriorOS LeadFormScreen
- * reference and replaces the broken Alert-based dropdowns with a real
- * bottom-sheet picker.
+ * Layout (top → bottom):
+ *   1. SheetHeader: Cancel · "New lead" / "Edit lead" · Save
+ *   2. ScrollView (KeyboardAvoidingView wraps it so the keyboard NEVER
+ *      overlaps the focused input — the screen pushes content up by
+ *      the keyboard height on iOS).
+ *      a. Big editable name input (the lead's name, prominent)
+ *      b. Status pill row (segmented chips — most-changed field stays visible)
+ *      c. FormGroup "Identity" — Phone, Email, Location
+ *      d. FormGroup "Pipeline" — Source · Priority · Project type (pickers)
+ *      e. FormGroup "Budget & requirements" — Budget ₹ · Brief
+ *      f. FormGroup "Schedule" — Expected start · Follow-up (DateTimeSheet)
+ *      g. FormGroup "Assignment & tags" — Assigned to · Tags
+ *      h. FormGroup "Notes" — multiline notes
+ *
+ * Date pickers use `<DateTimeSheet>` which gives them a proper Cancel /
+ * **Done** header. Selecting a date doesn't auto-commit — only Done does.
+ *
+ * Source/Priority/Project pickers use `<SelectSheet>` (bottom sheet).
+ * Status uses an inline segmented pill row at the top of the form so the
+ * field is visible at-a-glance.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
@@ -16,11 +32,9 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Text as RNText,
+  TextInput,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { z } from 'zod';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { createLead, updateLead } from '@/src/features/crm/leads';
@@ -37,18 +51,19 @@ import {
 import { useLead } from '@/src/features/crm/useLeads';
 import { useOrgMembers } from '@/src/features/org/useOrgMembers';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
-import {
-  Group,
-  InputRow,
-  PickerRow,
-  PrimaryButton,
-  SelectModal,
-} from '@/src/ui/io';
 import { OrgMemberPickerModal } from '@/src/ui/OrgMemberPickerModal';
-import { PlatformDateTimePicker } from '@/src/ui/PlatformDateTimePicker';
-import { Screen } from '@/src/ui/Screen';
-import { color, screenInset, space } from '@/src/theme';
-import { fontFamily } from '@/src/theme/tokens';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
+
+import { z } from 'zod';
 
 const sourceKeys = LEAD_SOURCES.map((s) => s.key) as [LeadSource, ...LeadSource[]];
 const statusKeys = LEAD_STATUSES.map((s) => s.key) as [LeadStatus, ...LeadStatus[]];
@@ -88,7 +103,17 @@ function fmtDateTime(d: Date | null): string | undefined {
   });
 }
 
+// 90/10 colour discipline: lead stages are pipeline labels, not actionable
+// status. The selected stage in this picker reads in interactive blue
+// (matches every other selected-pill in the app); the lone "lost" outcome
+// keeps red because it's a problem state.
+function statusTone(t: ReturnType<typeof useThemeV2>, k: LeadStatus) {
+  if (k === 'lost') return { fg: t.palette.red.base, bg: t.palette.red.soft };
+  return { fg: t.palette.blue.base, bg: t.palette.blue.soft };
+}
+
 export default function AddLeadScreen() {
+  const t = useThemeV2();
   const { leadId } = useLocalSearchParams<{ leadId?: string }>();
   const isEdit = !!leadId;
   const { user } = useAuth();
@@ -97,6 +122,7 @@ export default function AddLeadScreen() {
   const { data: existing, loading: leadLoading } = useLead(isEdit ? leadId : undefined);
   const { members } = useOrgMembers(orgId || undefined);
 
+  // Picker visibility
   const [assignedUid, setAssignedUid] = useState<string | undefined>();
   const [assignedLabel, setAssignedLabel] = useState<string | undefined>();
   const [showAssignPicker, setShowAssignPicker] = useState(false);
@@ -104,18 +130,17 @@ export default function AddLeadScreen() {
   const [followUp, setFollowUp] = useState<Date | null>(null);
   const [showExpectedPicker, setShowExpectedPicker] = useState(false);
   const [showFollowPicker, setShowFollowPicker] = useState(false);
-  const [submitError, setSubmitError] = useState<string>();
-
   const [showSourcePicker, setShowSourcePicker] = useState(false);
-  const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [showPriorityPicker, setShowPriorityPicker] = useState(false);
   const [showProjectPicker, setShowProjectPicker] = useState(false);
+  const [submitError, setSubmitError] = useState<string>();
 
   const {
     control,
     handleSubmit,
     reset,
     setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -135,6 +160,7 @@ export default function AddLeadScreen() {
     },
   });
 
+  // Hydrate when editing
   useEffect(() => {
     if (!existing || !isEdit) return;
     reset({
@@ -166,12 +192,9 @@ export default function AddLeadScreen() {
     }
   }, [existing, isEdit, reset, members]);
 
+  // Picker option lists
   const sourceOptions = useMemo(
     () => LEAD_SOURCES.map((s) => ({ key: s.key, label: s.label })),
-    [],
-  );
-  const statusOptions = useMemo(
-    () => LEAD_STATUSES.map((s) => ({ key: s.key, label: s.label })),
     [],
   );
   const priorityOptions = useMemo(
@@ -185,6 +208,12 @@ export default function AddLeadScreen() {
     ],
     [],
   );
+
+  // Live values for picker rows
+  const watchedSource = watch('source');
+  const watchedPriority = watch('priority');
+  const watchedProject = watch('projectType');
+  const watchedStatus = watch('status');
 
   const onSave = handleSubmit(async (values) => {
     if (!user || !orgId) {
@@ -201,7 +230,7 @@ export default function AddLeadScreen() {
     }
     const tagsArr = values.tags
       ?.split(',')
-      .map((t) => t.trim())
+      .map((tag) => tag.trim())
       .filter(Boolean);
 
     try {
@@ -252,79 +281,176 @@ export default function AddLeadScreen() {
     }
   });
 
+  // Loading / not-found shells (edit flow)
   if (isEdit && leadLoading && !existing) {
     return (
-      <Screen>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <RNText style={styles.bodyText}>Loading…</RNText>
-      </Screen>
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit lead"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary">Loading…</Text>
+        </View>
+      </View>
     );
   }
-
   if (isEdit && !existing && !leadLoading) {
     return (
-      <Screen>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <RNText style={styles.bodyText}>Lead not found</RNText>
-        <Pressable onPress={() => router.back()} style={{ marginTop: space.md }}>
-          <RNText style={styles.linkAction}>Back</RNText>
-        </Pressable>
-      </Screen>
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit lead"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary">Lead not found</Text>
+          <Pressable onPress={() => router.back()} hitSlop={6} style={{ marginTop: 12 }}>
+            <Text variant="footnote" style={{ color: t.palette.blue.base, fontWeight: '600' }}>
+              Back
+            </Text>
+          </Pressable>
+        </View>
+      </View>
     );
   }
 
   return (
-    <Screen bg="grouped" padded={false}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        {/* Top bar — InteriorOS LeadFormScreen header */}
-        <View style={styles.header}>
-          <Pressable onPress={() => router.back()} hitSlop={12}>
-            <Ionicons name="close" size={22} color={color.textMuted} />
-          </Pressable>
-          <RNText style={styles.topTitle}>
-            {isEdit ? 'Edit lead' : 'New lead'}
-          </RNText>
-          <Pressable
-            onPress={onSave}
-            disabled={isSubmitting}
-            hitSlop={8}
-            style={({ pressed }) => [
-              styles.saveBtn,
-              isSubmitting && { opacity: 0.5 },
-              pressed && !isSubmitting && { opacity: 0.85 },
-            ]}
-          >
-            <RNText style={styles.saveBtnText}>
-              {isSubmitting ? 'Saving…' : 'Save'}
-            </RNText>
-          </Pressable>
-        </View>
+      <AmbientBackground />
 
+      {/* Top: Cancel · Title · Save */}
+      <SheetHeader
+        title={isEdit ? 'Edit lead' : 'New lead'}
+        cancelLabel="Cancel"
+        saveLabel={isEdit ? 'Save' : 'Create'}
+        saveLoading={isSubmitting}
+        onCancel={() => router.back()}
+        onSave={() => void onSave()}
+      />
+
+      {/*
+        KeyboardAvoidingView + ScrollView keeps the focused input above
+        the keyboard. iOS uses 'padding' so the layout shrinks under
+        the keyboard; Android relies on `windowSoftInputMode: adjustResize`
+        in app.json (already set).
+      */}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+      >
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
         >
-          {/* Identity */}
-          <Group header="Identity">
+          {/* Big editable name */}
+          <View style={styles.titleBlock}>
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={{ letterSpacing: 0.5 }}
+            >
+              LEAD NAME
+            </Text>
             <Controller
               control={control}
               name="name"
               render={({ field: { onChange, onBlur, value } }) => (
-                <InputRow
-                  label="Name"
+                <TextInput
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
-                  placeholder="Lead full name"
+                  placeholder="Aakash Bansal"
+                  placeholderTextColor={t.colors.tertiary}
+                  autoCapitalize="words"
+                  style={[
+                    styles.bigName,
+                    {
+                      color: t.colors.label,
+                      ...t.type.title1,
+                      // Big editable lead-name style — keep prominent like the design
+                    },
+                  ]}
+                  returnKeyType="next"
                 />
               )}
             />
+            {errors.name?.message ? (
+              <Text variant="caption2" style={{ color: t.palette.red.base, marginTop: 4 }}>
+                {errors.name.message}
+              </Text>
+            ) : null}
+          </View>
+
+          {/* Status pill row — most-changed field stays visible at the top */}
+          <View style={styles.statusBlock}>
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={[styles.statusLabel, { letterSpacing: 0.5 }]}
+            >
+              STATUS
+            </Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.statusRow}
+            >
+              {LEAD_STATUSES.map((s) => {
+                const sel = watchedStatus === s.key;
+                const tone = statusTone(t, s.key);
+                return (
+                  <Pressable
+                    key={s.key}
+                    onPress={() => setValue('status', s.key, { shouldDirty: true })}
+                    hitSlop={6}
+                    style={({ pressed }) => [
+                      styles.statusChip,
+                      {
+                        backgroundColor: sel ? tone.bg : t.colors.fill3,
+                        borderRadius: t.radii.pill,
+                        borderColor: sel ? tone.fg : 'transparent',
+                        borderWidth: sel ? 1 : 0,
+                      },
+                      pressed && { opacity: 0.85 },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.statusDot,
+                        { backgroundColor: sel ? tone.fg : t.colors.tertiary },
+                      ]}
+                    />
+                    <Text
+                      variant="footnote"
+                      style={{
+                        color: sel ? tone.fg : t.colors.secondary,
+                        fontWeight: sel ? '700' : '500',
+                        marginLeft: 5,
+                      }}
+                    >
+                      {s.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Identity */}
+          <FormGroup header="Identity">
             <Controller
               control={control}
               name="phone"
@@ -335,8 +461,7 @@ export default function AddLeadScreen() {
                   onChangeText={onChange}
                   onBlur={onBlur}
                   keyboardType="phone-pad"
-                  mono
-                  placeholder="+91 …"
+                  placeholder="+91 9876543210"
                 />
               )}
             />
@@ -365,72 +490,43 @@ export default function AddLeadScreen() {
                   onChangeText={onChange}
                   onBlur={onBlur}
                   placeholder="City / area"
-                  last
+                  autoCapitalize="words"
+                  divider={false}
                 />
               )}
             />
-          </Group>
-          {(errors.name?.message || errors.phone?.message || errors.email?.message) ? (
-            <RNText style={styles.fieldError}>
-              {errors.name?.message ?? errors.phone?.message ?? errors.email?.message}
-            </RNText>
+          </FormGroup>
+          {errors.phone?.message || errors.email?.message ? (
+            <Text variant="caption2" style={{ color: t.palette.red.base, paddingHorizontal: 32, marginTop: 6 }}>
+              {errors.phone?.message ?? errors.email?.message}
+            </Text>
           ) : null}
 
           {/* Pipeline */}
-          <Group header="Pipeline">
-            <Controller
-              control={control}
-              name="source"
-              render={({ field: { value } }) => (
-                <PickerRow
-                  label="Source"
-                  value={sourceOptions.find((x) => x.key === value)?.label}
-                  placeholder="Select"
-                  onPress={() => setShowSourcePicker(true)}
-                />
-              )}
+          <FormGroup header="Pipeline">
+            <Row
+              label="Source"
+              value={sourceOptions.find((x) => x.key === watchedSource)?.label}
+              chevron
+              onPress={() => setShowSourcePicker(true)}
             />
-            <Controller
-              control={control}
-              name="status"
-              render={({ field: { value } }) => (
-                <PickerRow
-                  label="Status"
-                  value={statusOptions.find((x) => x.key === value)?.label}
-                  placeholder="Select"
-                  onPress={() => setShowStatusPicker(true)}
-                />
-              )}
+            <Row
+              label="Priority"
+              value={priorityOptions.find((x) => x.key === watchedPriority)?.label}
+              chevron
+              onPress={() => setShowPriorityPicker(true)}
             />
-            <Controller
-              control={control}
-              name="priority"
-              render={({ field: { value } }) => (
-                <PickerRow
-                  label="Priority"
-                  value={priorityOptions.find((x) => x.key === value)?.label}
-                  placeholder="Select"
-                  onPress={() => setShowPriorityPicker(true)}
-                />
-              )}
+            <Row
+              label="Project type"
+              value={projectOptions.find((x) => x.key === watchedProject)?.label}
+              chevron
+              onPress={() => setShowProjectPicker(true)}
+              divider={false}
             />
-            <Controller
-              control={control}
-              name="projectType"
-              render={({ field: { value } }) => (
-                <PickerRow
-                  label="Project type"
-                  value={projectOptions.find((x) => x.key === value)?.label}
-                  placeholder="Select"
-                  onPress={() => setShowProjectPicker(true)}
-                  last
-                />
-              )}
-            />
-          </Group>
+          </FormGroup>
 
           {/* Budget & requirements */}
-          <Group header="Budget & requirements">
+          <FormGroup header="Budget & requirements">
             <Controller
               control={control}
               name="budget"
@@ -442,7 +538,7 @@ export default function AddLeadScreen() {
                   onBlur={onBlur}
                   keyboardType="decimal-pad"
                   placeholder="900000"
-                  mono
+                  autoCapitalize="none"
                 />
               )}
             />
@@ -457,35 +553,35 @@ export default function AddLeadScreen() {
                   onBlur={onBlur}
                   placeholder="Scope, must-haves…"
                   multiline
-                  last
+                  divider={false}
                 />
               )}
             />
-          </Group>
+          </FormGroup>
 
-          {/* Schedule */}
-          <Group header="Schedule">
-            <PickerRow
+          {/* Schedule — DateTimeSheet has the Done button */}
+          <FormGroup header="Schedule">
+            <Row
               label="Expected start"
               value={fmtDateTime(expectedStart)}
-              placeholder="Tap to set"
+              chevron
               onPress={() => setShowExpectedPicker(true)}
             />
-            <PickerRow
+            <Row
               label="Follow-up"
               value={fmtDateTime(followUp)}
-              placeholder="Tap to set"
+              chevron
               onPress={() => setShowFollowPicker(true)}
-              last
+              divider={false}
             />
-          </Group>
+          </FormGroup>
 
           {/* Assignment & tags */}
-          <Group header="Assignment & tags">
-            <PickerRow
+          <FormGroup header="Assignment & tags">
+            <Row
               label="Assigned to"
-              value={assignedLabel}
-              placeholder="Unassigned"
+              value={assignedLabel ?? 'Unassigned'}
+              chevron
               onPress={() => setShowAssignPicker(true)}
             />
             <Controller
@@ -498,14 +594,15 @@ export default function AddLeadScreen() {
                   onChangeText={onChange}
                   onBlur={onBlur}
                   placeholder="comma, separated"
-                  last
+                  autoCapitalize="none"
+                  divider={false}
                 />
               )}
             />
-          </Group>
+          </FormGroup>
 
           {/* Notes */}
-          <Group header="Notes">
+          <FormGroup header="Notes">
             <Controller
               control={control}
               name="notes"
@@ -517,72 +614,71 @@ export default function AddLeadScreen() {
                   onBlur={onBlur}
                   placeholder="Context, expectations, next steps…"
                   multiline
-                  last
+                  divider={false}
                 />
               )}
             />
-          </Group>
+          </FormGroup>
 
           {submitError ? (
-            <RNText style={styles.fieldError}>
+            <Text
+              variant="caption2"
+              style={{
+                color: t.palette.red.base,
+                paddingHorizontal: 32,
+                marginTop: 12,
+              }}
+            >
               {submitError}
-            </RNText>
+            </Text>
           ) : null}
 
-          <View style={styles.submitWrap}>
-            <PrimaryButton
-              label={isEdit ? 'Save changes' : 'Create lead'}
-              onPress={onSave}
-              loading={isSubmitting}
-              disabled={isSubmitting}
-            />
-          </View>
+          {/* Trailing space so the last field clears the keyboard / safe area */}
+          <View style={{ height: 24 }} />
         </ScrollView>
       </KeyboardAvoidingView>
 
       {/* Pickers */}
-      <SelectModal
-        visible={showSourcePicker}
+      <SelectSheet
+        open={showSourcePicker}
         title="Select source"
         options={sourceOptions}
-        onClose={() => setShowSourcePicker(false)}
+        selected={watchedSource}
         onPick={(key) => setValue('source', key as LeadSource, { shouldDirty: true })}
+        onClose={() => setShowSourcePicker(false)}
       />
-      <SelectModal
-        visible={showStatusPicker}
-        title="Select status"
-        options={statusOptions}
-        onClose={() => setShowStatusPicker(false)}
-        onPick={(key) => setValue('status', key as LeadStatus, { shouldDirty: true })}
-      />
-      <SelectModal
-        visible={showPriorityPicker}
+      <SelectSheet
+        open={showPriorityPicker}
         title="Select priority"
         options={priorityOptions}
-        onClose={() => setShowPriorityPicker(false)}
+        selected={watchedPriority}
         onPick={(key) => setValue('priority', key as LeadPriority, { shouldDirty: true })}
+        onClose={() => setShowPriorityPicker(false)}
       />
-      <SelectModal
-        visible={showProjectPicker}
+      <SelectSheet
+        open={showProjectPicker}
         title="Select project type"
         options={projectOptions}
-        onClose={() => setShowProjectPicker(false)}
+        selected={watchedProject}
         onPick={(key) =>
           setValue('projectType', key as FormData['projectType'], { shouldDirty: true })
         }
+        onClose={() => setShowProjectPicker(false)}
       />
 
-      <PlatformDateTimePicker
+      <DateTimeSheet
         open={showExpectedPicker}
         value={expectedStart ?? new Date()}
         onChange={setExpectedStart}
         onClose={() => setShowExpectedPicker(false)}
+        title="Expected start"
       />
-      <PlatformDateTimePicker
+      <DateTimeSheet
         open={showFollowPicker}
         value={followUp ?? new Date()}
         onChange={setFollowUp}
         onClose={() => setShowFollowPicker(false)}
+        title="Follow-up"
       />
 
       <OrgMemberPickerModal
@@ -596,70 +692,56 @@ export default function AddLeadScreen() {
           setShowAssignPicker(false);
         }}
       />
-    </Screen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  header: {
-    flexDirection: 'row',
+  centered: {
+    flex: 1,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: space.sm,
-    backgroundColor: color.bg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
-  },
-  saveBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: color.primary,
-  },
-  // Unified type scale (matches lead detail + cards)
-  topTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    fontWeight: '600',
-    color: color.text,
-    letterSpacing: -0.1,
-  },
-  saveBtnText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.onPrimary,
-  },
-  bodyText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    lineHeight: 20,
-    color: color.textMuted,
-  },
-  linkAction: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '500',
-    color: color.primary,
+    justifyContent: 'center',
   },
   scroll: {
-    paddingTop: space.md,
-    paddingBottom: space.xl * 2,
+    paddingTop: 8,
+    paddingBottom: 40,
   },
-  fieldError: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    fontWeight: '500',
-    color: color.danger,
-    paddingHorizontal: screenInset,
-    marginTop: -16,
-    marginBottom: 16,
+
+  // Big editable name
+  titleBlock: {
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 4,
   },
-  submitWrap: {
-    paddingHorizontal: 0,
-    marginTop: space.sm,
+  bigName: {
+    paddingTop: 4,
+    paddingBottom: 0,
+    margin: 0,
+    fontWeight: '700',
+  },
+
+  // Status pill row
+  statusBlock: {
+    paddingTop: 18,
+    paddingBottom: 4,
+  },
+  statusLabel: {
+    paddingHorizontal: 32,
+    paddingBottom: 8,
+  },
+  statusRow: {
+    paddingHorizontal: 16,
+    gap: 7,
+  },
+  statusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
 });

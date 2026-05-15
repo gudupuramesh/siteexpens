@@ -15,8 +15,8 @@ import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -50,7 +50,6 @@ export function AcTonnageCalculator({
       (topFloor ? AC_MULTIPLIERS.topFloor : 1) *
       (heavySun ? AC_MULTIPLIERS.heavySunExposure : 1);
 
-    // Round UP to nearest standard size.
     const recommended =
       AC_TON_SIZES.find((s) => s >= adjusted) ??
       AC_TON_SIZES[AC_TON_SIZES.length - 1];
@@ -59,12 +58,7 @@ export function AcTonnageCalculator({
   }, [length, width, height, topFloor, heavySun]);
 
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="AC Tonnage"
-      eyebrow="CLIMATE"
-    >
+    <ToolModal visible={visible} onClose={onClose} title="AC tonnage">
       <Section title="Room dimensions">
         <View style={styles.row3}>
           <View style={styles.col}>
@@ -95,7 +89,7 @@ export function AcTonnageCalculator({
             />
           </View>
         </View>
-        <Text style={styles.hint}>
+        <Text variant="caption1" color="secondary" style={styles.hint}>
           Standard ceiling height is 9–10 ft. Volume ={' '}
           {result ? result.volume.toFixed(0) : '—'} cu ft.
         </Text>
@@ -136,7 +130,7 @@ export function AcTonnageCalculator({
               : undefined
           }
         />
-        <Text style={styles.note}>
+        <Text variant="caption1" color="secondary" style={styles.note}>
           For glass-heavy rooms, kitchens, or rooms with &gt; 4 occupants
           regularly, step up by half a ton. For higher inverter
           efficiency, go one size larger to reduce duty cycle.
@@ -157,84 +151,78 @@ function ToggleRow({
   value: boolean;
   onChange: (v: boolean) => void;
 }) {
+  const t = useThemeV2();
   return (
     <Pressable
       onPress={() => onChange(!value)}
-      style={[styles.toggleRow, value ? styles.toggleRowActive : null]}
+      style={({ pressed }) => [
+        styles.toggleRow,
+        {
+          backgroundColor: value
+            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+            : t.colors.surface,
+          borderRadius: t.radii.field,
+          borderColor: value
+            ? t.palette.blue.base + '33'
+            : (t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'),
+          borderWidth: t.hairline,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
     >
       <View style={{ flex: 1 }}>
-        <Text style={value ? { ...styles.toggleLabel, color: color.primary } : styles.toggleLabel}>
+        <Text
+          variant="callout"
+          style={{
+            color: value ? t.palette.blue.base : t.colors.label,
+            fontWeight: '600',
+          }}
+        >
           {label}
         </Text>
-        <Text style={styles.toggleDesc}>{desc}</Text>
+        <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+          {desc}
+        </Text>
       </View>
       <View
         style={[
           styles.checkBox,
-          value ? styles.checkBoxOn : null,
+          {
+            backgroundColor: value ? t.palette.blue.base : 'transparent',
+            borderColor: value ? t.palette.blue.base : t.colors.tertiary,
+          },
         ]}
       >
-        {value ? (
-          <Ionicons name="checkmark" size={14} color="#fff" />
-        ) : null}
+        {value ? <Ionicons name="checkmark" size={14} color="#fff" /> : null}
       </View>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  row3: { flexDirection: 'row', gap: space.sm },
+  row3: { flexDirection: 'row', gap: 8 },
   col: { flex: 1 },
   hint: {
-    fontSize: 11,
-    color: color.textFaint,
-    fontFamily: fontFamily.sans,
-    marginTop: 4,
+    marginTop: 2,
+    paddingHorizontal: 4,
   },
   note: {
-    fontSize: 11,
-    color: color.textFaint,
-    lineHeight: 16,
     marginTop: 4,
-    fontFamily: fontFamily.sans,
+    paddingHorizontal: 4,
+    lineHeight: 17,
   },
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    padding: space.sm,
-    backgroundColor: color.surface,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-  },
-  toggleRowActive: {
-    backgroundColor: color.primarySoft,
-    borderColor: color.primary,
-  },
-  toggleLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.text,
-  },
-  toggleDesc: {
-    fontSize: 11,
-    color: color.textMuted,
-    marginTop: 2,
+    gap: 12,
+    padding: 14,
   },
   checkBox: {
     width: 22,
     height: 22,
-    borderRadius: 4,
+    borderRadius: 6,
     borderWidth: 1.5,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  checkBoxOn: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
   },
 });

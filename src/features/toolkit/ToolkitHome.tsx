@@ -1,17 +1,28 @@
 /**
- * Toolkit home — grid of cards. Each card launches a module modal.
+ * Toolkit home — v2 design.
  *
- * Modules are intentionally launched as modals (not pushed routes) so
- * we don't have to wire a nested router; everything is local state and
- * fully self-contained inside `src/features/toolkit/`.
+ * Layout:
+ *   1. Single-line header — "Toolkit" title (left) + OrgSwitcher chip (right)
+ *   2. Category FormGroups (Convert / Estimate / Lighting / Climate / Soft Finishes / Layout / Reference)
+ *      Each Row inside a FormGroup is a tool — colored IconTile + title + subtitle + chevron.
+ *
+ * Tools open as modal sheets (each module is self-contained — see
+ * `src/features/toolkit/modules/*`). The grid pattern from v1 (custom
+ * cards in a column) is replaced with grouped FormGroup + Row so the
+ * Toolkit reads like the Account screen — same vocabulary across the app.
  */
 import { useState, type ComponentProps, type ComponentType } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Text } from '@/src/ui/Text';
-import { OrgSwitcherChip } from '@/src/ui/OrgSwitcherChip';
-import { color, fontFamily, radius, space } from '@/src/theme';
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { IconTile } from '@/src/ui/v2/IconTile';
+import { OrgSwitcher } from '@/src/ui/v2/OrgSwitcher';
+import { Row } from '@/src/ui/v2/Row';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { UnitConverter } from './modules/UnitConverter';
 import { TileCalculator } from './modules/TileCalculator';
@@ -62,7 +73,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'converter',
     group: 'Convert',
-    title: 'Unit Converter',
+    title: 'Unit converter',
     subtitle: 'ft / in ↔ mm / cm / m  ·  sq ft ↔ m² ↔ Gaj',
     icon: 'swap-horizontal',
     Component: UnitConverter,
@@ -70,7 +81,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'tile',
     group: 'Estimate',
-    title: 'Tile Calculator',
+    title: 'Tile calculator',
     subtitle: 'Area + size → tiles + 10% wastage',
     icon: 'grid-outline',
     Component: TileCalculator,
@@ -78,7 +89,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'paint',
     group: 'Estimate',
-    title: 'Paint Calculator',
+    title: 'Paint calculator',
     subtitle: 'Wall area − openings → litres needed',
     icon: 'color-palette-outline',
     Component: PaintCalculator,
@@ -86,7 +97,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'plywood',
     group: 'Estimate',
-    title: 'Plywood / Laminate',
+    title: 'Plywood / laminate',
     subtitle: 'Face area → 8×4 ft sheets to order',
     icon: 'albums-outline',
     Component: PlywoodCalculator,
@@ -94,7 +105,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'lighting',
     group: 'Lighting',
-    title: 'Lighting Estimator',
+    title: 'Lighting estimator',
     subtitle: 'Lumens needed · downlight count · K guide',
     icon: 'bulb-outline',
     Component: LightingCalculator,
@@ -102,7 +113,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'ac',
     group: 'Climate',
-    title: 'AC Tonnage',
+    title: 'AC tonnage',
     subtitle: 'Room volume → recommended split-AC size',
     icon: 'snow-outline',
     Component: AcTonnageCalculator,
@@ -110,7 +121,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'wallpaper',
     group: 'Soft Finishes',
-    title: 'Wallpaper Calculator',
+    title: 'Wallpaper calculator',
     subtitle: 'Wall + roll + pattern repeat → rolls to order',
     icon: 'image-outline',
     Component: WallpaperCalculator,
@@ -118,7 +129,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'curtain',
     group: 'Soft Finishes',
-    title: 'Curtain Fabric',
+    title: 'Curtain fabric',
     subtitle: 'Window + fullness → metres of fabric',
     icon: 'browsers-outline',
     Component: CurtainCalculator,
@@ -126,7 +137,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'spacing',
     group: 'Layout',
-    title: 'Equidistant Spacing',
+    title: 'Equidistant spacing',
     subtitle: 'Centre objects evenly across a wall',
     icon: 'resize-outline',
     Component: SpacingCalculator,
@@ -134,7 +145,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'golden',
     group: 'Layout',
-    title: 'Proportion Calculator',
+    title: 'Proportion calculator',
     subtitle: '60 / 30 / 10 split + golden ratio',
     icon: 'analytics-outline',
     Component: GoldenRatioCalculator,
@@ -142,7 +153,7 @@ const MODULES: ModuleDef[] = [
   {
     key: 'dimensions',
     group: 'Reference',
-    title: 'Standard Dimensions',
+    title: 'Standard dimensions',
     subtitle: 'Counter, wardrobe, doors, TV — searchable',
     icon: 'book-outline',
     Component: StandardDimensions,
@@ -160,56 +171,70 @@ const GROUP_ORDER: ModuleGroup[] = [
 ];
 
 export function ToolkitHome() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const [openKey, setOpenKey] = useState<ModuleKey | null>(null);
 
-  // Group modules by section for the home grid.
+  // Group → IconTile colour. 90/10 colour discipline: tool groups are
+  // categorical labels, not actionable status, so they all read in the
+  // neutral secondary tone. The icon glyph + section header tell the user
+  // which group a tile belongs to.
+  const groupColor: Record<ModuleGroup, string> = {
+    Convert:        t.colors.secondary,
+    Estimate:       t.colors.secondary,
+    Lighting:       t.colors.secondary,
+    Climate:        t.colors.secondary,
+    'Soft Finishes': t.colors.secondary,
+    Layout:         t.colors.secondary,
+    Reference:      t.colors.secondary,
+  };
+
   const byGroup = GROUP_ORDER.map((g) => ({
     group: g,
     items: MODULES.filter((m) => m.group === g),
   }));
 
   return (
-    <View style={styles.flex}>
+    <View style={styles.root}>
+      <AmbientBackground />
+
+      {/* Single-line header: "Toolkit" title (left) + OrgSwitcher (right) */}
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <Text variant="title2" color="label" style={{ fontWeight: '700' }}>
+          Toolkit
+        </Text>
+        <OrgSwitcher />
+      </View>
+
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={[
+          styles.scroll,
+          { paddingBottom: t.region.tabBarBuffer + 24 },
+        ]}
         showsVerticalScrollIndicator={false}
       >
-        <View style={styles.hero}>
-          {/* Eyebrow + chip share a row so the studio name reads on
-              the right at the same level as the section label on
-              the left — matches the competitor pattern + reduces
-              the empty-space-at-top complaint. */}
-          <View style={styles.eyebrowRow}>
-            <Text style={styles.heroEyebrow}>SITEEXPENS · TOOLKIT</Text>
-            <OrgSwitcherChip />
-          </View>
-          <Text variant="largeTitle">On-site Toolkit</Text>
-          <Text variant="meta" color="textMuted" style={styles.heroSub}>
-            Quick utility calculators for designers in the field —
-            convert units, estimate materials, plan layouts.
-          </Text>
-        </View>
-
         {byGroup.map(({ group, items }) => (
-          <View key={group} style={styles.groupWrap}>
-            <Text style={styles.groupTitle}>{group.toUpperCase()}</Text>
-            <View style={styles.grid}>
-              {items.map((m) => (
-                <ToolCard
-                  key={m.key}
-                  title={m.title}
-                  subtitle={m.subtitle}
-                  icon={m.icon}
-                  onPress={() => setOpenKey(m.key)}
-                />
-              ))}
-            </View>
-          </View>
+          <FormGroup key={group} header={group}>
+            {items.map((m, idx) => (
+              <Row
+                key={m.key}
+                leading={
+                  <IconTile icon={m.icon} color={groupColor[group]} />
+                }
+                label={m.title}
+                subtitle={m.subtitle}
+                chevron
+                onPress={() => setOpenKey(m.key)}
+                divider={idx < items.length - 1}
+              />
+            ))}
+          </FormGroup>
         ))}
       </ScrollView>
 
-      {/* Render every module modal at once — visibility is gated by
-          state. React mounts/unmounts the underlying Modal natively. */}
+      {/* Render every module modal at once — visibility is gated by state.
+          React mounts/unmounts the underlying Modal natively. */}
       {MODULES.map((m) => (
         <m.Component
           key={m.key}
@@ -221,110 +246,18 @@ export function ToolkitHome() {
   );
 }
 
-function ToolCard({
-  title,
-  subtitle,
-  icon,
-  onPress,
-}: {
-  title: string;
-  subtitle: string;
-  icon: IconName;
-  onPress: () => void;
-}) {
-  return (
-    <Pressable
-      onPress={onPress}
-      style={({ pressed }) => [styles.card, pressed && { opacity: 0.85 }]}
-    >
-      <View style={styles.cardIconWrap}>
-        <Ionicons name={icon} size={20} color={color.primary} />
-      </View>
-      <View style={styles.cardBody}>
-        <Text style={styles.cardTitle} numberOfLines={1}>{title}</Text>
-        <Text style={styles.cardSub} numberOfLines={2}>{subtitle}</Text>
-      </View>
-      <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
-    </Pressable>
-  );
-}
-
-const GUTTER = 16;
-
 const styles = StyleSheet.create({
-  flex: { flex: 1, backgroundColor: color.bg },
-  scroll: { paddingTop: 14, paddingBottom: 60 },
-
-  hero: {
-    paddingHorizontal: GUTTER,
-    paddingBottom: space.md,
-    gap: 4,
+  root: {
+    flex: 1,
   },
-  eyebrowRow: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: space.sm,
-    marginBottom: 2,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
   },
-  heroEyebrow: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 1.4,
-    flexShrink: 1,
-  },
-  heroSub: { marginTop: 2 },
-
-  groupWrap: {
-    marginTop: space.md,
-    paddingHorizontal: GUTTER,
-    gap: space.xs,
-  },
-  groupTitle: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 1.4,
-    marginBottom: 4,
-  },
-
-  grid: {
-    gap: 8,
-  },
-
-  card: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    padding: space.md,
-    backgroundColor: color.surface,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-  },
-  cardIconWrap: {
-    width: 36,
-    height: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: color.primarySoft,
-    borderRadius: radius.sm,
-  },
-  cardBody: { flex: 1, gap: 2 },
-  cardTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    fontWeight: '600',
-    color: color.text,
-    letterSpacing: -0.1,
-  },
-  cardSub: {
-    fontFamily: fontFamily.sans,
-    fontSize: 12,
-    color: color.textMuted,
-    lineHeight: 16,
+  scroll: {
+    paddingTop: 0,
   },
 });

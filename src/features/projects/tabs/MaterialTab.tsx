@@ -1,3 +1,12 @@
+/**
+ * Material tab — v2 design.
+ *
+ * Layout:
+ *   1. Filter chip rail (All / Pending / Approved / Rejected) + library btn
+ *   2. Value KPI strip — Required now (pending) · Visible value
+ *   3. List of material-request cards (icon + title + items + audit + amount + pill)
+ *   4. FAB — New material request (per material.request.write capability)
+ */
 import { useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,10 +21,11 @@ import { useOrgMembers } from '@/src/features/org/useOrgMembers';
 import { useProject } from '@/src/features/projects/useProject';
 import { formatInr } from '@/src/lib/format';
 import { Can } from '@/src/ui/Can';
-import { Text } from '@/src/ui/Text';
-import { Separator } from '@/src/ui/Separator';
-import { TutorialEmptyState } from '@/src/ui/TutorialEmptyState';
-import { color, radius, screenInset, shadow, space } from '@/src/theme';
+
+import { FAB } from '@/src/ui/v2/FAB';
+import { IconTile } from '@/src/ui/v2/IconTile';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const FILTERS: { key: string; label: string }[] = [
   { key: '', label: 'All' },
@@ -23,22 +33,6 @@ const FILTERS: { key: string; label: string }[] = [
   { key: 'approved', label: 'Approved' },
   { key: 'rejected', label: 'Rejected' },
 ];
-
-function statusBadge(status: MaterialRequestStatus) {
-  switch (status) {
-    case 'pending': return { bg: color.warningSoft, fg: color.warning, label: 'Pending' };
-    case 'approved': return { bg: color.successSoft, fg: color.success, label: 'Approved' };
-    case 'rejected': return { bg: color.dangerSoft, fg: color.danger, label: 'Rejected' };
-    default: return { bg: color.primarySoft, fg: color.primary, label: 'Draft' };
-  }
-}
-
-function formatDateTime(ts: MaterialRequest['createdAt'] | null | undefined): string {
-  if (!ts) return '—';
-  const dt = ts.toDate();
-  return dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
-    + ` · ${dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`;
-}
 
 function compactDateTime(ts: MaterialRequest['createdAt'] | null | undefined): string {
   if (!ts) return '—';
@@ -55,7 +49,7 @@ function RequestRow({
   projectId: string;
   getMemberLabel: (uid?: string) => string;
 }) {
-  const badge = statusBadge(item.status);
+  const t = useThemeV2();
   const dateStr = item.createdAt
     ? item.createdAt.toDate().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
     : '—';
@@ -64,47 +58,130 @@ function RequestRow({
   const approvedBy = getMemberLabel(item.approvedBy);
   const requestedAtText = compactDateTime(item.createdAt);
   const approvedAtText = compactDateTime(item.approvedAt);
+
+  const statusTone =
+    item.status === 'pending'
+      ? { fg: t.palette.orange.base, bg: t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft, label: 'PENDING' }
+      : item.status === 'approved'
+        ? { fg: t.palette.green.base, bg: t.mode === 'dark' ? t.palette.green.softDark : t.palette.green.soft, label: 'APPROVED' }
+        : item.status === 'rejected'
+          ? { fg: t.palette.red.base, bg: t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft, label: 'REJECTED' }
+          : { fg: t.palette.blue.base, bg: t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft, label: 'DRAFT' };
+
   return (
     <Pressable
-      onPress={() => router.push(`/(app)/projects/${projectId}/material-request/${item.id}` as never)}
-      style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+      onPress={() =>
+        router.push(`/(app)/projects/${projectId}/material-request/${item.id}` as never)
+      }
+      style={({ pressed }) => [
+        styles.row,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: t.radii.card,
+          borderColor:
+            t.mode === 'dark'
+              ? 'rgba(255,255,255,0.05)'
+              : 'rgba(0,0,0,0.04)',
+          borderWidth: t.hairline,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
     >
-      <View style={styles.iconWrap}>
-        <Ionicons name="document-text-outline" size={18} color={color.primary} />
-      </View>
-      <View style={styles.rowBody}>
-        <Text variant="rowTitle" color="text" numberOfLines={1}>{item.title || 'Material Request'}</Text>
-        <Text variant="meta" color="textMuted" numberOfLines={1}>
-          {item.items.length} item{item.items.length !== 1 ? 's' : ''} · {dateStr}
-          {item.status === 'approved' && receivedCount > 0 ? ` · ${receivedCount}/${item.items.length} received` : ''}
-        </Text>
-        <View style={styles.metaIconRow}>
-          <Ionicons name="person-outline" size={12} color={color.textFaint} />
-          <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.compactMetaLine}>
-            Req: {requestedBy} · {requestedAtText}
+      <View style={styles.rowTop}>
+        <IconTile icon="document-text-outline" color={t.palette.blue.base} size={36} />
+        <View style={styles.rowBody}>
+          <View style={styles.titleLine}>
+            <Text
+              variant="callout"
+              color="label"
+              style={{ flex: 1, fontWeight: '700' }}
+              numberOfLines={1}
+            >
+              {item.title || 'Material request'}
+            </Text>
+            <Text
+              variant="callout"
+              color="label"
+              style={{
+                fontWeight: '700',
+                fontVariant: ['tabular-nums'],
+                marginLeft: 8,
+              }}
+              numberOfLines={1}
+            >
+              {formatInr(item.totalValue)}
+            </Text>
+          </View>
+          <Text
+            variant="caption1"
+            color="secondary"
+            numberOfLines={1}
+            style={{ marginTop: 2 }}
+          >
+            {item.items.length} item{item.items.length !== 1 ? 's' : ''} · {dateStr}
+            {item.status === 'approved' && receivedCount > 0
+              ? ` · ${receivedCount}/${item.items.length} received`
+              : ''}
           </Text>
         </View>
-        {item.status === 'approved' ? (
-          <View style={styles.metaIconRow}>
-            <Ionicons name="checkmark-circle-outline" size={12} color={color.success} />
-            <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.compactMetaLine}>
-              Apr: {approvedBy} · {approvedAtText}
-            </Text>
-          </View>
-        ) : null}
-        {item.status === 'rejected' ? (
-          <View style={styles.metaIconRow}>
-            <Ionicons name="close-circle-outline" size={12} color={color.danger} />
-            <Text variant="caption" color="danger" numberOfLines={1} style={styles.compactMetaLine}>
-              {item.rejectionNote || 'Rejected'}
-            </Text>
-          </View>
-        ) : null}
       </View>
-      <View style={styles.rowTrailing}>
-        <Text variant="metaStrong" color="text">{formatInr(item.totalValue)}</Text>
-        <View style={[styles.statusBadge, { backgroundColor: badge.bg }]}>
-          <Text variant="caption" style={{ color: badge.fg }}>{badge.label}</Text>
+
+      {/* Audit lines + status pill */}
+      <View style={styles.auditRow}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <View style={styles.metaIconRow}>
+            <Ionicons name="person-outline" size={11} color={t.colors.tertiary} />
+            <Text
+              variant="caption2"
+              color="secondary"
+              numberOfLines={1}
+              style={{ marginLeft: 4 }}
+            >
+              Req: {requestedBy} · {requestedAtText}
+            </Text>
+          </View>
+          {item.status === 'approved' ? (
+            <View style={styles.metaIconRow}>
+              <Ionicons name="checkmark-circle" size={11} color={t.palette.green.base} />
+              <Text
+                variant="caption2"
+                color="secondary"
+                numberOfLines={1}
+                style={{ marginLeft: 4 }}
+              >
+                Apr: {approvedBy} · {approvedAtText}
+              </Text>
+            </View>
+          ) : null}
+          {item.status === 'rejected' ? (
+            <View style={styles.metaIconRow}>
+              <Ionicons name="close-circle" size={11} color={t.palette.red.base} />
+              <Text
+                variant="caption2"
+                style={{ color: t.palette.red.base, marginLeft: 4 }}
+                numberOfLines={1}
+              >
+                {item.rejectionNote || 'Rejected'}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+        <View
+          style={[
+            styles.statusPill,
+            { backgroundColor: statusTone.bg, borderRadius: 999 },
+          ]}
+        >
+          <Text
+            variant="caption2"
+            style={{
+              color: statusTone.fg,
+              fontWeight: '700',
+              letterSpacing: 0.4,
+            }}
+          >
+            {statusTone.label}
+          </Text>
         </View>
       </View>
     </Pressable>
@@ -112,6 +189,7 @@ function RequestRow({
 }
 
 export function MaterialTab() {
+  const t = useThemeV2();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { data: project } = useProject(projectId);
   const { members } = useOrgMembers(project?.orgId);
@@ -132,69 +210,102 @@ export function MaterialTab() {
     if (!uid) return 'Unknown';
     if (uid === project?.ownerId) return membersByUid.get(uid)?.displayName ?? 'Owner';
     if (project?.approverIds?.includes(uid)) return membersByUid.get(uid)?.displayName ?? 'Approver';
-    return membersByUid.get(uid)?.displayName ?? 'Team member';
+    return membersByUid.get(uid)?.displayName ?? 'Team';
   };
 
   return (
     <View style={styles.container}>
-      {/* Filter chips */}
+      {/* Filter chip rail */}
       <View style={styles.filterRow}>
         {FILTERS.map((f) => {
           const active = filter === f.key;
           return (
             <Pressable
-              key={f.key}
+              key={f.key || 'all'}
               onPress={() => setFilter(f.key)}
-              style={[styles.filterChip, active && styles.filterChipActive]}
+              hitSlop={6}
+              style={({ pressed }) => [
+                styles.filterChip,
+                {
+                  backgroundColor: active
+                    ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                    : t.colors.fill3,
+                  borderRadius: 999,
+                  borderColor: active ? t.palette.blue.base + '33' : 'transparent',
+                  borderWidth: active ? 1 : 0,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
             >
-              <Text variant="caption" style={{ color: active ? '#fff' : color.text }}>
-                {f.label}
+              <Text
+                variant="caption2"
+                style={{
+                  color: active ? t.palette.blue.base : t.colors.secondary,
+                  fontWeight: active ? '700' : '600',
+                  letterSpacing: 0.3,
+                }}
+              >
+                {f.label.toUpperCase()}
               </Text>
             </Pressable>
           );
         })}
-
-        {/* Library button */}
         <Pressable
           onPress={() => router.push('/(app)/material-library' as never)}
-          style={styles.libraryBtn}
           hitSlop={8}
+          style={({ pressed }) => [
+            styles.libraryBtn,
+            {
+              backgroundColor: t.colors.surface,
+              borderRadius: 999,
+              borderColor:
+                t.mode === 'dark'
+                  ? 'rgba(255,255,255,0.06)'
+                  : 'rgba(0,0,0,0.05)',
+              borderWidth: t.hairline,
+            },
+            pressed && { opacity: 0.7 },
+          ]}
+          accessibilityLabel="Material library"
         >
-          <Ionicons name="library-outline" size={18} color={color.primary} />
+          <Ionicons name="library-outline" size={16} color={t.palette.blue.base} />
         </Pressable>
       </View>
 
-      <View style={styles.valueCard}>
-        <View style={styles.valueRow}>
-          <Text variant="caption" color="textMuted">REQUIRED NOW (PENDING)</Text>
-          <Text variant="bodyStrong" color="primary">{formatInr(requiredNowValue)}</Text>
-        </View>
-        <View style={styles.valueDivider} />
-        <View style={styles.valueRow}>
-          <Text variant="caption" color="textMuted">VISIBLE REQUEST VALUE</Text>
-          <Text variant="metaStrong" color="text">{formatInr(visibleTotalValue)}</Text>
-        </View>
+      {/* Value KPI strip */}
+      <View style={styles.kpiRow}>
+        <KpiTile
+          label="REQUIRED NOW"
+          value={formatInr(requiredNowValue)}
+          tone={t.palette.orange.base}
+          bg={t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft}
+        />
+        <KpiTile
+          label="VISIBLE VALUE"
+          value={formatInr(visibleTotalValue)}
+          tone={t.colors.label}
+          bg={t.colors.fill3}
+        />
       </View>
 
       {loading && data.length === 0 ? (
         <View style={styles.empty}>
-          <Text variant="meta" color="textMuted">Loading…</Text>
+          <Text variant="footnote" color="secondary">Loading…</Text>
         </View>
       ) : data.length === 0 ? (
-        <TutorialEmptyState
-          pageKey="material_requests"
-          fallback={
-            <View style={styles.empty}>
-              <Ionicons name="cube-outline" size={32} color={color.textFaint} />
-              <Text variant="bodyStrong" color="text" style={styles.emptyTitle}>
-                No material requests
-              </Text>
-              <Text variant="meta" color="textMuted" align="center" style={{ maxWidth: 280 }}>
-                Create a material request, get it approved, and share with your supplier.
-              </Text>
-            </View>
-          }
-        />
+        <View style={styles.empty}>
+          <Ionicons name="cube-outline" size={32} color={t.colors.tertiary} />
+          <Text variant="callout" color="label" style={{ marginTop: 12, fontWeight: '600' }}>
+            No material requests
+          </Text>
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 4, textAlign: 'center', paddingHorizontal: 32, maxWidth: 320 }}
+          >
+            Create a material request, get it approved, and share it with your supplier.
+          </Text>
+        </View>
       ) : (
         <FlatList
           data={data}
@@ -202,143 +313,188 @@ export function MaterialTab() {
           renderItem={({ item }) => (
             <RequestRow item={item} projectId={projectId!} getMemberLabel={getMemberLabel} />
           )}
-          ItemSeparatorComponent={Separator}
+          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={refresh} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={refresh}
+              tintColor={t.palette.blue.base}
+            />
           }
         />
       )}
 
-      {/* FAB — anyone allowed to mark attendance can raise a request. */}
+      {/* FAB */}
       <Can capability="material.request.write">
-        <Pressable
+        <FAB
+          icon="add"
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             router.push(`/(app)/projects/${projectId}/add-material-request` as never);
           }}
-          style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
+          bottomOffset={24}
           accessibilityLabel="New material request"
-        >
-          <Ionicons name="add" size={24} color={color.onPrimary} />
-        </Pressable>
+        />
       </Can>
     </View>
   );
 }
 
+function KpiTile({
+  label,
+  value,
+  tone,
+  bg,
+}: {
+  label: string;
+  value: string;
+  tone: string;
+  bg: string;
+}) {
+  const t = useThemeV2();
+  return (
+    <View
+      style={[
+        styles.kpiTile,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: t.radii.card,
+          borderColor:
+            t.mode === 'dark'
+              ? 'rgba(255,255,255,0.05)'
+              : 'rgba(0,0,0,0.04)',
+          borderWidth: t.hairline,
+        },
+      ]}
+    >
+      <View style={[styles.kpiDot, { backgroundColor: bg }]}>
+        <View style={[styles.kpiDotInner, { backgroundColor: tone }]} />
+      </View>
+      <View style={styles.kpiText}>
+        <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4, fontSize: 9 }}>
+          {label}
+        </Text>
+        <Text
+          variant="footnote"
+          style={{
+            color: tone,
+            fontWeight: '700',
+            fontVariant: ['tabular-nums'],
+            marginTop: 1,
+          }}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+        >
+          {value}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: color.bgGrouped },
+  container: { flex: 1 },
+
+  // Filter chip rail
   filterRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.xs,
-    backgroundColor: color.bgGrouped,
-    gap: space.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+    gap: 6,
   },
   filterChip: {
-    paddingHorizontal: space.sm,
-    minHeight: 36,
-    justifyContent: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-  },
-  filterChipActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
   libraryBtn: {
     marginLeft: 'auto',
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
+    width: 30,
+    height: 30,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  valueCard: {
-    marginHorizontal: screenInset,
-    marginTop: 8,
-    marginBottom: 6,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    borderRadius: 10,
+
+  // KPI strip
+  kpiRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    gap: 8,
   },
-  valueRow: {
+  kpiTile: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
   },
-  valueDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.borderStrong,
-    marginVertical: 8,
+  kpiDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  kpiDotInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  kpiText: {
+    flex: 1,
+    minWidth: 0,
+  },
+
+  // List
+  listContent: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 100,
   },
   row: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  rowTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.md,
-    backgroundColor: color.surface,
-    gap: space.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    borderRadius: 10,
-    marginHorizontal: screenInset,
-    marginVertical: 4,
+    gap: 12,
   },
-  iconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: radius.sm,
-    backgroundColor: color.primarySoft,
-    alignItems: 'center',
-    justifyContent: 'center',
+  rowBody: {
+    flex: 1,
+    minWidth: 0,
   },
-  rowBody: { flex: 1, minWidth: 0, gap: 2 },
+  titleLine: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+
+  auditRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 8,
+    marginTop: 8,
+  },
   metaIconRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    marginTop: 1,
   },
-  compactMetaLine: { letterSpacing: 0.2 },
-  rowTrailing: { alignItems: 'flex-end', gap: 4 },
-  statusBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: radius.pill,
+  statusPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
   },
-  listContent: { paddingBottom: 80, paddingTop: 2 },
+
   empty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: screenInset * 2,
-    gap: space.xs,
-  },
-  emptyTitle: { marginTop: space.xxs },
-  fab: {
-    position: 'absolute',
-    right: screenInset,
-    bottom: space.xl,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: color.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadow.fab,
+    paddingHorizontal: 32,
   },
 });

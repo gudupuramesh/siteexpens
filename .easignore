@@ -1,0 +1,77 @@
+# EAS build snapshot ignores.
+#
+# When this file exists, EAS *ignores .gitignore entirely* and uses this
+# list instead. So the contents must mirror .gitignore EXCEPT for files
+# the build needs that we deliberately keep out of git — namely the
+# Firebase config (google-services.json / GoogleService-Info.plist) which
+# expo-config-plugins copies into android/app/ and ios/ during prebuild.
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env
+.env.local
+.env*.local
+
+# Firebase build artefacts (config JSON/PLIST are intentionally NOT listed
+# here — prebuild needs them. They stay out of git via .gitignore only.)
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+functions/lib/
+functions/node_modules/
+
+# typescript
+*.tsbuildinfo
+
+app-example
+
+# generated native folders — prebuild regenerates these from app.json
+/ios
+/android
+
+# local IDE / agent state
+.claude/
+.cursor/
+.idea/
+.vscode/
+
+# local dev artifacts
+expo-dev-*
+*.html.zip
+
+# secrets folder (kept OUTSIDE the repo at ~/secrets/, this guard is belt-and-suspenders)
+/secrets/
+secrets/
+
+# release signing properties (sensitive)
+keystore.properties
+*.keystore

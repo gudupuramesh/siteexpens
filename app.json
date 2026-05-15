@@ -2,19 +2,19 @@
   "expo": {
     "name": "Interior OS",
     "slug": "siteexpens",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "siteexpens",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "privacy": "public",
-    "privacyPolicy": "https://siteexpens.com/privacy",
-    "termsOfService": "https://siteexpens.com/terms",
+    "privacyPolicy": "https://interioros.app/privacy-policy.html",
+    "termsOfService": "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.siteexpens.app",
-      "buildNumber": "11",
+      "buildNumber": "13",
       "googleServicesFile": "./GoogleService-Info.plist",
       "appleTeamId": "QWW8YD6KZV",
       "infoPlist": {
@@ -23,7 +23,7 @@
     },
     "android": {
       "package": "com.siteexpens.app",
-      "versionCode": 11,
+      "versionCode": 12,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#ffffff",

@@ -18,6 +18,7 @@ import {
   Alert,
   FlatList,
   Pressable,
+  RefreshControl,
   StyleSheet,
   View,
 } from 'react-native';
@@ -32,7 +33,8 @@ import { monthKey } from '@/src/features/staff/types';
 import { useStaff } from '@/src/features/staff/useStaff';
 import { useStaffAttendance } from '@/src/features/staff/useStaffAttendance';
 import { generatePaySlip } from '@/src/features/finance/reports/paySlipPdf';
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
 import { color, fontFamily, screenInset, space } from '@/src/theme';
 
 function startOfMonth(d: Date): Date {
@@ -56,6 +58,7 @@ function fmtMonth(d: Date): string {
 
 export function PayrollTab() {
   const insets = useSafeAreaInsets();
+  const refresh = usePullToRefresh();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? undefined;
   const { can } = usePermissions();
@@ -153,15 +156,15 @@ export function PayrollTab() {
         style={({ pressed }) => [styles.row, pressed && { opacity: 0.85 }]}
       >
         <View style={styles.avatar}>
-          <Text variant="metaStrong" style={{ color: color.primary }}>
+          <Text variant="footnote" style={{ color: color.primary }}>
             {item.staff.name.charAt(0).toUpperCase() || '?'}
           </Text>
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text variant="rowTitle" color="text" numberOfLines={1}>
+          <Text variant="callout" color="label" numberOfLines={1}>
             {item.staff.name}
           </Text>
-          <Text variant="meta" color="textMuted" numberOfLines={1}>
+          <Text variant="caption1" color="secondary" numberOfLines={1}>
             {item.staff.role || 'Staff'}
             {' · '}
             {item.presentDays}P
@@ -220,8 +223,8 @@ export function PayrollTab() {
           <Ionicons name="chevron-back" size={18} color={color.text} />
         </Pressable>
         <View style={styles.monthLabelWrap}>
-          <Text variant="rowTitle" color="text">{fmtMonth(month)}</Text>
-          <Text variant="meta" color="textMuted" style={{ marginTop: 1 }}>
+          <Text variant="callout" color="label">{fmtMonth(month)}</Text>
+          <Text variant="caption1" color="secondary" style={{ marginTop: 1 }}>
             {activeStaff.length === 0
               ? 'No active staff'
               : `${activeStaff.length} staff · ${unpostedRows.length} pending`}
@@ -251,12 +254,16 @@ export function PayrollTab() {
         data={rows}
         keyExtractor={(r) => r.staff.id}
         renderItem={renderRow}
+        refreshControl={<RefreshControl {...refresh.props} />}
         ListHeaderComponent={
           <View>
+            {/* Pending / Posted KPI strip — both values in neutral label
+                colour per the 90/10 discipline. The labels (PENDING /
+                POSTED) carry the meaning. */}
             <View style={styles.summaryCard}>
               <View style={styles.summaryCell}>
                 <Text style={styles.summaryLabel}>PENDING</Text>
-                <Text style={[styles.summaryValue, { color: color.primary }]}>
+                <Text style={[styles.summaryValue, { color: color.text }]}>
                   {inrCompact(totalPayable)}
                 </Text>
                 <Text style={styles.summaryFootnote}>{unpostedRows.length} staff</Text>
@@ -264,7 +271,7 @@ export function PayrollTab() {
               <View style={styles.summaryDivider} />
               <View style={styles.summaryCell}>
                 <Text style={styles.summaryLabel}>POSTED</Text>
-                <Text style={[styles.summaryValue, { color: color.success }]}>
+                <Text style={[styles.summaryValue, { color: color.text }]}>
                   {inrCompact(totalPosted)}
                 </Text>
                 <Text style={styles.summaryFootnote}>{postedRows.length} staff</Text>
@@ -282,10 +289,10 @@ export function PayrollTab() {
           ) : (
             <View style={styles.empty}>
               <Ionicons name="people-outline" size={28} color={color.textFaint} />
-              <Text variant="bodyStrong" color="text" style={{ marginTop: space.xs }}>
+              <Text variant="headline" color="label" style={{ marginTop: space.xs }}>
                 No active staff
               </Text>
-              <Text variant="meta" color="textMuted" align="center" style={{ marginTop: 4 }}>
+              <Text variant="caption1" color="secondary" style={{ marginTop: 4, textAlign: "center" }}>
                 Add staff in the Staff tab to start tracking payroll.
               </Text>
             </View>
@@ -317,7 +324,7 @@ export function PayrollTab() {
             ) : (
               <>
                 <Ionicons name="send-outline" size={16} color={color.onPrimary} />
-                <Text variant="bodyStrong" color="onPrimary">
+                <Text variant="headline" color="onPrimary">
                   Post payroll · {inrCompact(totalPayable)}
                 </Text>
               </>
@@ -361,9 +368,8 @@ const styles = StyleSheet.create({
     backgroundColor: color.primarySoft,
   },
   todayChipText: {
-    fontFamily: fontFamily.sans,
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.primary,
     letterSpacing: 0.8,
   },
@@ -382,31 +388,29 @@ const styles = StyleSheet.create({
   summaryCell: { flex: 1, paddingVertical: 12, paddingHorizontal: 12, gap: 4 },
   summaryDivider: { width: StyleSheet.hairlineWidth, backgroundColor: color.borderStrong },
   summaryLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.2,
   },
   summaryValue: {
-    fontFamily: fontFamily.mono,
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.text,
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.3,
   },
   summaryFootnote: {
-    fontFamily: fontFamily.sans,
     fontSize: 10,
     color: color.textFaint,
   },
 
   // Section label
   sectionLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.4,
     paddingHorizontal: screenInset,
@@ -440,9 +444,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   amount: {
-    fontFamily: fontFamily.mono,
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.text,
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.2,
@@ -456,9 +459,9 @@ const styles = StyleSheet.create({
     borderColor: color.success,
   },
   postedPillText: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
-    fontWeight: '800',
+    fontWeight: '600',
     color: color.success,
     letterSpacing: 0.8,
   },

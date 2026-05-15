@@ -1,15 +1,20 @@
 /**
- * Numeric input field. Keeps its own raw string value (so the user can
- * type "0.", "12.", clear it, etc. without React stomping on caret),
- * and reports parsed numbers via `onChangeNumber`.
+ * v2 NumberField — labelled numeric input card.
  *
- * Empty input → emits `null` so callers can decide whether to show a
- * blank result or 0.
+ * Visual: surface card (radii.field, hairline border, surface bg) with a
+ * caption label up top, a callout/title-sized number input in the middle,
+ * a tertiary unit chip pinned right, and an optional secondary hint
+ * caption below.
+ *
+ * Keeps its own raw string value so the user can type "0.", "12.",
+ * clear it, etc. without React stomping on the caret. Empty input → emits
+ * `null` via the centralised `parseNum` helper so callers can decide
+ * whether to show a blank result or 0.
  */
 import { StyleSheet, TextInput, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 export type NumberFieldProps = {
   label: string;
@@ -37,11 +42,11 @@ export function NumberField({
   placeholder = '0',
   decimal = true,
 }: NumberFieldProps) {
-  function sanitize(t: string) {
-    // Strip everything that isn't a digit or (optionally) one dot.
-    let cleaned = t.replace(decimal ? /[^0-9.]/g : /[^0-9]/g, '');
+  const t = useThemeV2();
+
+  function sanitize(raw: string) {
+    let cleaned = raw.replace(decimal ? /[^0-9.]/g : /[^0-9]/g, '');
     if (decimal) {
-      // Collapse multiple dots to the first one.
       const firstDot = cleaned.indexOf('.');
       if (firstDot !== -1) {
         cleaned =
@@ -53,20 +58,69 @@ export function NumberField({
   }
 
   return (
-    <View style={styles.wrap}>
-      <Text style={styles.label}>{label}</Text>
-      <View style={[styles.inputRow, size === 'lg' && styles.inputRowLg]}>
-        <TextInput
-          value={value}
-          onChangeText={sanitize}
-          placeholder={placeholder}
-          placeholderTextColor={color.textFaint}
-          keyboardType={decimal ? 'decimal-pad' : 'number-pad'}
-          style={[styles.input, size === 'lg' && styles.inputLg]}
-        />
-        {unit ? <Text style={styles.unit}>{unit}</Text> : null}
+    <View>
+      <View
+        style={[
+          styles.card,
+          {
+            backgroundColor: t.colors.surface,
+            borderRadius: t.radii.field,
+            borderColor:
+              t.mode === 'dark'
+                ? 'rgba(255,255,255,0.05)'
+                : 'rgba(0,0,0,0.04)',
+            borderWidth: t.hairline,
+            paddingVertical: size === 'lg' ? 12 : 10,
+            paddingHorizontal: 14,
+          },
+        ]}
+      >
+        <Text
+          variant="caption2"
+          color="tertiary"
+          style={{ letterSpacing: 0.5 }}
+        >
+          {label.toUpperCase()}
+        </Text>
+
+        <View style={styles.row}>
+          <TextInput
+            value={value}
+            onChangeText={sanitize}
+            placeholder={placeholder}
+            placeholderTextColor={t.colors.tertiary}
+            keyboardType={decimal ? 'decimal-pad' : 'number-pad'}
+            style={[
+              styles.input,
+              size === 'lg' ? t.type.title2 : t.type.headline,
+              {
+                color: t.colors.label,
+                fontVariant: ['tabular-nums'],
+                fontWeight: '700',
+              },
+            ]}
+          />
+          {unit ? (
+            <Text
+              variant="footnote"
+              color="tertiary"
+              style={{ marginLeft: 6, fontWeight: '600' }}
+            >
+              {unit}
+            </Text>
+          ) : null}
+        </View>
       </View>
-      {hint ? <Text style={styles.hint}>{hint}</Text> : null}
+
+      {hint ? (
+        <Text
+          variant="caption1"
+          color="secondary"
+          style={styles.hint}
+        >
+          {hint}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -82,49 +136,20 @@ export function parseNum(s: string): number | null {
 }
 
 const styles = StyleSheet.create({
-  wrap: { gap: 6 },
-  label: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.textMuted,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
+  card: {
+    gap: 4,
   },
-  inputRow: {
+  row: {
     flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: color.surface,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.sm,
+    alignItems: 'baseline',
   },
-  inputRowLg: { paddingHorizontal: space.md },
   input: {
     flex: 1,
-    fontFamily: fontFamily.sans,
-    fontSize: 16,
-    fontWeight: '600',
-    color: color.text,
-    paddingVertical: 12,
-  },
-  inputLg: {
-    fontSize: 22,
-    paddingVertical: 16,
-    fontVariant: ['tabular-nums'],
-  },
-  unit: {
-    fontFamily: fontFamily.mono,
-    fontSize: 12,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 0.6,
-    marginLeft: 8,
+    paddingVertical: 4,
+    margin: 0,
   },
   hint: {
-    fontSize: 11,
-    color: color.textFaint,
-    marginTop: 2,
+    marginTop: 6,
+    paddingHorizontal: 4,
   },
 });

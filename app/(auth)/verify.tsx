@@ -1,51 +1,57 @@
 /**
- * OTP verification screen — InteriorOS aesthetic.
+ * OTP verification — restored InteriorScene background, iOS 26 styled card.
  *
- * Layout (top to bottom):
- *   - Small back-button (rounded square, top-left) — wires to
- *     `router.back()` (also clears the pending confirmation).
- *   - GlassCard centred vertically with:
- *       - "Verify OTP" serif h2
- *       - Subtitle "Enter the 6-digit code sent to" + bold phone
- *       - <OtpDigits /> — 6 boxes, auto-advance + paste support
- *       - "Verify & Continue" primary button
- *       - Resend row: "Didn't receive it? Resend in {n}s" → tappable
- *         "Resend OTP" once the 30s timer hits 0
- *   - HYDERABAD · 2026 stamp footer (provided by AuthChrome)
+ * Background: full-bleed `<InteriorScene/>` illustration so the auth
+ * flow reads as one consistent space.
  *
- * Logic preserved from the previous version:
+ * Foreground: iOS-style glass card with rounded back chevron above it,
+ * serif "Verify OTP" title, masked phone subtitle, six-box OTP input,
+ * full-width pill Verify button, and a 30-second resend countdown.
+ *
+ * Logic preserved:
  *   - Auto-focus on mount (handled by OtpDigits' `autoFocus`)
  *   - Digit-only input, max 6
  *   - SMS auto-fill on iOS + Android (handled inside OtpDigits)
  *   - 30-second resend countdown
- *   - "Resend" routes back to sign-in (same flow as before)
+ *   - "Resend" routes back to sign-in (clears pendingConfirmation)
  *   - `confirmOtp` + Firebase custom-token sign-in
  *   - Session-expired error when no pending confirmation
- *
- * Auto-submit when six digits are entered — saves the user from
- * tapping the button after typing/pasting the code.
+ *   - Auto-submit when six digits are entered
  */
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { Platform, Pressable, StyleSheet, View } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { confirmOtp } from '@/src/features/auth/phoneAuth';
 import {
   getPendingConfirmation,
   setPendingConfirmation,
 } from '@/src/features/auth/pendingConfirmation';
-import { Button } from '@/src/ui/Button';
 import { OtpDigits } from '@/src/ui/OtpDigits';
-import { Text } from '@/src/ui/Text';
-import { AuthChrome } from '@/src/ui/brand/AuthChrome';
-import { GlassCard } from '@/src/ui/brand/GlassCard';
-import { color, space } from '@/src/theme';
+
+import { InteriorScene } from '@/src/ui/brand/InteriorScene';
+import { TrustBadge } from '@/src/ui/brand/TrustBadge';
+import { AppearOnMount } from '@/src/ui/v2/AppearOnMount';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const RESEND_SECONDS = 30;
 const SERIF_FAMILY = Platform.select({ ios: 'Iowan Old Style', default: 'serif' });
 
 export default function VerifyScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ phone?: string }>();
   const phone = params.phone ?? '';
 
@@ -101,123 +107,275 @@ export default function VerifyScreen() {
   })();
 
   return (
-    <AuthChrome
-      hero={
-        <Pressable
-          onPress={handleBack}
-          disabled={submitting}
-          hitSlop={8}
-          style={({ pressed }) => [styles.backButton, pressed && styles.backButtonPressed]}
+    <View style={styles.root}>
+      <InteriorScene />
+
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={[
+            styles.scroll,
+            {
+              paddingTop: insets.top + 24,
+              paddingBottom: insets.bottom + 24,
+            },
+          ]}
+          keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
         >
-          <Svg width={18} height={18} viewBox="0 0 18 18" fill="none">
-            <Path
-              d="M11 4L6 9l5 5"
-              stroke={color.text}
-              strokeWidth={1.8}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </Svg>
-        </Pressable>
-      }
-    >
-      <GlassCard padding={{ vertical: 32, horizontal: 24 }}>
-        <Text style={styles.title}>Verify OTP</Text>
-        <Text variant="meta" color="textMuted" style={styles.subtitle}>
-          Enter the 6-digit code sent to{'\n'}
-          <Text variant="bodyStrong" color="text">
-            {displayPhone}
-          </Text>
-        </Text>
+          <View style={styles.column}>
+            {/* Top-left back button — quick fade in (tap target should
+                feel reachable from the first frame) */}
+            <AppearOnMount rise={4}>
+              <Pressable
+                onPress={handleBack}
+                disabled={submitting}
+                hitSlop={10}
+                style={({ pressed }) => [
+                  styles.backBtn,
+                  pressed && { opacity: 0.7 },
+                  submitting && { opacity: 0.5 },
+                ]}
+              >
+                <BlurView
+                  intensity={28}
+                  tint="light"
+                  style={StyleSheet.absoluteFill}
+                />
+                <View style={styles.backBtnOverlay} pointerEvents="none" />
+                <Ionicons
+                  name="chevron-back"
+                  size={20}
+                  color="rgba(0,0,0,0.92)"
+                />
+              </Pressable>
+            </AppearOnMount>
 
-        <OtpDigits
-          value={code}
-          onChange={(next) => {
-            setCode(next);
-            if (error) setError(undefined);
-          }}
-          onComplete={(full) => handleVerify(full)}
-          error={!!error}
-          disabled={submitting}
-          style={styles.otp}
-        />
+            <View style={{ height: 40 }} />
 
-        {error ? (
-          <Text variant="caption" color="danger" align="center" style={styles.errorText}>
-            {error}
-          </Text>
-        ) : null}
+            {/* iOS-style glass card — staggered after back button */}
+            <AppearOnMount delay={120} rise={18} style={styles.cardShell}>
+              <BlurView
+                intensity={24}
+                tint="light"
+                style={StyleSheet.absoluteFill}
+              />
+              <View style={styles.cardOverlay} pointerEvents="none" />
 
-        <Button
-          label="Verify & Continue"
-          onPress={() => handleVerify()}
-          loading={submitting}
-          disabled={!canSubmit}
-          style={styles.cta}
-        />
+              <View style={styles.cardBody}>
+                <Text style={styles.title}>Verify OTP</Text>
+                <Text variant="footnote" style={styles.subtitle}>
+                  Enter the 6-digit code sent to{'\n'}
+                  <Text variant="footnote" style={styles.subtitleBold}>
+                    {displayPhone}
+                  </Text>
+                </Text>
 
-        <View style={styles.resend}>
-          {secondsLeft > 0 ? (
-            <Text variant="meta" color="textMuted">
-              Didn't receive it?{' '}
-              <Text variant="metaStrong" color="textFaint">
-                Resend in {secondsLeft}s
-              </Text>
-            </Text>
-          ) : (
-            <Pressable onPress={handleBack} hitSlop={8}>
-              <Text variant="metaStrong" color="primary">
-                Resend OTP
-              </Text>
-            </Pressable>
-          )}
-        </View>
-      </GlassCard>
-    </AuthChrome>
+                <View style={styles.otpWrap}>
+                  <OtpDigits
+                    value={code}
+                    onChange={(next) => {
+                      setCode(next);
+                      if (error) setError(undefined);
+                    }}
+                    onComplete={(full) => handleVerify(full)}
+                    error={!!error}
+                    disabled={submitting}
+                  />
+                </View>
+
+                {error ? (
+                  <Text variant="caption2" style={styles.errorText}>
+                    {error}
+                  </Text>
+                ) : null}
+
+                <Pressable
+                  onPress={() => void handleVerify()}
+                  disabled={!canSubmit}
+                  style={({ pressed }) => [
+                    styles.cta,
+                    {
+                      backgroundColor: t.palette.blue.base,
+                    },
+                    pressed && { opacity: 0.85 },
+                    !canSubmit && { opacity: 0.5 },
+                  ]}
+                >
+                  {submitting ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <Text style={styles.ctaText}>Verify &amp; continue</Text>
+                      <Ionicons
+                        name="arrow-forward"
+                        size={16}
+                        color="#fff"
+                        style={{ marginLeft: 8 }}
+                      />
+                    </>
+                  )}
+                </Pressable>
+
+                {/* Resend */}
+                <View style={styles.resendRow}>
+                  {secondsLeft > 0 ? (
+                    <Text variant="footnote" style={styles.resendText}>
+                      Didn't receive it?{' '}
+                      <Text variant="footnote" style={styles.resendCountdown}>
+                        Resend in {secondsLeft}s
+                      </Text>
+                    </Text>
+                  ) : (
+                    <Pressable onPress={handleBack} hitSlop={8}>
+                      <Text variant="footnote" style={styles.resendCta}>
+                        Resend OTP
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
+              </View>
+            </AppearOnMount>
+          </View>
+
+          {/* Footer trust stamp — staggered last */}
+          <AppearOnMount delay={280} rise={6}>
+            <View style={styles.footer}>
+              <TrustBadge />
+            </View>
+          </AppearOnMount>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  backButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    borderWidth: 1.5,
-    borderColor: color.borderStrong,
-    backgroundColor: 'rgba(255,255,255,0.7)',
+  root: { flex: 1, backgroundColor: '#FFFFFF' },
+  flex: { flex: 1 },
+  scroll: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    justifyContent: 'space-between',
+  },
+  column: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+  },
+
+  // Back button — frosted iOS-style
+  backBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    overflow: 'hidden',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(0,0,0,0.08)',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
   },
-  backButtonPressed: {
-    opacity: 0.6,
+  backBtnOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.7)',
   },
+
+  // Glass card
+  cardShell: {
+    borderRadius: 22,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(0,0,0,0.08)',
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  cardOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255,255,255,0.78)',
+  },
+  cardBody: {
+    position: 'relative',
+    paddingHorizontal: 22,
+    paddingVertical: 28,
+  },
+
   title: {
     fontFamily: SERIF_FAMILY,
-    fontSize: 22,
+    fontSize: 24,
     lineHeight: 30,
     fontWeight: '700',
     letterSpacing: -0.4,
-    color: color.text,
+    color: 'rgba(0,0,0,0.92)',
     textAlign: 'center',
-    marginBottom: space.xs,
   },
   subtitle: {
+    color: 'rgba(60,60,67,0.6)',
     textAlign: 'center',
-    lineHeight: 18,
-    marginBottom: space.xl,
+    lineHeight: 19,
+    marginTop: 8,
+    marginBottom: 22,
   },
-  otp: {
-    marginBottom: space.md,
+  subtitleBold: {
+    color: 'rgba(0,0,0,0.92)',
+    fontWeight: '700',
   },
+
+  otpWrap: {
+    marginTop: 4,
+  },
+
   errorText: {
-    marginTop: space.xs,
-    marginBottom: space.xs,
+    color: '#FF3B30',
+    textAlign: 'center',
+    marginTop: 12,
   },
+
   cta: {
-    marginTop: space.sm,
-  },
-  resend: {
-    marginTop: space.md,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 15,
+    borderRadius: 999,
+    marginTop: 18,
+    shadowColor: '#0A84FF',
+    shadowOpacity: 0.2,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  ctaText: {
+    color: '#fff',
+    fontWeight: '700',
+    fontSize: 16,
+    letterSpacing: -0.2,
+  },
+
+  resendRow: {
+    alignItems: 'center',
+    paddingTop: 14,
+  },
+  resendText: {
+    color: 'rgba(60,60,67,0.6)',
+  },
+  resendCountdown: {
+    color: 'rgba(60,60,67,0.4)',
+    fontWeight: '600',
+  },
+  resendCta: {
+    color: '#0A84FF',
+    fontWeight: '700',
+  },
+
+  footer: {
+    alignItems: 'center',
+    paddingTop: 28,
   },
 });

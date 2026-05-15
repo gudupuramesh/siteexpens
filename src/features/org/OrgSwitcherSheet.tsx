@@ -45,7 +45,7 @@ import { useCurrentOrganization } from './useCurrentOrganization';
 import { useMyOrganizations } from './useMyOrganizations';
 import { useTokenClaims } from './useTokenClaims';
 import { setActiveOrg } from './setActiveOrg';
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
 import { color, screenInset, space } from '@/src/theme';
 
 export type OrgSwitcherSheetProps = {
@@ -172,7 +172,7 @@ export function OrgSwitcherSheet({ visible, onClose }: OrgSwitcherSheetProps) {
           <View style={styles.handle} />
 
           <View style={styles.header}>
-            <Text variant="title" color="text">
+            <Text variant="title1" color="label">
               Switch studio
             </Text>
             <Pressable
@@ -185,7 +185,7 @@ export function OrgSwitcherSheet({ visible, onClose }: OrgSwitcherSheetProps) {
             </Pressable>
           </View>
 
-          <Text variant="caption" color="textMuted" style={styles.hint}>
+          <Text variant="caption1" color="secondary" style={styles.hint}>
             Choose where projects, transactions and tasks load from. You stay signed in.
           </Text>
 
@@ -220,7 +220,7 @@ export function OrgSwitcherSheet({ visible, onClose }: OrgSwitcherSheetProps) {
                     </View>
                     <View style={styles.cardBody}>
                       <View style={styles.titleRow}>
-                        <Text variant="bodyStrong" color="text" numberOfLines={1} style={styles.name}>
+                        <Text variant="headline" color="label" numberOfLines={1} style={styles.name}>
                           {row.name}
                         </Text>
                         <View
@@ -230,7 +230,7 @@ export function OrgSwitcherSheet({ visible, onClose }: OrgSwitcherSheetProps) {
                           ]}
                         >
                           <Text
-                            variant="metaStrong"
+                            variant="footnote"
                             color={row.isYourStudio ? 'success' : 'textMuted'}
                             style={styles.kindBadgeText}
                           >
@@ -238,7 +238,7 @@ export function OrgSwitcherSheet({ visible, onClose }: OrgSwitcherSheetProps) {
                           </Text>
                         </View>
                       </View>
-                      <Text variant="caption" color="textMuted">
+                      <Text variant="caption1" color="secondary">
                         {row.roleLabel}
                         {active ? ' · Active' : ' · Tap to switch'}
                       </Text>
@@ -270,10 +270,10 @@ export function OrgSwitcherSheet({ visible, onClose }: OrgSwitcherSheetProps) {
                     <Ionicons name="add" size={20} color={color.primary} />
                   </View>
                   <View style={styles.cardBody}>
-                    <Text variant="bodyStrong" color="primary">
+                    <Text variant="headline" color="label">
                       Create your studio
                     </Text>
-                    <Text variant="caption" color="textMuted">
+                    <Text variant="caption1" color="secondary">
                       Set up your own workspace · You stay signed in
                     </Text>
                   </View>

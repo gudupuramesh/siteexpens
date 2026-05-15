@@ -2,7 +2,7 @@ import { memo, useMemo, type RefObject } from 'react';
 import { FlatList, Pressable, StyleSheet, View, type ListRenderItemInfo } from 'react-native';
 
 import { color, screenInset } from '@/src/theme';
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
 
 const CHIP_WIDTH = 56;
 const CHIP_GAP = 8;
@@ -54,14 +54,14 @@ const DateChip = memo(function DateChip({
         disabled && styles.dateChipDisabled,
       ]}
     >
-      <Text variant="caption" style={[styles.dateChipDay, active ? styles.dateChipDayActive : undefined]}>
+      <Text variant="caption1" style={[styles.dateChipDay, active ? styles.dateChipDayActive : undefined]}>
         {day}
       </Text>
-      <Text variant="bodyStrong" style={[styles.dateChipNum, active ? styles.dateChipNumActive : undefined]}>
+      <Text variant="headline" style={[styles.dateChipNum, active ? styles.dateChipNumActive : undefined]}>
         {date.getDate()}
       </Text>
       <Text
-        variant="caption"
+        variant="caption1"
         style={[styles.dateChipCount, active ? styles.dateChipCountActive : undefined]}
       >
         {countLabel}

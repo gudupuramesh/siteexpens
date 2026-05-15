@@ -1,3 +1,15 @@
+/**
+ * Project members — v2 design.
+ *
+ * Layout:
+ *   1. Header — back · "Team members"
+ *   2. Add CTA pill (when can manage)
+ *   3. Sectioned list — Members · Pending invites
+ *      Each row: avatar (color per role/status) · name + role · kebab/badge
+ *
+ * Tapping a row (when allowed) opens the existing RolePickerSheet to
+ * change role or remove from project.
+ */
 import * as Contacts from 'expo-contacts';
 import { useCallback, useMemo, useState } from 'react';
 import {
@@ -11,6 +23,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
@@ -30,9 +43,10 @@ import { usePermissions } from '@/src/features/org/usePermissions';
 import { useProjectMembers, type ProjectMember } from '@/src/features/projects/useProjectMembers';
 import { db, firestore } from '@/src/lib/firebase';
 import { formatIndianPhone, normalizeIndianPhoneE164 } from '@/src/lib/phone';
-import { Text } from '@/src/ui/Text';
-import { Screen } from '@/src/ui/Screen';
-import { color, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 import type { RoleKey } from '@/src/features/org/types';
 
 type Row =
@@ -45,6 +59,8 @@ type SheetState =
   | { kind: 'edit'; row: Row };
 
 export default function ProjectMembersScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -71,8 +87,8 @@ export default function ProjectMembersScreen() {
   );
   const pendingForProject = pending.filter(
     (p) =>
-      !memberPhoneSet.has(p.phoneNumber) &&
-      (p.projectIds.includes(projectId ?? '') || p.projectId === projectId),
+      !memberPhoneSet.has(p.phoneNumber)
+      && (p.projectIds.includes(projectId ?? '') || p.projectId === projectId),
   );
 
   const startAdd = useCallback(async () => {
@@ -85,9 +101,7 @@ export default function ProjectMembersScreen() {
         return;
       }
       await new Promise<void>((resolve) => {
-        InteractionManager.runAfterInteractions(() => {
-          setTimeout(resolve, 320);
-        });
+        InteractionManager.runAfterInteractions(() => setTimeout(resolve, 320));
       });
       const result = await Contacts.presentContactPickerAsync();
       if (!result) return;
@@ -98,10 +112,7 @@ export default function ProjectMembersScreen() {
       let normalized: string | null = null;
       for (const c of candidates) {
         const n = normalizeIndianPhoneE164(c);
-        if (n) {
-          normalized = n;
-          break;
-        }
+        if (n) { normalized = n; break; }
       }
       if (!normalized) {
         Alert.alert(
@@ -162,7 +173,6 @@ export default function ProjectMembersScreen() {
     const target = sheet.row;
     const targetName =
       target.kind === 'member' ? target.member.displayName : target.displayName;
-
     Alert.alert(
       'Remove from project?',
       `${targetName} will lose access to this project.`,
@@ -226,6 +236,10 @@ export default function ProjectMembersScreen() {
     });
   }
 
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
   const renderItem = ({ item }: { item: Row }) => {
     if (item.kind === 'member') {
       const initial = item.member.displayName.charAt(0).toUpperCase() || '?';
@@ -239,43 +253,55 @@ export default function ProjectMembersScreen() {
       const isSelf = item.member.uid === currentUid;
       const isSuperAdmin = item.member.role === 'superAdmin';
       const tappable = canManageTeam && !isSelf && !isSuperAdmin;
+
+      const avatarBg = isClient
+        ? (t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft)
+        : (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft);
+      const avatarFg = isClient ? t.palette.orange.base : t.palette.blue.base;
+
       return (
         <Pressable
           onPress={() => onRowPress(item)}
           disabled={!tappable}
-          style={({ pressed }) => [styles.row, tappable && pressed && { opacity: 0.78 }]}
+          style={({ pressed }) => [
+            styles.row,
+            {
+              backgroundColor: cardBg,
+              borderRadius: t.radii.card,
+              borderColor: cardBorder,
+              borderWidth: t.hairline,
+            },
+            tappable && pressed && { opacity: 0.85 },
+          ]}
         >
-          <View
-            style={[
-              styles.avatar,
-              isClient ? styles.avatarClient : styles.avatarMember,
-            ]}
-          >
-            <Text
-              variant="metaStrong"
-              style={{ color: isClient ? color.warning : color.onPrimary }}
-            >
+          <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+            <Text variant="footnote" style={{ color: avatarFg, fontWeight: '700' }}>
               {initial}
             </Text>
           </View>
           <View style={styles.body}>
-            <Text variant="rowTitle" color="text" numberOfLines={1}>
+            <Text variant="callout" color="label" numberOfLines={1}>
               {item.member.displayName}
               {isSelf ? ' (You)' : ''}
             </Text>
-            <Text variant="meta" color="textMuted" numberOfLines={1}>
+            <Text variant="caption1" color="secondary" numberOfLines={1} style={{ marginTop: 2 }}>
               {roleLabel}
               {phoneDisplay ? ` · ${phoneDisplay}` : ''}
             </Text>
           </View>
           {tappable ? (
-            <Ionicons name="ellipsis-vertical" size={16} color={color.textMuted} />
+            <Ionicons name="chevron-forward" size={14} color={t.colors.tertiary} />
           ) : (
-            <View style={styles.memberBadge}>
+            <View
+              style={[
+                styles.badge,
+                { backgroundColor: avatarBg, borderRadius: 999 },
+              ]}
+            >
               <Ionicons
                 name={isClient ? 'person-outline' : 'shield-checkmark-outline'}
-                size={14}
-                color={isClient ? color.warning : color.primary}
+                size={11}
+                color={avatarFg}
               />
             </View>
           )}
@@ -289,23 +315,44 @@ export default function ProjectMembersScreen() {
       <Pressable
         onPress={() => onRowPress(item)}
         disabled={!canManageTeam}
-        style={({ pressed }) => [styles.row, canManageTeam && pressed && { opacity: 0.78 }]}
+        style={({ pressed }) => [
+          styles.row,
+          {
+            backgroundColor: cardBg,
+            borderRadius: t.radii.card,
+            borderColor: cardBorder,
+            borderWidth: t.hairline,
+          },
+          canManageTeam && pressed && { opacity: 0.85 },
+        ]}
       >
-        <View style={[styles.avatar, styles.avatarPending]}>
-          <Text variant="metaStrong" color="textMuted">{initial}</Text>
+        <View
+          style={[
+            styles.avatar,
+            {
+              backgroundColor: t.colors.fill3,
+              borderColor: t.colors.tertiary,
+              borderWidth: 1,
+              borderStyle: 'dashed',
+            },
+          ]}
+        >
+          <Text variant="footnote" color="secondary" style={{ fontWeight: '700' }}>
+            {initial}
+          </Text>
         </View>
         <View style={styles.body}>
-          <Text variant="rowTitle" color="text" numberOfLines={1}>
+          <Text variant="callout" color="label" numberOfLines={1}>
             {item.displayName}
           </Text>
-          <Text variant="meta" color="textMuted" numberOfLines={1}>
+          <Text variant="caption1" color="secondary" numberOfLines={1} style={{ marginTop: 2 }}>
             {ROLE_LABELS[item.role as keyof typeof ROLE_LABELS] ?? 'Member'} · Invited
             {phoneDisplay ? ` · ${phoneDisplay}` : ''}
           </Text>
         </View>
-        {canManageTeam && (
-          <Ionicons name="ellipsis-vertical" size={16} color={color.textMuted} />
-        )}
+        {canManageTeam ? (
+          <Ionicons name="chevron-forward" size={14} color={t.colors.tertiary} />
+        ) : null}
       </Pressable>
     );
   };
@@ -337,53 +384,100 @@ export default function ProjectMembersScreen() {
         : (sheet.row.role as RoleKey) ?? null
       : null;
 
-  const showRemove =
-    sheet.kind === 'edit' && canManageTeam;
+  const showRemove = sheet.kind === 'edit' && canManageTeam;
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      <View style={styles.navBar}>
+      <View
+        style={[
+          styles.header,
+          {
+            paddingTop: insets.top + 8,
+            borderBottomColor: t.colors.separator,
+            borderBottomWidth: t.hairline,
+          },
+        ]}
+      >
         <Pressable
           onPress={() => router.back()}
-          hitSlop={12}
-          style={styles.navBtn}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.circleBtn,
+            {
+              backgroundColor: t.colors.surface,
+              borderRadius: 999,
+              borderColor:
+                t.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+              borderWidth: t.hairline,
+            },
+            t.shadows.resting,
+            pressed && { opacity: 0.7 },
+          ]}
           accessibilityLabel="Back"
         >
-          <Ionicons name="chevron-back" size={22} color={color.text} />
+          <Ionicons name="chevron-back" size={16} color={t.colors.label} />
         </Pressable>
-        <View style={styles.navCenter}>
-          <Text variant="bodyStrong" color="text" numberOfLines={1}>
-            Team Members
-          </Text>
-        </View>
-        <View style={styles.navBtn} />
+        <Text
+          variant="headline"
+          color="label"
+          style={{ flex: 1, textAlign: 'center', fontWeight: '600' }}
+          numberOfLines={1}
+        >
+          Team members
+        </Text>
+        <View style={{ width: 32 }} />
       </View>
 
-      {canManageTeam && (
-        <Pressable
-          onPress={startAdd}
-          style={({ pressed }) => [styles.inviteCta, pressed && { opacity: 0.85 }]}
-        >
-          <Ionicons name="person-add-outline" size={16} color={color.primary} />
-          <Text variant="metaStrong" color="primary">
-            Add team member or client
-          </Text>
-        </Pressable>
-      )}
+      {canManageTeam ? (
+        <View style={{ paddingHorizontal: 16, paddingTop: 14 }}>
+          <Pressable
+            onPress={startAdd}
+            hitSlop={6}
+            style={({ pressed }) => [
+              styles.inviteCta,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                borderRadius: t.radii.field,
+                borderColor: t.palette.blue.base + '33',
+                borderWidth: t.hairline,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Ionicons name="person-add-outline" size={16} color={t.palette.blue.base} />
+            <Text
+              variant="footnote"
+              style={{
+                color: t.palette.blue.base,
+                fontWeight: '700',
+                marginLeft: 6,
+              }}
+            >
+              Add team member or client
+            </Text>
+          </Pressable>
+        </View>
+      ) : null}
 
       {loading && !anyContent ? (
         <View style={styles.empty}>
-          <Text variant="meta" color="textMuted">Loading…</Text>
+          <Text variant="footnote" color="secondary">Loading…</Text>
         </View>
       ) : !anyContent ? (
         <View style={styles.empty}>
-          <Ionicons name="people-outline" size={28} color={color.textFaint} />
-          <Text variant="bodyStrong" color="text" style={{ marginTop: space.xxs }}>
+          <Ionicons name="people-outline" size={32} color={t.colors.tertiary} />
+          <Text variant="callout" color="label" style={{ marginTop: 12, fontWeight: '600' }}>
             No team members
           </Text>
-          <Text variant="meta" color="textMuted" align="center">
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 4, textAlign: 'center', paddingHorizontal: 32 }}
+          >
             Add team members or clients to collaborate on this project.
           </Text>
         </View>
@@ -396,11 +490,16 @@ export default function ProjectMembersScreen() {
           renderItem={renderItem}
           renderSectionHeader={({ section }) => (
             <View style={styles.sectionHeader}>
-              <Text variant="caption" color="textMuted">
-                {section.title.toUpperCase()} · {section.data.length}
+              <Text
+                variant="caption2"
+                color="secondary"
+                style={{ letterSpacing: 0.5 }}
+              >
+                {`${section.title.toUpperCase()} · ${section.data.length}`}
               </Text>
             </View>
           )}
+          ItemSeparatorComponent={() => <View style={{ height: 8 }} />}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
           stickySectionHeadersEnabled={false}
@@ -416,99 +515,70 @@ export default function ProjectMembersScreen() {
         current={sheetCurrent}
         onSave={onSaveRole}
         onRemove={showRemove ? onRemove : undefined}
-        saveLabel={sheet.kind === 'invite' ? 'Add to project' : 'Save Role'}
+        saveLabel={sheet.kind === 'invite' ? 'Add to project' : 'Save role'}
       />
-    </Screen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  navBar: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: 8,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    gap: 8,
   },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  circleBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   inviteCta: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    marginHorizontal: screenInset,
-    marginTop: space.sm,
-    minHeight: 40,
-    borderRadius: 10,
-    backgroundColor: color.primarySoft,
-    borderWidth: 1,
-    borderColor: color.primary,
+    paddingVertical: 12,
   },
+
   listContent: {
-    paddingHorizontal: screenInset,
+    paddingHorizontal: 16,
+    paddingTop: 14,
     paddingBottom: 40,
   },
   sectionHeader: {
-    paddingTop: space.md,
-    paddingBottom: space.xs,
-    backgroundColor: color.bgGrouped,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 8,
   },
+
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    backgroundColor: color.surface,
-    borderWidth: 1,
-    borderColor: color.separator,
-    borderRadius: 10,
-    marginBottom: space.xs,
-    gap: space.sm,
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   avatar: {
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: color.primarySoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarMember: {
-    backgroundColor: color.primary,
-  },
-  avatarClient: {
-    backgroundColor: color.warningSoft,
-    borderWidth: 1,
-    borderColor: color.warning,
-  },
-  avatarPending: {
-    backgroundColor: color.bgGrouped,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    borderStyle: 'dashed',
-  },
-  body: {
-    flex: 1,
-    minWidth: 0,
-    gap: 2,
-  },
-  memberBadge: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: color.primarySoft,
+  body: { flex: 1, minWidth: 0 },
+  badge: {
+    width: 26,
+    height: 26,
     alignItems: 'center',
     justifyContent: 'center',
   },
+
   empty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: screenInset * 2,
-    gap: space.xs,
+    paddingHorizontal: 16,
   },
 });

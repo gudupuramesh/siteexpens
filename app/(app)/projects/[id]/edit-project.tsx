@@ -1,24 +1,30 @@
 /**
- * Edit Project — InteriorOS-styled form, pre-filled from the existing
- * project doc.
+ * Edit Project — v2 design.
  *
- * Mirrors the structure of `new.tsx` (DETAILS / TYPE / STATUS /
- * TIMELINE / BUDGET / COVER PHOTO) so the user has the same mental
- * model when editing as when creating. Differences from new:
- *   - Form starts pre-populated via useProject(id)
- *   - Cover photo can be REPLACED (new pick) or REMOVED (existing
- *     cleared); old R2 key gets deleted after save succeeds
- *   - Save calls updateProject with only the changed fields; helper
- *     handles per-field clearing via FieldValue.delete()
+ * Mirrors `new.tsx` exactly so the user has the same mental model when
+ * editing as when creating. Same components, same FormGroups, same
+ * field order, same sheet pickers — only the header label and the
+ * data-flow change:
  *
- * The new "Client" + "Team size" rows that weren't in the create form
- * are also editable here — they were originally meant to be filled in
- * later from the project detail screen (see new.tsx header comment).
+ *   • Pre-fills the form from the existing project doc on first load
+ *     (with a hydration ref guard so Firestore snapshot churn doesn't
+ *     wipe in-flight edits — same pattern we use on edit-transaction).
+ *   • Cover photo can be REPLACED (new pick) or REMOVED (existing
+ *     cleared) — the old R2 key gets deleted after save succeeds.
+ *   • Save calls `updateProject` with only the changed fields; the
+ *     helper handles per-field clearing via `FieldValue.delete()`.
+ *
+ * Layout (top → bottom) — identical to new.tsx:
+ *   1. SheetHeader: Cancel · "Edit project" · Save
+ *   2. Cover photo card (preview / replace / remove)
+ *   3. FormGroup "Details"  — Name · Client · Location · Site
+ *   4. FormGroup "Type"     — Typology · Sub-type (conditional)
+ *   5. FormGroup "Status"   — Status · Progress slider
+ *   6. FormGroup "Timeline" — Start date · Target handover
+ *   7. FormGroup "Budget"   — Project value · Team size
  */
 import { zodResolver } from '@hookform/resolvers/zod';
-import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
 import * as ImagePicker from 'expo-image-picker';
 import { Controller, useForm } from 'react-hook-form';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -26,17 +32,16 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text as RNText,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { z } from 'zod';
 
+import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { useProject } from '@/src/features/projects/useProject';
 import { updateProject } from '@/src/features/projects/projects';
 import { guessImageMimeType, recordStorageEvent } from '@/src/lib/r2Upload';
@@ -49,24 +54,25 @@ import {
   type ProjectStatus,
   type ProjectTypology,
 } from '@/src/features/projects/types';
-import { Screen } from '@/src/ui/Screen';
-import {
-  Group,
-  InputRow,
-  PickerRow,
-  PrimaryButton,
-  SelectModal,
-  Slider,
-} from '@/src/ui/io';
-import { Spinner } from '@/src/ui/Spinner';
-import { color, fontFamily } from '@/src/theme/tokens';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { Slider } from '@/src/ui/io';
+import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const schema = z
   .object({
     name: z.string().trim().min(2, 'Name is too short').max(80),
+    client: z.string().trim().max(80).optional(),
     location: z.string().trim().max(60).optional(),
     siteAddress: z.string().trim().min(3, 'Enter a site address'),
-    client: z.string().trim().max(80).optional(),
     typology: z.enum(['residential', 'commercial', 'hospitality', 'industrial', 'other']).optional(),
     subTypeKey: z.string().optional(),
     subTypeCustom: z.string().trim().max(60).optional(),
@@ -105,50 +111,41 @@ function typologyLabel(key: ProjectTypology): string {
   return PROJECT_TYPOLOGIES.find((s) => s.key === key)?.label ?? key;
 }
 
-/** Match a free-text subType string back to its option key, so the
- *  form can pre-select the picker on hydration. Falls back to 'other'
- *  if the stored string doesn't match any preset (which means it was
- *  entered via the "Other → describe" path originally). */
+/** Try to find which sub-type key matches the project's stored subType
+ *  label, so the picker shows the right pre-selected option. */
 function reverseLookupSubType(
   typology: ProjectTypology | undefined,
-  subType: string | undefined,
-): { key: string | undefined; custom: string | undefined } {
-  if (!typology || !subType) return { key: undefined, custom: undefined };
+  storedSubType: string | undefined,
+): { key: string | undefined; custom: string } {
+  if (!typology || !storedSubType) return { key: undefined, custom: '' };
+  if (typology === 'other') return { key: 'other', custom: storedSubType };
   const opts = PROJECT_SUB_TYPES[typology] ?? [];
-  const match = opts.find(
-    (o) => o.label.toLowerCase() === subType.toLowerCase() && o.key !== 'other',
-  );
-  if (match) return { key: match.key, custom: undefined };
-  return { key: 'other', custom: subType };
+  const match = opts.find((o) => o.label === storedSubType);
+  if (match) return { key: match.key, custom: '' };
+  return { key: 'other', custom: storedSubType };
 }
 
 export default function EditProjectScreen() {
+  // Route guard — anyone landing here without `project.edit` bounces home.
   useGuardedRoute({ capability: 'project.edit' });
+
+  const t = useThemeV2();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: project, loading } = useProject(id);
 
+  const initialStartDate = useMemo(() => startOfLocalDay(new Date()), []);
+
   const [submitError, setSubmitError] = useState<string>();
   const [datePicker, setDatePicker] = useState<'start' | 'end' | null>(null);
-  const [iosDateDraft, setIosDateDraft] = useState<Date>(() => startOfLocalDay(new Date()));
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [showTypePicker, setShowTypePicker] = useState(false);
   const [showSubTypePicker, setShowSubTypePicker] = useState(false);
-
-  // Cover-photo state has three modes:
-  //   - existingPhoto = the live URL from Firestore (no replacement)
-  //   - stagedCover   = a freshly-picked local file to upload on save
-  //   - null + cleared= the user explicitly removed the cover
-  // `clearedExisting` distinguishes "no cover from the start" (no R2
-  // delete needed) from "user removed the existing cover" (R2 delete
-  // queued on save).
-  const [existingPhoto, setExistingPhoto] = useState<{ uri: string; key: string | null } | null>(null);
-  const [stagedCover, setStagedCover] = useState<StagedFile | null>(null);
-  const [clearedExisting, setClearedExisting] = useState(false);
+  const [stagedReplacement, setStagedReplacement] = useState<StagedFile | null>(null);
+  const [existingPhotoUri, setExistingPhotoUri] = useState<string | null>(null);
+  const [existingPhotoKey, setExistingPhotoKey] = useState<string | null>(null);
+  const [photoCleared, setPhotoCleared] = useState(false);
+  const [coverError, setCoverError] = useState<string>();
   const [savePhase, setSavePhase] = useState<string>();
-  /** Hydrated → true once the live doc has been copied into the form
-   *  state. Prevents the form from being repeatedly reset if the
-   *  snapshot fires multiple times. */
-  const hydratedRef = useRef(false);
 
   const {
     control,
@@ -163,45 +160,47 @@ export default function EditProjectScreen() {
     mode: 'onChange',
     defaultValues: {
       name: '',
+      client: '',
       location: '',
       siteAddress: '',
-      client: '',
       typology: undefined,
       subTypeKey: undefined,
       subTypeCustom: '',
       status: 'active',
       progress: 0,
-      startDate: new Date(),
+      startDate: initialStartDate,
       endDate: null,
       value: '',
       team: '',
     },
   });
 
-  // Hydrate the form once project loads.
+  // Pre-fill ONCE per project. Same pattern as edit-transaction —
+  // Firestore snapshot churn would otherwise wipe in-flight edits.
+  const hydratedForId = useRef<string | null>(null);
   useEffect(() => {
-    if (!project || hydratedRef.current) return;
+    if (!project) return;
+    if (hydratedForId.current === project.id) return;
+    hydratedForId.current = project.id;
     const sub = reverseLookupSubType(project.typology, project.subType);
     reset({
-      name: project.name,
-      location: project.location ?? '',
-      siteAddress: project.siteAddress,
+      name: project.name ?? '',
       client: project.client ?? '',
+      location: project.location ?? '',
+      siteAddress: project.siteAddress ?? '',
       typology: project.typology,
       subTypeKey: sub.key,
-      subTypeCustom: sub.custom ?? '',
-      status: project.status,
+      subTypeCustom: sub.custom,
+      status: (project.status as ProjectStatus) ?? 'active',
       progress: project.progress ?? 0,
-      startDate: project.startDate ? startOfLocalDay(project.startDate.toDate()) : startOfLocalDay(new Date()),
-      endDate: project.endDate ? startOfLocalDay(project.endDate.toDate()) : null,
-      value: String(project.value ?? 0),
-      team: project.team !== undefined ? String(project.team) : '',
+      startDate: project.startDate ? project.startDate.toDate() : initialStartDate,
+      endDate: project.endDate ? project.endDate.toDate() : null,
+      value: project.value != null ? String(project.value) : '',
+      team: project.team != null ? String(project.team) : '',
     });
-    if (project.photoUri) {
-      setExistingPhoto({ uri: project.photoUri, key: project.photoR2Key ?? null });
-    }
-    hydratedRef.current = true;
-  }, [project, reset]);
+    setExistingPhotoUri(project.photoUri ?? null);
+    setExistingPhotoKey(project.photoR2Key ?? null);
+  }, [project, reset, initialStartDate]);
 
   const startDate = watch('startDate');
   const endDate = watch('endDate');
@@ -209,10 +208,15 @@ export default function EditProjectScreen() {
   const typology = watch('typology');
   const subTypeKey = watch('subTypeKey');
 
+  // If the user moves the start date forward past the existing handover,
+  // wipe the handover so they're forced to re-pick a sensible value.
   useEffect(() => {
     const curEnd = getValues('endDate');
     if (!curEnd) return;
-    const minTs = startOfLocalDay(startDate).getTime();
+    const minTs = Math.max(
+      startOfLocalDay(startDate).getTime(),
+      startOfLocalDay(new Date()).getTime(),
+    );
     if (startOfLocalDay(curEnd).getTime() < minTs) {
       setValue('endDate', null, { shouldValidate: true });
     }
@@ -225,13 +229,13 @@ export default function EditProjectScreen() {
 
   const subTypeDisplay = useMemo(() => {
     if (!subTypeKey) return undefined;
-    if (subTypeKey === 'other') return undefined;
+    if (subTypeKey === 'other') return 'Other';
     return subTypeOptions.find((s) => s.key === subTypeKey)?.label;
   }, [subTypeKey, subTypeOptions]);
 
-  function pickTypology(t: ProjectTypology) {
-    setValue('typology', t, { shouldValidate: true });
-    if (subTypeKey && !PROJECT_SUB_TYPES[t].some((s) => s.key === subTypeKey)) {
+  function pickTypology(typ: ProjectTypology) {
+    setValue('typology', typ, { shouldValidate: true });
+    if (subTypeKey && !PROJECT_SUB_TYPES[typ].some((s) => s.key === subTypeKey)) {
       setValue('subTypeKey', undefined);
       setValue('subTypeCustom', '');
     }
@@ -240,7 +244,10 @@ export default function EditProjectScreen() {
   async function handlePickPhoto() {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) {
-      Alert.alert('Permission needed', 'Allow photo library access to change the cover.');
+      Alert.alert(
+        'Permission needed',
+        'Allow photo library access to add a project photo.',
+      );
       return;
     }
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -250,87 +257,48 @@ export default function EditProjectScreen() {
       quality: 0.8,
     });
     if (result.canceled || !result.assets[0]) return;
+
     const asset = result.assets[0];
-    setStagedCover({
+    setCoverError(undefined);
+    setStagedReplacement({
       id: 'cover',
       localUri: asset.uri,
       contentType: asset.mimeType || guessImageMimeType(asset.uri),
     });
-    // Picking a replacement implies the user wants the old one gone.
-    if (existingPhoto) setClearedExisting(true);
+    setPhotoCleared(false);
   }
 
   function handleClearPhoto() {
-    setStagedCover(null);
-    if (existingPhoto) {
-      // Mark for deletion on save; visually go to "no photo".
-      setClearedExisting(true);
-    }
-  }
-
-  function openDatePicker(kind: 'start' | 'end') {
-    const startDay = startOfLocalDay(startDate);
-    if (kind === 'start') {
-      setIosDateDraft(startDay);
-    } else {
-      const minTs = startDay.getTime();
-      const fallback = startDay;
-      if (!endDate) {
-        setIosDateDraft(fallback);
-      } else {
-        setIosDateDraft(new Date(Math.max(startOfLocalDay(endDate).getTime(), minTs)));
-      }
-    }
-    setDatePicker(kind);
-  }
-
-  function handleDateChange(kind: 'start' | 'end', event: DateTimePickerEvent, picked?: Date) {
-    if (Platform.OS === 'android') setDatePicker(null);
-    if (event.type === 'dismissed' || !picked) return;
-    if (kind === 'start') {
-      setValue('startDate', startOfLocalDay(picked), { shouldValidate: true });
-    } else {
-      const minTs = startOfLocalDay(startDate).getTime();
-      const n = startOfLocalDay(picked);
-      setValue('endDate', new Date(Math.max(n.getTime(), minTs)), { shouldValidate: true });
-    }
-  }
-
-  function confirmIosDatePicker() {
-    if (!datePicker) return;
-    if (datePicker === 'start') {
-      setValue('startDate', startOfLocalDay(iosDateDraft), { shouldValidate: true });
-    } else {
-      const minTs = startOfLocalDay(startDate).getTime();
-      const n = startOfLocalDay(iosDateDraft);
-      setValue('endDate', new Date(Math.max(n.getTime(), minTs)), { shouldValidate: true });
-    }
-    setDatePicker(null);
+    setStagedReplacement(null);
+    setPhotoCleared(true);
   }
 
   async function onSubmit(values: FormValues) {
-    if (!id || !project) return;
     setSubmitError(undefined);
+    if (!project || !id) {
+      setSubmitError('Project not loaded.');
+      return;
+    }
 
-    let resolvedSubType: string | undefined;
+    let subType: string | undefined;
     if (values.subTypeKey === 'other' || values.typology === 'other') {
-      resolvedSubType = values.subTypeCustom?.trim() || undefined;
+      subType = values.subTypeCustom?.trim() || undefined;
     } else if (values.subTypeKey && values.typology) {
-      resolvedSubType = PROJECT_SUB_TYPES[values.typology].find(
+      subType = PROJECT_SUB_TYPES[values.typology].find(
         (s) => s.key === values.subTypeKey,
       )?.label;
     }
 
     try {
-      // Step 1 — upload the new cover (if a replacement was staged).
-      let newCoverUrl: string | null = null;
-      let newCoverKey: string | null = null;
-      let newCoverSize = 0;
-      let newCoverContentType = '';
-      if (stagedCover) {
+      // Step 1 — replace cover if a new photo was staged.
+      let newPhotoUri: string | null | undefined;
+      let newPhotoKey: string | null | undefined;
+      let uploadedSize = 0;
+      let uploadedContentType = '';
+      if (stagedReplacement) {
         setSavePhase('Uploading cover…');
         const { uploaded, failed } = await commitStagedFiles({
-          files: [stagedCover],
+          files: [stagedReplacement],
           kind: 'project_cover',
           refId: id,
           projectId: id,
@@ -342,27 +310,31 @@ export default function EditProjectScreen() {
           return;
         }
         const ok = uploaded[0];
-        newCoverUrl = ok.publicUrl;
-        newCoverKey = ok.key;
-        newCoverSize = ok.sizeBytes;
-        newCoverContentType = ok.contentType;
+        newPhotoUri = ok.publicUrl;
+        newPhotoKey = ok.key;
+        uploadedSize = ok.sizeBytes;
+        uploadedContentType = ok.contentType;
+      } else if (photoCleared) {
+        // User explicitly removed the existing photo.
+        newPhotoUri = null;
+        newPhotoKey = null;
       }
 
-      // Step 2 — write the patch. Only include photo fields when the
-      // user actually changed something to avoid stomping unrelated
-      // values.
-      setSavePhase('Saving…');
-      const teamNum = values.team && values.team.trim().length > 0
-        ? parseInt(values.team, 10)
-        : 0;
+      // Step 2 — patch the project doc.
+      setSavePhase('Saving project…');
+      const teamNum =
+        values.team && values.team.trim().length > 0
+          ? parseInt(values.team, 10)
+          : undefined;
+
       const patch: Parameters<typeof updateProject>[0] = {
         projectId: id,
         name: values.name.trim(),
-        location: values.location ?? '',
+        client: values.client?.trim() ?? '',
+        location: values.location?.trim() ?? '',
         siteAddress: values.siteAddress.trim(),
-        client: values.client ?? '',
         typology: values.typology,
-        subType: resolvedSubType ?? '',
+        subType,
         status: values.status,
         progress: values.progress,
         startDate: values.startDate,
@@ -370,35 +342,45 @@ export default function EditProjectScreen() {
         value: parseInt(values.value, 10),
         team: teamNum,
       };
-      if (stagedCover) {
-        patch.photoUri = newCoverUrl;
-        patch.photoR2Key = newCoverKey;
-      } else if (clearedExisting) {
-        patch.photoUri = null;
-        patch.photoR2Key = null;
-      }
+      if (newPhotoUri !== undefined) patch.photoUri = newPhotoUri;
+      if (newPhotoKey !== undefined) patch.photoR2Key = newPhotoKey;
       await updateProject(patch);
 
-      // Step 3 — clean up the OLD R2 cover, after the new one is
-      // durably referenced. Best-effort.
-      if ((stagedCover || clearedExisting) && existingPhoto?.key) {
+      // Step 3 — best-effort cleanup. Delete the old R2 object if the
+      // user replaced or removed the cover.
+      if (
+        existingPhotoKey
+        && (stagedReplacement || photoCleared)
+        && existingPhotoKey !== newPhotoKey
+      ) {
         void deleteR2Object({
           projectId: id,
-          key: existingPhoto.key,
+          key: existingPhotoKey,
           kind: 'project_cover',
           refId: id,
+        }).catch(() => undefined);
+        void recordStorageEvent({
+          projectId: id,
+          kind: 'project_cover',
+          refId: id,
+          key: existingPhotoKey,
+          sizeBytes: 0,
+          contentType: '',
+          action: 'delete',
         });
       }
-      // Storage event for the new cover (recordStorageEvent already
-      // fires inside uploadToR2 when projectId is set, so this is just
-      // a no-op safety net for older code paths).
-      if (newCoverKey && newCoverSize > 0) {
-        void recordStorageEvent;
-        void newCoverContentType;
+      if (newPhotoKey) {
+        void recordStorageEvent({
+          projectId: id,
+          kind: 'project_cover',
+          refId: id,
+          key: newPhotoKey,
+          sizeBytes: uploadedSize,
+          contentType: uploadedContentType,
+          action: 'upload',
+        });
       }
 
-      // Snapshot-propagation buffer (see add-transaction.tsx).
-      await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
       setSubmitError((err as Error).message);
@@ -407,144 +389,304 @@ export default function EditProjectScreen() {
     }
   }
 
-  const showSubTypeCustom = typology === 'other' || subTypeKey === 'other';
-  const photoVisibleUri = stagedCover
-    ? stagedCover.localUri
-    : !clearedExisting && existingPhoto
-      ? existingPhoto.uri
-      : null;
+  const showSubTypeCustom =
+    typology === 'other' || subTypeKey === 'other';
 
-  if (loading || !project) {
+  // Date picker — keep within sensible bounds.
+  const todayStart = startOfLocalDay(new Date());
+  const handoverMinimum = new Date(
+    Math.max(startOfLocalDay(startDate).getTime(), todayStart.getTime()),
+  );
+
+  // Loading shell — same as edit-transaction's pattern.
+  if (loading && !project) {
     return (
-      <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.loadingWrap}>
-          <Spinner size={28} />
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit project"
+          cancelLabel="Cancel"
+          saveLabel="Save"
+          saveDisabled
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+        />
+        <View style={styles.centered}>
+          <Text variant="footnote" color="secondary">Loading…</Text>
         </View>
-      </Screen>
+      </View>
     );
   }
 
-  return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
-      <Stack.Screen options={{ headerShown: false }} />
-
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="chevron-back" size={22} color={color.textMuted} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <RNText style={styles.navEyebrow}>EDIT</RNText>
-          <RNText style={styles.navTitle} numberOfLines={1}>
-            {project.name}
-          </RNText>
+  if (!project) {
+    return (
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit project"
+          cancelLabel="Cancel"
+          saveLabel="Save"
+          saveDisabled
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+        />
+        <View style={[styles.centered, { padding: 32 }]}>
+          <Ionicons name="alert-circle-outline" size={32} color={t.colors.tertiary} />
+          <Text
+            variant="callout"
+            color="label"
+            style={{ marginTop: 12, textAlign: 'center', fontWeight: '600' }}
+          >
+            Couldn't load this project
+          </Text>
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 6, textAlign: 'center', lineHeight: 18 }}
+          >
+            It may have been deleted, or your access changed. If you were
+            just added or your role was updated, sign out and back in to
+            refresh your session.
+          </Text>
         </View>
-        <View style={styles.navBtn} />
       </View>
+    );
+  }
+
+  const showStagedPhoto = stagedReplacement != null;
+  const showExistingPhoto = !showStagedPhoto && !photoCleared && !!existingPhotoUri;
+
+  return (
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
+
+      <SheetHeader
+        title="Edit project"
+        cancelLabel="Cancel"
+        saveLabel="Save"
+        saveLoading={isSubmitting}
+        onCancel={() => router.back()}
+        onSave={() => void handleSubmit(onSubmit)()}
+      />
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
-          showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
         >
-          {/* DETAILS */}
-          <Group header="Details">
+          {/* Cover photo */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+            <Pressable
+              onPress={handlePickPhoto}
+              style={({ pressed }) => [
+                styles.photoTile,
+                {
+                  backgroundColor: t.colors.surface,
+                  borderRadius: t.radii.hero,
+                  borderColor:
+                    t.mode === 'dark'
+                      ? 'rgba(255,255,255,0.05)'
+                      : 'rgba(0,0,0,0.04)',
+                  borderWidth: t.hairline,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              {showStagedPhoto ? (
+                <>
+                  <Image
+                    source={{ uri: stagedReplacement!.localUri }}
+                    style={styles.photoImg}
+                    resizeMode="cover"
+                  />
+                  <View style={[styles.photoBadge, { backgroundColor: 'rgba(0,0,0,0.55)' }]}>
+                    <Ionicons name="camera" size={13} color="#fff" />
+                    <Text
+                      variant="caption2"
+                      style={{
+                        color: '#fff',
+                        fontWeight: '700',
+                        marginLeft: 4,
+                        letterSpacing: 0.4,
+                      }}
+                    >
+                      CHANGE PHOTO
+                    </Text>
+                  </View>
+                </>
+              ) : showExistingPhoto ? (
+                <>
+                  <Image
+                    source={{ uri: existingPhotoUri! }}
+                    style={styles.photoImg}
+                    resizeMode="cover"
+                  />
+                  <View style={[styles.photoBadge, { backgroundColor: 'rgba(0,0,0,0.55)' }]}>
+                    <Ionicons name="camera" size={13} color="#fff" />
+                    <Text
+                      variant="caption2"
+                      style={{
+                        color: '#fff',
+                        fontWeight: '700',
+                        marginLeft: 4,
+                        letterSpacing: 0.4,
+                      }}
+                    >
+                      CHANGE PHOTO
+                    </Text>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.photoPlaceholder}>
+                  <View
+                    style={[
+                      styles.photoIcon,
+                      {
+                        backgroundColor:
+                          t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name="image-outline"
+                      size={22}
+                      color={t.palette.blue.base}
+                    />
+                  </View>
+                  <Text
+                    variant="callout"
+                    color="label"
+                    style={{ fontWeight: '700', marginTop: 10 }}
+                  >
+                    Add cover photo
+                  </Text>
+                  <Text
+                    variant="caption1"
+                    color="secondary"
+                    style={{ marginTop: 2, textAlign: 'center' }}
+                  >
+                    Optional — appears on the project card.
+                  </Text>
+                </View>
+              )}
+            </Pressable>
+            {(showStagedPhoto || showExistingPhoto) ? (
+              <Pressable
+                onPress={handleClearPhoto}
+                hitSlop={6}
+                style={{ alignSelf: 'flex-start', marginTop: 8, paddingHorizontal: 4 }}
+              >
+                <Text
+                  variant="caption2"
+                  style={{
+                    color: t.palette.red.base,
+                    fontWeight: '700',
+                    letterSpacing: 0.4,
+                  }}
+                >
+                  REMOVE PHOTO
+                </Text>
+              </Pressable>
+            ) : null}
+            {coverError ? (
+              <Text
+                variant="caption2"
+                style={{ color: t.palette.red.base, marginTop: 6, paddingHorizontal: 4 }}
+              >
+                {coverError}
+              </Text>
+            ) : null}
+          </View>
+
+          {/* Details — same field order as new.tsx */}
+          <FormGroup header="Details">
             <Controller
               control={control}
               name="name"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
-                  label="Name *"
-                  placeholder="e.g. Sharma Residence"
+                  label="Name"
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
+                  placeholder="e.g. Sharma Residence"
                   autoCapitalize="words"
-                  editable={!isSubmitting}
                 />
               )}
             />
-            {errors.name?.message ? (
-              <RNText style={styles.fieldError}>{errors.name.message}</RNText>
-            ) : null}
-
             <Controller
               control={control}
               name="client"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
                   label="Client"
-                  placeholder="e.g. Mr. Sharma"
                   value={value ?? ''}
                   onChangeText={onChange}
                   onBlur={onBlur}
+                  placeholder="e.g. Mr. Sharma"
                   autoCapitalize="words"
-                  editable={!isSubmitting}
                 />
               )}
             />
-
             <Controller
               control={control}
               name="location"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
                   label="Location"
-                  placeholder="e.g. Jubilee Hills"
                   value={value ?? ''}
                   onChangeText={onChange}
                   onBlur={onBlur}
+                  placeholder="e.g. Jubilee Hills"
                   autoCapitalize="words"
-                  editable={!isSubmitting}
                 />
               )}
             />
-
             <Controller
               control={control}
               name="siteAddress"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
-                  label="Site *"
-                  placeholder="Plot, street, area, city"
+                  label="Site"
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
+                  placeholder="Plot, street, area, city"
                   autoCapitalize="sentences"
                   multiline
-                  editable={!isSubmitting}
-                  last
+                  divider={false}
                 />
               )}
             />
-            {errors.siteAddress?.message ? (
-              <RNText style={styles.fieldError}>{errors.siteAddress.message}</RNText>
-            ) : null}
-          </Group>
+          </FormGroup>
+          {(errors.name?.message || errors.siteAddress?.message) ? (
+            <FieldError text={errors.name?.message ?? errors.siteAddress?.message ?? ''} />
+          ) : null}
 
-          {/* TYPE */}
-          <Group header="Type">
-            <PickerRow
+          {/* Type */}
+          <FormGroup header="Type">
+            <Row
               label="Typology"
-              icon="apps-outline"
-              value={typology ? typologyLabel(typology) : undefined}
-              placeholder="Choose typology"
+              value={typology ? typologyLabel(typology) : 'Choose'}
+              chevron
               onPress={() => setShowTypePicker(true)}
+              divider={typology != null && typology !== 'other'}
             />
             {typology && typology !== 'other' ? (
-              <PickerRow
+              <Row
                 label="Sub-type"
-                icon="grid-outline"
-                value={subTypeDisplay}
-                placeholder={
-                  subTypeKey === 'other' ? 'Other (type below)' : 'Choose sub-type'
-                }
+                value={subTypeDisplay ?? 'Choose'}
+                chevron
                 onPress={() => setShowSubTypePicker(true)}
-                last={!showSubTypeCustom}
+                divider={showSubTypeCustom}
               />
             ) : null}
             {showSubTypeCustom ? (
@@ -554,32 +696,31 @@ export default function EditProjectScreen() {
                 render={({ field: { onChange, onBlur, value } }) => (
                   <InputRow
                     label="Describe"
-                    placeholder="e.g. Boutique studio"
                     value={value ?? ''}
                     onChangeText={onChange}
                     onBlur={onBlur}
+                    placeholder="e.g. Boutique studio"
                     autoCapitalize="sentences"
-                    editable={!isSubmitting}
-                    last
+                    divider={false}
                   />
                 )}
               />
             ) : null}
-          </Group>
+          </FormGroup>
 
-          {/* STATUS */}
-          <Group header="Status">
-            <PickerRow
+          {/* Status */}
+          <FormGroup header="Status">
+            <Row
               label="Status"
-              icon="ellipse-outline"
               value={statusLabel(status)}
+              chevron
               onPress={() => setShowStatusPicker(true)}
             />
             <View style={styles.sliderRow}>
-              <View style={styles.sliderLabelCol}>
-                <RNText style={styles.sliderLabel}>Progress</RNText>
-              </View>
-              <View style={styles.sliderCol}>
+              <Text variant="callout" color="label" style={{ minWidth: 88 }}>
+                Progress
+              </Text>
+              <View style={{ flex: 1 }}>
                 <Controller
                   control={control}
                   name="progress"
@@ -588,386 +729,204 @@ export default function EditProjectScreen() {
                       value={typeof value === 'number' ? value : 0}
                       onChange={onChange}
                       step={1}
+                      trackColor={t.palette.blue.base}
                     />
                   )}
                 />
               </View>
             </View>
-          </Group>
+          </FormGroup>
 
-          {/* TIMELINE */}
-          <Group header="Timeline">
-            <PickerRow
+          {/* Timeline */}
+          <FormGroup header="Timeline">
+            <Row
               label="Start date"
-              icon="calendar-outline"
               value={formatPickerDate(startDate)}
-              onPress={() => openDatePicker('start')}
+              chevron
+              onPress={() => setDatePicker('start')}
             />
-            <PickerRow
+            <Row
               label="Target handover"
-              icon="flag-outline"
-              value={endDate ? formatPickerDate(endDate) : undefined}
-              placeholder="Optional"
-              onPress={() => openDatePicker('end')}
-              last
+              value={endDate ? formatPickerDate(endDate) : 'Optional'}
+              valueColor={endDate ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setDatePicker('end')}
+              divider={false}
             />
-            {errors.endDate?.message ? (
-              <RNText style={styles.fieldError}>{errors.endDate.message}</RNText>
-            ) : null}
-          </Group>
+          </FormGroup>
+          {errors.endDate?.message ? (
+            <FieldError text={errors.endDate.message} />
+          ) : null}
 
-          {/* BUDGET */}
-          <Group header="Budget">
+          {/* Budget */}
+          <FormGroup header="Budget">
             <Controller
               control={control}
               name="value"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
-                  label="Value (₹) *"
-                  placeholder="0"
+                  label="Project value"
                   value={value}
-                  onChangeText={(t) => onChange(t.replace(/\D/g, ''))}
+                  onChangeText={(txt) => onChange(txt.replace(/\D/g, ''))}
                   onBlur={onBlur}
+                  placeholder="₹0"
                   keyboardType="number-pad"
-                  editable={!isSubmitting}
-                  mono
-                  last
+                  autoCapitalize="none"
                 />
               )}
             />
-            {errors.value?.message ? (
-              <RNText style={styles.fieldError}>{errors.value.message}</RNText>
-            ) : null}
-          </Group>
-
-          {/* TEAM */}
-          <Group header="Team">
             <Controller
               control={control}
               name="team"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
                   label="Team size"
-                  placeholder="0"
                   value={value ?? ''}
-                  onChangeText={(t) => onChange(t.replace(/\D/g, ''))}
+                  onChangeText={(txt) => onChange(txt.replace(/\D/g, ''))}
                   onBlur={onBlur}
+                  placeholder="e.g. 4"
                   keyboardType="number-pad"
-                  editable={!isSubmitting}
-                  mono
-                  last
+                  autoCapitalize="none"
+                  divider={false}
                 />
               )}
             />
-          </Group>
-
-          {/* COVER PHOTO — replace or remove. */}
-          <Group header="Cover photo (optional)">
-            <Pressable
-              onPress={handlePickPhoto}
-              style={({ pressed }) => [
-                styles.photoTile,
-                pressed && { opacity: 0.85 },
-              ]}
-            >
-              {photoVisibleUri ? (
-                <Image
-                  source={{ uri: photoVisibleUri }}
-                  style={styles.photoImg}
-                  resizeMode="cover"
-                />
-              ) : (
-                <View style={styles.photoPlaceholder}>
-                  <Ionicons name="image-outline" size={22} color={color.textFaint} />
-                  <RNText style={styles.photoHint}>Tap to add a project photo</RNText>
-                </View>
-              )}
-            </Pressable>
-            {photoVisibleUri ? (
-              <Pressable
-                onPress={handleClearPhoto}
-                hitSlop={6}
-                style={({ pressed }) => [
-                  styles.photoClearBtn,
-                  pressed && { opacity: 0.7 },
-                ]}
-              >
-                <Ionicons name="close" size={14} color={color.danger} />
-                <RNText style={styles.photoClearText}>Remove cover</RNText>
-              </Pressable>
-            ) : null}
-          </Group>
-
-          {submitError ? (
-            <RNText style={[styles.fieldError, { paddingHorizontal: 16, marginTop: 4 }]}>
-              {submitError}
-            </RNText>
+          </FormGroup>
+          {(errors.value?.message || errors.team?.message) ? (
+            <FieldError text={errors.value?.message ?? errors.team?.message ?? ''} />
           ) : null}
-        </ScrollView>
 
-        <View style={styles.footer}>
-          <PrimaryButton
-            label={savePhase ?? 'Save changes'}
-            onPress={handleSubmit(onSubmit)}
-            loading={isSubmitting}
-          />
-        </View>
+          {submitError ? <FieldError text={submitError} /> : null}
+
+          <View style={{ height: 24 }} />
+        </ScrollView>
       </KeyboardAvoidingView>
 
-      {datePicker && Platform.OS === 'ios' ? (
-        <Modal
-          visible
-          transparent
-          animationType="slide"
-          onRequestClose={() => setDatePicker(null)}
-        >
-          <Pressable style={styles.dateModalBackdrop} onPress={() => setDatePicker(null)}>
-            <View />
-          </Pressable>
-          <View style={styles.dateModalSheet}>
-            <DateTimePicker
-              value={iosDateDraft}
-              mode="date"
-              display="spinner"
-              themeVariant="light"
-              minimumDate={datePicker === 'end' ? startOfLocalDay(startDate) : undefined}
-              onChange={(_: DateTimePickerEvent, picked?: Date) => {
-                if (!picked) return;
-                if (datePicker === 'start') {
-                  setIosDateDraft(startOfLocalDay(picked));
-                } else {
-                  const minTs = startOfLocalDay(startDate).getTime();
-                  const n = startOfLocalDay(picked);
-                  setIosDateDraft(new Date(Math.max(n.getTime(), minTs)));
-                }
-              }}
-            />
-            <View style={styles.dateModalActions}>
-              <Pressable
-                onPress={() => setDatePicker(null)}
-                style={({ pressed }) => [styles.dateModalBtnGhost, pressed && { opacity: 0.7 }]}
-              >
-                <RNText style={styles.dateModalBtnGhostText}>Cancel</RNText>
-              </Pressable>
-              <Pressable
-                onPress={confirmIosDatePicker}
-                style={({ pressed }) => [styles.dateModalBtnPrimary, pressed && { opacity: 0.9 }]}
-              >
-                <RNText style={styles.dateModalBtnPrimaryText}>Done</RNText>
-              </Pressable>
-            </View>
-          </View>
-        </Modal>
-      ) : null}
+      {/* Date pickers */}
+      <DateTimeSheet
+        open={datePicker === 'start'}
+        value={startDate}
+        onChange={(d) => {
+          const n = startOfLocalDay(d);
+          setValue('startDate', n, { shouldValidate: true });
+        }}
+        onClose={() => setDatePicker(null)}
+        mode="date"
+        title="Start date"
+      />
+      <DateTimeSheet
+        open={datePicker === 'end'}
+        value={endDate ?? handoverMinimum}
+        onChange={(d) => {
+          const n = startOfLocalDay(d);
+          setValue(
+            'endDate',
+            new Date(Math.max(n.getTime(), handoverMinimum.getTime())),
+            { shouldValidate: true },
+          );
+        }}
+        onClose={() => setDatePicker(null)}
+        mode="date"
+        title="Target handover"
+      />
 
-      {datePicker && Platform.OS === 'android' ? (
-        <DateTimePicker
-          value={datePicker === 'start' ? startDate : (endDate ?? startOfLocalDay(startDate))}
-          mode="date"
-          display="default"
-          minimumDate={datePicker === 'end' ? startOfLocalDay(startDate) : undefined}
-          onChange={(e, d) => handleDateChange(datePicker, e, d)}
-        />
-      ) : null}
-
-      <SelectModal
-        visible={showTypePicker}
+      {/* Pickers */}
+      <SelectSheet
+        open={showTypePicker}
         title="Choose typology"
         options={PROJECT_TYPOLOGIES}
-        value={typology}
+        selected={typology}
         onPick={(k) => pickTypology(k as ProjectTypology)}
         onClose={() => setShowTypePicker(false)}
       />
 
-      <SelectModal
-        visible={showSubTypePicker}
+      <SelectSheet
+        open={showSubTypePicker}
         title="Choose sub-type"
         options={subTypeOptions}
-        value={subTypeKey}
+        selected={subTypeKey}
         onPick={(k) => setValue('subTypeKey', k, { shouldValidate: true })}
         onClose={() => setShowSubTypePicker(false)}
       />
 
-      <SelectModal
-        visible={showStatusPicker}
+      <SelectSheet
+        open={showStatusPicker}
         title="Set project status"
         options={PROJECT_STATUS_OPTIONS}
-        value={status}
+        selected={status}
         onPick={(k) => setValue('status', k as ProjectStatus, { shouldValidate: true })}
         onClose={() => setShowStatusPicker(false)}
       />
-    </Screen>
+
+      <SubmitProgressOverlay
+        visible={isSubmitting}
+        intent="generic"
+        phaseLabel={savePhase}
+      />
+    </View>
+  );
+}
+
+function FieldError({ text }: { text: string }) {
+  const t = useThemeV2();
+  return (
+    <Text
+      variant="caption2"
+      style={{
+        color: t.palette.red.base,
+        paddingHorizontal: 32,
+        marginTop: 8,
+      }}
+    >
+      {text}
+    </Text>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  loadingWrap: {
-    flex: 1, alignItems: 'center', justifyContent: 'center',
-  },
+  scroll: { paddingBottom: 60 },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-  navBar: {
-    minHeight: 56,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-  },
-  navBtn: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navCenter: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 1,
-  },
-  navEyebrow: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    color: color.textFaint,
-    letterSpacing: 1.4,
-  },
-  navTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    fontWeight: '600',
-    color: color.text,
-    letterSpacing: -0.2,
-  },
-
-  scroll: {
-    paddingTop: 18,
-    paddingBottom: 40,
-  },
-
-  fieldError: {
-    fontFamily: fontFamily.sans,
-    fontSize: 12,
-    color: color.danger,
-    paddingHorizontal: 16,
-    paddingTop: 6,
-  },
-
-  // Slider row inside the Status group — mirrors new.tsx.
-  sliderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    minHeight: 60,
-    backgroundColor: color.bg,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: color.separator,
-  },
-  sliderLabelCol: {
-    width: 110,
-    flexShrink: 0,
-  },
-  sliderLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    fontWeight: '500',
-    color: color.text,
-  },
-  sliderCol: {
-    flex: 1,
-  },
-
-  // Photo tile
+  // Cover photo
   photoTile: {
     height: 180,
-    backgroundColor: color.bg,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
-    borderColor: color.borderStrong,
     overflow: 'hidden',
   },
   photoImg: {
     width: '100%',
     height: '100%',
   },
+  photoBadge: {
+    position: 'absolute',
+    bottom: 10,
+    right: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
   photoPlaceholder: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-  },
-  photoHint: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    color: color.textMuted,
-  },
-  photoClearBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
     paddingHorizontal: 16,
-    paddingTop: 8,
-    alignSelf: 'flex-start',
   },
-  photoClearText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.danger,
+  photoIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  footer: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 18,
-    backgroundColor: color.bgGrouped,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-  },
-
-  dateModalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(15,23,42,0.4)',
-  },
-  dateModalSheet: {
-    backgroundColor: color.bgGrouped,
-    borderTopLeftRadius: 14,
-    borderTopRightRadius: 14,
-    paddingBottom: 28,
-    paddingTop: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-  },
-  dateModalActions: {
+  // Slider row inside the Status group
+  sliderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    paddingHorizontal: 16,
+    paddingVertical: 4,
     gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: 8,
-  },
-  dateModalBtnGhost: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-  },
-  dateModalBtnGhostText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 16,
-    fontWeight: '600',
-    color: color.textMuted,
-  },
-  dateModalBtnPrimary: {
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-    backgroundColor: color.primary,
-    borderRadius: 10,
-  },
-  dateModalBtnPrimaryText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 16,
-    fontWeight: '600',
-    color: color.onPrimary,
+    minHeight: 56,
   },
 });

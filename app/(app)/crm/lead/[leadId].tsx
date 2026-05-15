@@ -1,23 +1,33 @@
 /**
- * Lead detail / preview — InteriorOS layout.
+ * Lead detail / preview — v2 design.
  *
- * Hero card (avatar + name + priority pill + status pill), single
- * progress-bar stage card, quick action buttons, then InteriorOS
- * `Group` + `Row` for Details / Notes / Tags / Requirements /
- * Appointments. Sticky bottom action: Schedule appointment
- * (no Convert button, per product spec).
+ * Layout (top → bottom):
+ *   1. Inline top bar — ‹ Back · "Lead" title · Edit link
+ *   2. Hero card — gradient avatar + name + priority pill, phone + meta sublines,
+ *      hairline divider, then status pill row with "Change" link
+ *   3. Inline overdue banner (only when follow-up is overdue)
+ *   4. Quick action row — Call · WhatsApp · Status (3 tinted buttons)
+ *   5. Stage progress card — colored progress bar + NEW → WON labels
+ *   6. FormGroup "Details" — every key/value field
+ *   7. FormGroup "Requirements" / "Tags" / "Notes" (conditional)
+ *   8. Destructive "Delete lead" button at the bottom
+ *
+ * Pickers use v2 `<SelectSheet>`. Delete uses native `Alert.alert`
+ * (iOS-native destructive confirmation). Overdue uses an inline banner
+ * instead of a separate alert sheet — simpler, more visible, one less tap.
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
 import {
+  Alert,
   Linking,
   Pressable,
   ScrollView,
   StyleSheet,
-  Text as RNText,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { deleteLead, updateLead } from '@/src/features/crm/leads';
 import {
@@ -33,16 +43,18 @@ import {
 import { useLead } from '@/src/features/crm/useLeads';
 import { useOrgMembers } from '@/src/features/org/useOrgMembers';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
-import { AlertSheet, Group, Row, SelectModal } from '@/src/ui/io';
-import { Screen } from '@/src/ui/Screen';
-import { color, radius, screenInset, space } from '@/src/theme';
-import { fontFamily } from '@/src/theme/tokens';
 
-/**
- * Status → progress %. Hand-tuned so each step feels meaningful and the
- * terminal "converted" lands at 100. "Lost" is shown via styling; the
- * bar itself just resets to 0.
- */
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { Row } from '@/src/ui/v2/Row';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
+
+// ── Status helpers ──────────────────────────────────────────────────
+
+/** Status → progress bar percent. Hand-tuned so each step feels meaningful;
+ *  "converted" lands at 100, "lost" resets to 0 (the bar is just visual). */
 const STATUS_PROGRESS: Record<LeadStatus, number> = {
   new: 10,
   contacted: 25,
@@ -59,15 +71,6 @@ function digitsForWhatsApp(phone: string): string {
   return d;
 }
 
-function priorityTone(
-  priority: 'low' | 'medium' | 'high',
-): { bg: string; fg: string; label: string } {
-  if (priority === 'high') return { bg: color.dangerSoft, fg: color.danger, label: 'High' };
-  if (priority === 'medium')
-    return { bg: color.warningSoft, fg: color.warning, label: 'Medium' };
-  return { bg: color.surfaceAlt, fg: color.textMuted, label: 'Low' };
-}
-
 function fmtDateTime(d?: Date): string {
   if (!d) return '—';
   return d.toLocaleString('en-IN', {
@@ -80,17 +83,47 @@ function fmtDateTime(d?: Date): string {
   });
 }
 
+// Tone for the priority pill — 90/10 discipline: only "Hot" earns colour
+// (red, an explicit alarm). Medium and Low both go neutral.
+function priorityTone(t: ReturnType<typeof useThemeV2>, priority: LeadPriority) {
+  if (priority === 'high') return { fg: t.palette.red.base, bg: t.palette.red.soft, label: 'Hot' };
+  if (priority === 'medium') return { fg: t.colors.secondary, bg: t.colors.fill3, label: 'Medium' };
+  return { fg: t.colors.secondary, bg: t.colors.fill3, label: 'Low' };
+}
+
+/**
+ * Neutral tone for the status pill in the hero card.
+ *
+ * Color discipline: lead stages (new / contacted / site visit / proposal /
+ * negotiation / converted / lost) are descriptive labels along a pipeline,
+ * not actionable status. Per the app-wide rule (only blue/red/orange/green
+ * carry meaning), all stages render with the neutral tone (fill3 + secondary).
+ * Mirrors what we already do on the LeadCard stage pill so the list and
+ * detail screens read consistently.
+ *
+ * The "lost" outcome stays neutral here too; the progress bar below the
+ * status pill already paints itself red when the deal is lost / green when
+ * won, so the win/lose semantics are still visible without needing to
+ * re-color this pill.
+ */
+function statusTone(t: ReturnType<typeof useThemeV2>) {
+  return { fg: t.colors.secondary, bg: t.colors.fill3 };
+}
+
+// ── Screen ──────────────────────────────────────────────────────────
+
 export default function LeadDetailScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const { leadId } = useLocalSearchParams<{ leadId: string }>();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? undefined;
   const { data: lead, loading } = useLead(leadId);
   const { members } = useOrgMembers(orgId);
+
   const [showStatusPicker, setShowStatusPicker] = useState(false);
   const [showPriorityPicker, setShowPriorityPicker] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [showDeleteSheet, setShowDeleteSheet] = useState(false);
-  const [showOverdueSheet, setShowOverdueSheet] = useState(false);
 
   const statusOptions = useMemo(
     () => LEAD_STATUSES.map((s) => ({ key: s.key, label: s.label })),
@@ -107,13 +140,12 @@ export default function LeadDetailScreen() {
 
   function openCall() {
     if (!lead?.phone) return;
-    Linking.openURL(`tel:${lead.phone.replace(/\s/g, '')}`);
+    void Linking.openURL(`tel:${lead.phone.replace(/\s/g, '')}`);
   }
 
   function openWhatsApp() {
     if (!lead?.phone) return;
-    const n = digitsForWhatsApp(lead.phone);
-    Linking.openURL(`https://wa.me/${n}`);
+    void Linking.openURL(`https://wa.me/${digitsForWhatsApp(lead.phone)}`);
   }
 
   async function pickStatus(key: string) {
@@ -124,7 +156,6 @@ export default function LeadDetailScreen() {
       console.warn(e);
     }
   }
-
   async function pickPriority(key: string) {
     if (!lead) return;
     try {
@@ -134,37 +165,55 @@ export default function LeadDetailScreen() {
     }
   }
 
-  async function performDelete() {
+  const onDelete = () => {
     if (!lead) return;
-    try {
-      setDeleting(true);
-      await deleteLead(lead.id);
-      router.back();
-    } catch (e) {
-      console.warn(e);
-    } finally {
-      setDeleting(false);
-    }
-  }
+    Alert.alert(
+      'Delete lead?',
+      `This will permanently remove "${lead.name}" from your CRM. This can't be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setDeleting(true);
+              await deleteLead(lead.id);
+              router.back();
+            } catch (e) {
+              console.warn(e);
+            } finally {
+              setDeleting(false);
+            }
+          },
+        },
+      ],
+    );
+  };
 
+  // Loading / not-found shells
   if (loading && !lead) {
     return (
-      <Screen>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <RNText style={styles.bodyText}>Loading…</RNText>
-      </Screen>
+        <AmbientBackground />
+        <TopBar title="Lead" rightLabel="" onBack={() => router.back()} />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary">Loading…</Text>
+        </View>
+      </View>
     );
   }
-
   if (!lead) {
     return (
-      <Screen>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <RNText style={styles.bodyText}>Lead not found</RNText>
-        <Pressable onPress={() => router.back()} style={{ marginTop: space.md }}>
-          <RNText style={styles.linkAction}>Back</RNText>
-        </Pressable>
-      </Screen>
+        <AmbientBackground />
+        <TopBar title="Lead" rightLabel="" onBack={() => router.back()} />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary">Lead not found</Text>
+        </View>
+      </View>
     );
   }
 
@@ -172,11 +221,10 @@ export default function LeadDetailScreen() {
   const progressPct = STATUS_PROGRESS[lead.status] ?? 0;
   const isLost = lead.status === 'lost';
   const isWon = lead.status === 'converted';
-  const pr = priorityTone(lead.priority);
+  const pr = priorityTone(t, lead.priority);
+  const stTone = statusTone(t);
 
   // Overdue follow-up — only matters while the lead is in active pipeline.
-  // Uses a calendar-day comparison so a follow-up scheduled for today
-  // (any time) is NOT yet considered overdue.
   const followUpDate = lead.followUpAt?.toDate();
   const isFollowUpOverdue = (() => {
     if (!followUpDate || isTerminal) return false;
@@ -195,56 +243,97 @@ export default function LeadDetailScreen() {
     return Math.max(1, Math.round((today.getTime() - fu.getTime()) / 86_400_000));
   })();
 
-  function showOverdueExplainer() {
-    setShowOverdueSheet(true);
-  }
-
   return (
-    <Screen bg="grouped" padded={false}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
 
-      {/* Top bar */}
-      <View style={styles.topBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12}>
-          <Ionicons name="chevron-back" size={22} color={color.primary} />
-        </Pressable>
-        <View style={styles.topTitleWrap}>
-          <RNText style={styles.topEyebrow}>CRM</RNText>
-          <RNText style={styles.topTitle} numberOfLines={1}>Lead</RNText>
-        </View>
-        <Pressable
-          onPress={() => router.push(`/(app)/crm/add-lead?leadId=${lead.id}` as never)}
-          hitSlop={12}
-        >
-          <RNText style={styles.topAction}>Edit</RNText>
-        </Pressable>
-      </View>
+      <AmbientBackground />
+
+      {/* Top bar — ‹ Back · "Lead" · Edit */}
+      <TopBar
+        title="Lead"
+        rightLabel="Edit"
+        onBack={() => router.back()}
+        onRight={() => router.push(`/(app)/crm/add-lead?leadId=${lead.id}` as never)}
+      />
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[
+          styles.scroll,
+          {
+            paddingBottom: 40 + insets.bottom,
+          },
+        ]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Hero — avatar, name, priority + meta + status pill */}
-        <View style={styles.hero}>
-          <View style={styles.heroTop}>
-            <View style={styles.avatar}>
-              <RNText style={styles.avatarText}>
+        {/* Hero card */}
+        <View
+          style={[
+            styles.hero,
+            {
+              backgroundColor: t.colors.surface,
+              borderRadius: t.radii.card,
+              borderColor:
+                t.mode === 'dark'
+                  ? 'rgba(255,255,255,0.06)'
+                  : 'rgba(0,0,0,0.04)',
+              borderWidth: t.hairline,
+            },
+            t.shadows.resting,
+          ]}
+        >
+          {/* Top row — neutral avatar + name + priority pill.
+              Avatar uses neutral fill3 + secondary glyph per the color
+              discipline; the per-lead gradient was decorative only. */}
+          <View style={styles.heroRow1}>
+            <View
+              style={[
+                styles.avatar,
+                {
+                  backgroundColor: t.colors.fill3,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                },
+              ]}
+            >
+              <Text
+                style={{
+                  color: t.colors.secondary,
+                  fontSize: 18,
+                  fontWeight: '700',
+                }}
+              >
                 {lead.name.charAt(0).toUpperCase()}
-              </RNText>
+              </Text>
             </View>
-            <View style={styles.heroInfo}>
-              <View style={styles.heroTitleRow}>
-                <RNText style={styles.heroName} numberOfLines={1}>
+
+            <View style={styles.heroMeta}>
+              <View style={styles.heroNameRow}>
+                <Text
+                  variant="title3"
+                  color="label"
+                  style={{ flex: 1, marginRight: 8, fontWeight: '700' }}
+                  numberOfLines={1}
+                >
                   {lead.name}
-                </RNText>
+                </Text>
                 <Pressable
                   onPress={() => setShowPriorityPicker(true)}
                   hitSlop={6}
-                  style={[styles.scorePill, { backgroundColor: pr.bg }]}
+                  style={[styles.prioPill, { backgroundColor: pr.bg }]}
                 >
-                  <RNText style={[styles.pillText, { color: pr.fg }]}>
+                  <View style={[styles.prioDot, { backgroundColor: pr.fg }]} />
+                  <Text
+                    variant="caption2"
+                    style={{
+                      color: pr.fg,
+                      fontWeight: '700',
+                      marginLeft: 5,
+                      letterSpacing: 0.1,
+                    }}
+                  >
                     {pr.label}
-                  </RNText>
+                  </Text>
                   <Ionicons
                     name="chevron-down"
                     size={11}
@@ -252,539 +341,596 @@ export default function LeadDetailScreen() {
                     style={{ marginLeft: 3 }}
                   />
                 </Pressable>
-                {isFollowUpOverdue ? (
-                  <Pressable
-                    onPress={showOverdueExplainer}
-                    hitSlop={6}
-                    style={styles.overdueChip}
-                  >
-                    <Ionicons name="alert-circle" size={11} color="#fff" />
-                    <RNText style={styles.overdueChipText}>OVERDUE</RNText>
-                  </Pressable>
-                ) : null}
               </View>
-              <RNText style={styles.heroMeta} numberOfLines={1}>
-                {lead.projectType ? getProjectTypeLabel(lead.projectType) : 'Project'} ·{' '}
-                {lead.location ?? 'Unknown city'}
-              </RNText>
-              <RNText style={styles.heroMeta}>{lead.phone}</RNText>
+
+              <Text variant="footnote" color="secondary" style={{ marginTop: 2 }} numberOfLines={1}>
+                {lead.phone}
+              </Text>
+              <Text variant="caption1" color="tertiary" style={{ marginTop: 2 }} numberOfLines={1}>
+                {[
+                  lead.projectType ? getProjectTypeLabel(lead.projectType) : 'Project',
+                  lead.location ?? 'Unknown city',
+                ].join(' · ')}
+              </Text>
             </View>
           </View>
 
-          <View style={styles.statusRow}>
-            <View style={styles.statusPill}>
-              <RNText style={styles.statusPillText}>
+          {/* Divider */}
+          <View
+            style={[
+              styles.heroDivider,
+              {
+                backgroundColor:
+                  t.mode === 'dark'
+                    ? 'rgba(255,255,255,0.08)'
+                    : 'rgba(0,0,0,0.06)',
+              },
+            ]}
+          />
+
+          {/* Status pill + Change link */}
+          <View style={styles.heroStatusRow}>
+            <View style={[styles.statusPill, { backgroundColor: stTone.bg }]}>
+              <View style={[styles.statusDot, { backgroundColor: stTone.fg }]} />
+              <Text
+                variant="footnote"
+                style={{
+                  color: stTone.fg,
+                  fontWeight: '700',
+                  marginLeft: 6,
+                  letterSpacing: 0.1,
+                }}
+              >
                 {getLeadStatusLabel(lead.status)}
-              </RNText>
+              </Text>
             </View>
             <Pressable onPress={() => setShowStatusPicker(true)} hitSlop={8}>
-              <RNText style={styles.linkAction}>Change</RNText>
+              <Text variant="footnote" style={{ color: t.palette.blue.base, fontWeight: '600' }}>
+                Change
+              </Text>
             </Pressable>
           </View>
         </View>
 
-        {/* Quick actions */}
-        <View style={styles.actions}>
-          <Pressable style={styles.actionBtn} onPress={openCall}>
-            <Ionicons name="call-outline" size={20} color={color.primary} />
-            <RNText style={[styles.actionLabel, { color: color.primary }]}>Call</RNText>
-          </Pressable>
-          <Pressable style={styles.actionBtn} onPress={openWhatsApp}>
-            <Ionicons name="logo-whatsapp" size={20} color="#25D366" />
-            <RNText style={styles.actionLabel}>WhatsApp</RNText>
-          </Pressable>
-          <Pressable style={styles.actionBtn} onPress={() => setShowStatusPicker(true)}>
-            <Ionicons name="flag-outline" size={20} color={color.primary} />
-            <RNText style={[styles.actionLabel, { color: color.primary }]}>Status</RNText>
-          </Pressable>
+        {/* Overdue banner (inline, no separate alert sheet) */}
+        {isFollowUpOverdue ? (
+          <View
+            style={[
+              styles.overdueBanner,
+              {
+                backgroundColor: t.palette.red.soft,
+                borderRadius: t.radii.field,
+                borderColor: t.palette.red.base + '40',
+                borderWidth: t.hairline,
+              },
+            ]}
+          >
+            <Ionicons name="alert-circle" size={18} color={t.palette.red.base} />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text variant="footnote" style={{ color: t.palette.red.base, fontWeight: '700' }}>
+                Follow-up overdue
+              </Text>
+              <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+                {daysOverdue === 1
+                  ? `${lead.name}'s follow-up was due yesterday.`
+                  : `${lead.name}'s follow-up was due ${daysOverdue} days ago.`}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => router.push(`/(app)/crm/add-lead?leadId=${lead.id}` as never)}
+              hitSlop={6}
+            >
+              <Text variant="footnote" style={{ color: t.palette.red.base, fontWeight: '700' }}>
+                Edit
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {/* Quick actions — Call (blue) · WhatsApp (green brand) · Status (blue) */}
+        <View style={styles.actionsRow}>
+          <ActionButton
+            icon="call"
+            label="Call"
+            tint={t.palette.blue.base}
+            tintBg={t.palette.blue.soft}
+            onPress={openCall}
+          />
+          <ActionButton
+            icon="logo-whatsapp"
+            label="WhatsApp"
+            tint={t.palette.green.base}
+            tintBg={t.palette.green.soft}
+            onPress={openWhatsApp}
+          />
+          <ActionButton
+            icon="flag"
+            label="Status"
+            tint={t.palette.blue.base}
+            tintBg={t.palette.blue.soft}
+            onPress={() => setShowStatusPicker(true)}
+          />
         </View>
 
         {/* Stage progress */}
-        <RNText style={styles.sectionLabel}>STAGE</RNText>
-        <View style={styles.stageCard}>
-          <View style={styles.stageHead}>
-            <RNText style={styles.stageStatus}>
-              {getLeadStatusLabel(lead.status)}
-            </RNText>
-            <RNText style={styles.stagePct}>{progressPct}%</RNText>
-          </View>
-          <View style={styles.progressTrack}>
+        <FormGroup header="Stage">
+          <View style={styles.stageBlock}>
+            <View style={styles.stageHead}>
+              <Text variant="callout" color="label">
+                {getLeadStatusLabel(lead.status)}
+              </Text>
+              <Text
+                variant="footnote"
+                color="secondary"
+               
+              >
+                {progressPct}%
+              </Text>
+            </View>
             <View
               style={[
-                styles.progressFill,
-                {
-                  width: `${progressPct}%`,
-                  backgroundColor: isWon
-                    ? color.success
-                    : isLost
-                    ? color.danger
-                    : color.primary,
-                },
+                styles.progressTrack,
+                { backgroundColor: t.colors.fill3 },
               ]}
-            />
-          </View>
-          <View style={styles.stageFoot}>
-            <RNText style={styles.stageFootLabel}>NEW</RNText>
-            <RNText style={styles.stageFootLabel}>WON</RNText>
-          </View>
-          {isTerminal ? (
-            <View style={styles.terminalNote}>
-              <RNText
+            >
+              <View
                 style={[
-                  styles.terminalText,
-                  { color: isWon ? color.success : color.danger },
+                  styles.progressFill,
+                  {
+                    // 90/10: progress bar fills in interactive blue while
+                    // active. Won doesn't earn green any more (the label
+                    // "Won" already says success); lost still earns red.
+                    width: `${progressPct}%`,
+                    backgroundColor: isLost
+                      ? t.palette.red.base
+                      : t.palette.blue.base,
+                  },
                 ]}
+              />
+            </View>
+            <View style={styles.stageFoot}>
+              <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.6 }}>
+                NEW
+              </Text>
+              <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.6 }}>
+                WON
+              </Text>
+            </View>
+            {isTerminal ? (
+              <Text
+                variant="caption1"
+                style={{
+                  // 90/10: only "lost" terminal state earns red. "Won" reads
+                  // in neutral — its label is celebration enough.
+                  color: isLost ? t.palette.red.base : t.colors.secondary,
+                  marginTop: 8,
+                  fontWeight: '600',
+                }}
               >
                 Terminal · {getLeadStatusLabel(lead.status)}
-              </RNText>
-            </View>
-          ) : null}
-        </View>
+              </Text>
+            ) : null}
+          </View>
+        </FormGroup>
 
         {/* Details */}
-        <Group header="Details">
-          <Row title="Source" meta={getLeadSourceLabel(lead.source)} />
+        <FormGroup header="Details">
+          <Row label="Source" value={getLeadSourceLabel(lead.source)} />
           <Row
-            title="Priority"
-            meta={getLeadPriorityLabel(lead.priority)}
-            onPress={() => setShowPriorityPicker(true)}
+            label="Priority"
+            value={getLeadPriorityLabel(lead.priority)}
             chevron
+            onPress={() => setShowPriorityPicker(true)}
           />
           <Row
-            title="Project type"
-            meta={lead.projectType ? getProjectTypeLabel(lead.projectType) : '—'}
+            label="Project type"
+            value={lead.projectType ? getProjectTypeLabel(lead.projectType) : '—'}
           />
-          <Row title="Location" meta={lead.location ?? '—'} />
+          <Row label="Location" value={lead.location ?? '—'} />
           <Row
-            title="Budget"
-            meta={
+            label="Budget"
+            value={
               lead.budget !== undefined && lead.budget !== null
                 ? `₹ ${lead.budget.toLocaleString('en-IN')}`
                 : '—'
             }
           />
-          <Row title="Assigned" meta={assignedName} />
+          <Row label="Assigned" value={assignedName} />
           <Row
-            title="Expected start"
-            meta={fmtDateTime(lead.expectedStartDate?.toDate())}
+            label="Expected start"
+            value={fmtDateTime(lead.expectedStartDate?.toDate())}
           />
           <Row
-            title="Follow-up"
-            meta={
-              isFollowUpOverdue
-                ? `${fmtDateTime(lead.followUpAt?.toDate())} · ${daysOverdue}D OVERDUE`
-                : fmtDateTime(lead.followUpAt?.toDate())
-            }
-            destructive={isFollowUpOverdue}
-            onPress={isFollowUpOverdue ? showOverdueExplainer : undefined}
-            chevron={isFollowUpOverdue}
+            label="Follow-up"
+            value={fmtDateTime(lead.followUpAt?.toDate())}
+            valueColor={isFollowUpOverdue ? t.palette.red.base : undefined}
           />
           <Row
-            title="Created"
-            meta={fmtDateTime(lead.createdAt?.toDate())}
-            last
+            label="Created"
+            value={fmtDateTime(lead.createdAt?.toDate())}
+            divider={false}
           />
-        </Group>
+        </FormGroup>
 
         {/* Requirements */}
         {lead.requirements ? (
-          <Group header="Requirements">
+          <FormGroup header="Requirements">
             <View style={styles.notePad}>
-              <RNText style={styles.bodyText}>{lead.requirements}</RNText>
+              <Text variant="body" color="label">
+                {lead.requirements}
+              </Text>
             </View>
-          </Group>
+          </FormGroup>
         ) : null}
 
         {/* Tags */}
         {lead.tags && lead.tags.length > 0 ? (
-          <Group header="Tags">
+          <FormGroup header="Tags">
             <View style={styles.tagPad}>
-              {lead.tags.map((t) => (
-                <View key={t} style={styles.tagPill}>
-                  <RNText style={styles.tagText}>{t}</RNText>
+              {lead.tags.map((tag) => (
+                <View
+                  key={tag}
+                  style={[
+                    styles.tagPill,
+                    {
+                      backgroundColor: t.colors.fill3,
+                      borderRadius: t.radii.pill,
+                    },
+                  ]}
+                >
+                  <Text variant="footnote" color="label" style={{ fontWeight: '500' }}>
+                    {tag}
+                  </Text>
                 </View>
               ))}
             </View>
-          </Group>
+          </FormGroup>
         ) : null}
 
         {/* Notes */}
         {lead.notes ? (
-          <Group header="Notes">
+          <FormGroup header="Notes">
             <View style={styles.notePad}>
-              <RNText style={styles.bodyText}>{lead.notes}</RNText>
+              <Text variant="body" color="label">
+                {lead.notes}
+              </Text>
             </View>
-          </Group>
+          </FormGroup>
         ) : null}
 
-        {/* Danger zone */}
-        <Group header="Danger zone">
-          <Row
-            title={deleting ? 'Deleting…' : 'Delete lead'}
-            subtitle="Permanently remove from CRM"
-            left={<Ionicons name="trash-outline" size={18} color={color.danger} />}
-            onPress={() => setShowDeleteSheet(true)}
-            destructive
-            last
-          />
-        </Group>
+        {/* Delete — destructive button at bottom */}
+        <View style={styles.dangerWrap}>
+          <Pressable
+            onPress={onDelete}
+            disabled={deleting}
+            style={({ pressed }) => [
+              styles.dangerBtn,
+              {
+                backgroundColor:
+                  t.mode === 'dark'
+                    ? 'rgba(255,69,58,0.12)'
+                    : 'rgba(255,59,48,0.08)',
+                borderRadius: t.radii.field,
+                borderColor:
+                  t.mode === 'dark'
+                    ? 'rgba(255,69,58,0.3)'
+                    : 'rgba(255,59,48,0.25)',
+                borderWidth: t.hairline,
+              },
+              (pressed || deleting) && { opacity: 0.6 },
+            ]}
+          >
+            <Ionicons name="trash-outline" size={16} color={t.palette.red.base} />
+            <Text
+              variant="body"
+              style={{ color: t.palette.red.base, fontWeight: '600', marginLeft: 6 }}
+            >
+              {deleting ? 'Deleting…' : 'Delete lead'}
+            </Text>
+          </Pressable>
+        </View>
       </ScrollView>
 
-      <SelectModal
-        visible={showStatusPicker}
+      {/* Pickers */}
+      <SelectSheet
+        open={showStatusPicker}
         title="Change status"
         options={statusOptions}
-        value={lead.status}
+        selected={lead.status}
+        onPick={(key) => void pickStatus(key)}
         onClose={() => setShowStatusPicker(false)}
-        onPick={pickStatus}
       />
-
-      <SelectModal
-        visible={showPriorityPicker}
+      <SelectSheet
+        open={showPriorityPicker}
         title="Change priority"
         options={priorityOptions}
-        value={lead.priority}
+        selected={lead.priority}
+        onPick={(key) => void pickPriority(key)}
         onClose={() => setShowPriorityPicker(false)}
-        onPick={pickPriority}
       />
+    </View>
+  );
+}
 
-      <AlertSheet
-        visible={showOverdueSheet}
-        onClose={() => setShowOverdueSheet(false)}
-        tone="danger"
-        icon="alert-circle"
-        title="Follow-up overdue"
-        message={
-          daysOverdue === 1
-            ? `${lead.name}'s follow-up was due yesterday.\n\nReach out today, or open Edit to push the follow-up date.`
-            : `${lead.name}'s follow-up was due ${daysOverdue} days ago.\n\nReach out today, or open Edit to push the follow-up date.`
-        }
-        actions={[
-          { label: 'Dismiss', variant: 'default' },
-          {
-            label: 'Edit lead',
-            variant: 'primary',
-            onPress: () => router.push(`/(app)/crm/add-lead?leadId=${lead.id}` as never),
-          },
-        ]}
-      />
+// ── Local helpers ──────────────────────────────────────────────────
 
-      <AlertSheet
-        visible={showDeleteSheet}
-        onClose={() => setShowDeleteSheet(false)}
-        tone="danger"
-        icon="trash"
-        title="Delete lead?"
-        message={`This will permanently remove "${lead.name}" from your CRM. This can't be undone.`}
-        actions={[
-          { label: 'Cancel', variant: 'default' },
-          {
-            label: deleting ? 'Deleting…' : 'Delete',
-            variant: 'destructive',
-            onPress: () => void performDelete(),
-          },
-        ]}
-      />
-    </Screen>
+function TopBar({
+  title,
+  rightLabel,
+  onBack,
+  onRight,
+}: {
+  title: string;
+  rightLabel: string;
+  onBack: () => void;
+  onRight?: () => void;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      style={[
+        topStyles.bar,
+        { paddingTop: insets.top + 6 },
+      ]}
+    >
+      {/* Left — content-sized, hugs the left edge (after paddingHorizontal). */}
+      <Pressable onPress={onBack} hitSlop={8} style={topStyles.leftSide}>
+        <Ionicons name="chevron-back" size={22} color={t.palette.blue.base} />
+        <Text variant="body" style={{ color: t.palette.blue.base, marginLeft: -2 }}>
+          Back
+        </Text>
+      </Pressable>
+
+      {/* Title — flexes through the middle, centered in the remaining space. */}
+      <Text variant="headline" color="label" style={topStyles.title} numberOfLines={1}>
+        {title}
+      </Text>
+
+      {/* Right — content-sized, hugs the right edge. */}
+      <Pressable onPress={onRight} hitSlop={8} style={topStyles.rightSide}>
+        {rightLabel ? (
+          <Text variant="body" style={{ color: t.palette.blue.base, fontWeight: '600' }}>
+            {rightLabel}
+          </Text>
+        ) : null}
+      </Pressable>
+    </View>
+  );
+}
+
+function ActionButton({
+  icon,
+  label,
+  tint,
+  tintBg,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  tint: string;
+  tintBg: string;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={4}
+      style={({ pressed }) => [
+        actStyles.btn,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: t.radii.card,
+          borderColor:
+            t.mode === 'dark'
+              ? 'rgba(255,255,255,0.06)'
+              : 'rgba(0,0,0,0.04)',
+          borderWidth: t.hairline,
+        },
+        t.shadows.resting,
+        pressed && { opacity: 0.85, transform: [{ scale: 0.97 }] },
+      ]}
+    >
+      <View style={[actStyles.iconWrap, { backgroundColor: tintBg }]}>
+        <Ionicons name={icon} size={18} color={tint} />
+      </View>
+      <Text variant="caption1" color="label" style={{ marginTop: 6, fontWeight: '600' }}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  // ── Unified type scale (matches io.tsx form scale + card scale) ──
-  // Section labels (uppercase, between groups)
-  sectionLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    fontWeight: '500',
-    color: color.textFaint,
-    letterSpacing: 0.8,
-    paddingHorizontal: screenInset,
-    paddingBottom: 8,
-  },
-  // Body / multiline (notes, requirements)
-  bodyText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    lineHeight: 20,
-    color: color.text,
-  },
-  // Hero name
-  heroName: {
+  centered: {
     flex: 1,
-    flexShrink: 1,
-    fontFamily: fontFamily.sans,
-    fontSize: 18,
-    lineHeight: 22,
-    fontWeight: '700',
-    color: color.text,
-    letterSpacing: -0.3,
-  },
-  heroMeta: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    lineHeight: 16,
-    color: color.textMuted,
-    marginTop: 2,
-  },
-  // Avatar text
-  avatarText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 22,
-    fontWeight: '700',
-    color: color.primary,
-  },
-  // Pills (priority + status — same scale as card pills)
-  pillText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 10,
-    fontWeight: '600',
-    letterSpacing: 0.1,
-  },
-  statusPillText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.primary,
-  },
-  // Inline link action ("Change", "Back", "Edit")
-  linkAction: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '500',
-    color: color.primary,
-  },
-  // Top bar
-  topEyebrow: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    fontWeight: '500',
-    color: color.textFaint,
-    letterSpacing: 0.8,
-  },
-  topTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    fontWeight: '600',
-    color: color.text,
-    letterSpacing: -0.1,
-  },
-  topAction: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.primary,
-  },
-  // Quick action labels
-  actionLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    fontWeight: '600',
-    color: color.text,
-    marginTop: 2,
-  },
-  // Stage card
-  stageStatus: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.text,
-  },
-  stagePct: {
-    fontFamily: fontFamily.mono,
-    fontSize: 12,
-    color: color.textMuted,
-    fontVariant: ['tabular-nums'],
-  },
-  stageFootLabel: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 0.8,
-  },
-  terminalText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 0.1,
-  },
-  // Tag chip text
-  tagText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    color: color.textMuted,
-  },
-
-  topBar: {
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: screenInset,
-    paddingTop: space.sm,
-    paddingBottom: space.xs,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
+    justifyContent: 'center',
   },
-  topTitleWrap: { flex: 1, alignItems: 'center' },
-
   scroll: {
-    paddingTop: space.md,
-    paddingBottom: space.xxl,
+    paddingTop: 8,
   },
 
-  // Hero
+  // Hero card
   hero: {
-    marginHorizontal: screenInset,
-    marginBottom: space.md,
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: color.border,
-    padding: space.md,
+    marginHorizontal: 16,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 12,
+    overflow: 'hidden',
   },
-  heroTop: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  heroInfo: { flex: 1, minWidth: 0 },
-  heroTitleRow: {
+  heroRow1: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    marginBottom: 2,
-  },
-  scorePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: radius.pill,
-  },
-  overdueChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: color.danger,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  overdueChipText: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: '#fff',
-    letterSpacing: 0.6,
+    gap: 12,
   },
   avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: color.primarySoft,
+    width: 48,
+    height: 48,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
+    flexShrink: 0,
   },
-  statusRow: {
+  heroMeta: {
+    flex: 1,
+    minWidth: 0,
+  },
+  heroNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  prioPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 999,
+    flexShrink: 0,
+  },
+  prioDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+  },
+  heroDivider: {
+    height: 0.5,
+    marginVertical: 12,
+  },
+  heroStatusRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: space.sm,
   },
   statusPill: {
-    paddingHorizontal: space.sm,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: color.primarySoft,
-  },
-
-  // Actions
-  actions: {
     flexDirection: 'row',
-    gap: 8,
-    marginHorizontal: screenInset,
-    marginBottom: space.md,
-  },
-  actionBtn: {
-    flex: 1,
-    minHeight: 56,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    borderRadius: 999,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
 
-  // Stage card
-  stageCard: {
-    marginHorizontal: screenInset,
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: color.border,
-    padding: space.md,
-    marginBottom: space.lg,
+  // Overdue inline banner
+  overdueBanner: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  // Quick actions
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 14,
+    paddingHorizontal: 16,
+  },
+
+  // Stage block (inside FormGroup)
+  stageBlock: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   stageHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
   },
   progressTrack: {
     height: 6,
-    backgroundColor: color.separator,
+    borderRadius: 3,
     overflow: 'hidden',
+    marginTop: 10,
   },
   progressFill: {
-    height: '100%',
-    backgroundColor: color.primary,
+    height: 6,
+    borderRadius: 3,
   },
   stageFoot: {
-    marginTop: 6,
     flexDirection: 'row',
     justifyContent: 'space-between',
-  },
-  terminalNote: {
-    marginTop: space.sm,
-    paddingTop: space.xs,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.border,
+    marginTop: 6,
   },
 
-  // Notes / requirements / tags
+  // Notes / Requirements / Tags pads
   notePad: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    backgroundColor: color.surface,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   tagPad: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: color.surface,
   },
   tagPill: {
     paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-    backgroundColor: color.surfaceAlt,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.border,
+    paddingVertical: 5,
   },
 
-  // Footer
-  footer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingTop: space.xs,
-    paddingBottom: space.md,
-    paddingHorizontal: 0,
-    backgroundColor: color.bgGrouped,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.borderStrong,
+  // Delete button
+  dangerWrap: {
+    paddingHorizontal: 16,
+    paddingTop: 24,
+  },
+  dangerBtn: {
+    height: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+});
+
+const topStyles = StyleSheet.create({
+  bar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  leftSide: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 36,
+    // content-sized — hugs the left edge
+  },
+  rightSide: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    minHeight: 36,
+    // content-sized — hugs the right edge
+  },
+  title: {
+    flex: 1,
+    textAlign: 'center',
+    fontWeight: '600',
+    paddingHorizontal: 8,
+  },
+});
+
+const actStyles = StyleSheet.create({
+  btn: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

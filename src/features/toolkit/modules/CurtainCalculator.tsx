@@ -13,8 +13,8 @@
 import { useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -62,12 +62,7 @@ export function CurtainCalculator({
   }, [windowW, drop, fullness, rollW]);
 
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="Curtain Fabric"
-      eyebrow="SOFT FINISHES"
-    >
+    <ToolModal visible={visible} onClose={onClose} title="Curtain fabric">
       <Section title="Window">
         <View style={styles.row2}>
           <View style={styles.col}>
@@ -94,36 +89,15 @@ export function CurtainCalculator({
 
       <Section title="Header style (fullness)">
         <View style={styles.fullnessRow}>
-          {CURTAIN_FULLNESS.map((opt) => {
-            const active = opt.value === fullness;
-            return (
-              <Pressable
-                key={opt.value}
-                onPress={() => setFullness(opt.value)}
-                style={[styles.fullnessChip, active ? styles.fullnessChipActive : null]}
-              >
-                <Text
-                  style={
-                    active
-                      ? { ...styles.fullnessLabel, color: '#fff' }
-                      : styles.fullnessLabel
-                  }
-                >
-                  {opt.label}
-                </Text>
-                <Text
-                  style={
-                    active
-                      ? { ...styles.fullnessDesc, color: '#fff' }
-                      : styles.fullnessDesc
-                  }
-                  numberOfLines={2}
-                >
-                  {opt.desc}
-                </Text>
-              </Pressable>
-            );
-          })}
+          {CURTAIN_FULLNESS.map((opt) => (
+            <FullnessChip
+              key={opt.value}
+              label={opt.label}
+              desc={opt.desc}
+              active={opt.value === fullness}
+              onPress={() => setFullness(opt.value)}
+            />
+          ))}
         </View>
       </Section>
 
@@ -159,7 +133,7 @@ export function CurtainCalculator({
               : undefined
           }
         />
-        <Text style={styles.note}>
+        <Text variant="caption1" color="secondary" style={styles.note}>
           Add 0.5 m extra per pair if the fabric has a horizontal pattern
           repeat that needs matching across the joins.
         </Text>
@@ -168,47 +142,76 @@ export function CurtainCalculator({
   );
 }
 
+function FullnessChip({
+  label,
+  desc,
+  active,
+  onPress,
+}: {
+  label: string;
+  desc: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.fullnessChip,
+        {
+          backgroundColor: active
+            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+            : t.colors.surface,
+          borderRadius: t.radii.field,
+          borderColor: active
+            ? t.palette.blue.base + '33'
+            : (t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'),
+          borderWidth: t.hairline,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Text
+        variant="title3"
+        style={{
+          color: active ? t.palette.blue.base : t.colors.label,
+          fontWeight: '700',
+        }}
+      >
+        {label}
+      </Text>
+      <Text
+        variant="caption1"
+        style={{
+          color: active ? t.palette.blue.base : t.colors.secondary,
+          marginTop: 2,
+        }}
+        numberOfLines={2}
+      >
+        {desc}
+      </Text>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
-  row2: { flexDirection: 'row', gap: space.sm },
+  row2: { flexDirection: 'row', gap: 10 },
   col: { flex: 1 },
   fullnessRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 10,
   },
   fullnessChip: {
     flexBasis: '48%',
     flexGrow: 1,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.sm,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    gap: 2,
-  },
-  fullnessChipActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
-  },
-  fullnessLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 16,
-    fontWeight: '700',
-    color: color.text,
-    letterSpacing: -0.2,
-  },
-  fullnessDesc: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    color: color.textMuted,
-    lineHeight: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
   },
   note: {
-    fontSize: 11,
-    color: color.textFaint,
-    lineHeight: 16,
     marginTop: 4,
-    fontFamily: fontFamily.sans,
+    paddingHorizontal: 4,
+    lineHeight: 17,
   },
 });

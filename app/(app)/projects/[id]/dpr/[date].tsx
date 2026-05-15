@@ -1,6 +1,25 @@
 /**
- * DPR — Daily Progress Report form. One doc per project+date (`${projectId}_${date}`).
- * Snapshots staff + material-request totals at save time.
+ * DPR — Daily Progress Report (v2 design).
+ *
+ * One doc per project+date (`${projectId}_${date}`). Snapshots staff +
+ * material-request totals at save time so the doc reads cleanly later
+ * even after the underlying data shifts.
+ *
+ * Layout (top → bottom):
+ *   1. v2 header: back · "Daily report" + pretty date · circular trash btn (when existing)
+ *   2. Combined Staff / Materials / Value KPI tile (hairline-divided)
+ *   3. FormGroup "Notes" — 3 multiline InputRows (Work done · Issues · Tomorrow's plan)
+ *   4. Staff section — surface card with attendance rows + estimated payroll footer
+ *   5. Materials section — surface cards per material request with item lines
+ *   6. Tasks on this day — surface card with task rows (progress bar + status pill)
+ *   7. Timeline updates — author rows with delta + photos
+ *   8. Site photos — surface card with thumb grid + Gallery/Camera dashed buttons
+ *   9. Footer — Share PDF (existing only) + Save / Update DPR
+ *
+ * Preserves all data flow: `useDpr`, `useAttendance`, `useMaterialRequests`,
+ * `useTasks`, `useProjectTaskUpdatesForDate`, the upsert/delete pipeline,
+ * the `commitStagedFiles` R2 upload pipeline, and PDF export via
+ * `generateAndShareWebPdf`.
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
@@ -52,12 +71,13 @@ import {
   type StagedFile,
 } from '@/src/lib/commitStagedFiles';
 import { formatInr } from '@/src/lib/format';
-import { Button } from '@/src/ui/Button';
-import { Screen } from '@/src/ui/Screen';
 import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
-import { color, radius, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Text } from '@/src/ui/v2/Text';
+import { inrCompact, useThemeV2 } from '@/src/theme/v2';
 
 function parseDate(s: string): Date {
   const [y, m, d] = s.split('-').map(Number);
@@ -101,12 +121,27 @@ function materialRequestStatusLabel(status: MaterialRequestStatus): string {
   }
 }
 
+function statusToneFor(status: MaterialRequestStatus): 'blue' | 'green' | 'orange' | 'red' | 'yellow' {
+  switch (status) {
+    case 'approved':
+      return 'green';
+    case 'pending':
+      return 'orange';
+    case 'rejected':
+      return 'red';
+    case 'draft':
+      return 'yellow';
+    default:
+      return 'blue';
+  }
+}
+
 export default function DprScreen() {
+  const t = useThemeV2();
   const { id: projectId, date: dateStr } = useLocalSearchParams<{ id: string; date: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const { data: project } = useProject(projectId);
-  /** Prefer project canon — must match rules `canSeeProject` / org gates. */
   const orgId = project?.orgId ?? userDoc?.primaryOrgId ?? '';
   const { data: existing, loading } = useDpr(projectId, dateStr);
   const { data: attendanceRecords, summary: attSummary } = useAttendance(
@@ -118,7 +153,7 @@ export default function DprScreen() {
   const { data: tasks } = useTasks(projectId);
 
   const taskRefs = useMemo(
-    () => tasks.map((t) => ({ id: t.id, title: t.title })),
+    () => tasks.map((task) => ({ id: task.id, title: task.title })),
     [tasks],
   );
 
@@ -176,15 +211,21 @@ export default function DprScreen() {
   const staffEstPayTotalLabel =
     staffPayTotal != null ? formatInr(staffPayTotal) : undefined;
 
-  const taskIdsUpdatedToday = useMemo(() => new Set(dayUpdates.map((u) => u.taskId)), [dayUpdates]);
+  const taskIdsUpdatedToday = useMemo(
+    () => new Set(dayUpdates.map((u) => u.taskId)),
+    [dayUpdates],
+  );
 
   const siteTasks = useMemo(() => {
     if (!bounds) return [];
     const { dayStart, dayEndExclusive } = bounds;
     const map = new Map<string, Task>();
-    for (const t of tasks) {
-      if (taskOverlapsSelectedDay(t, dayStart, dayEndExclusive) || taskIdsUpdatedToday.has(t.id)) {
-        map.set(t.id, t);
+    for (const task of tasks) {
+      if (
+        taskOverlapsSelectedDay(task, dayStart, dayEndExclusive) ||
+        taskIdsUpdatedToday.has(task.id)
+      ) {
+        map.set(task.id, task);
       }
     }
     return [...map.values()].sort((a, b) => a.title.localeCompare(b.title));
@@ -286,15 +327,15 @@ export default function DprScreen() {
         staffRows: pdfStaffRows,
         ...(staffEstPayTotalLabel ? { staffEstPayTotalLabel } : {}),
         materialSections: pdfMaterialSections,
-        tasks: siteTasks.map((t) => ({
-          title: t.title,
-          category: getCategoryLabel(t.category),
-          assignee: t.assignedToName ?? '',
-          start: fmtTaskTs(t.startDate),
-          end: t.endDate ? fmtTaskTs(t.endDate) : '—',
-          progress: Math.round(Math.max(0, Math.min(100, t.progress ?? 0))),
-          statusLabel: taskStatusPill(t, calendarTodayStart).label,
-          description: t.description?.trim() ?? '',
+        tasks: siteTasks.map((task) => ({
+          title: task.title,
+          category: getCategoryLabel(task.category),
+          assignee: task.assignedToName ?? '',
+          start: fmtTaskTs(task.startDate),
+          end: task.endDate ? fmtTaskTs(task.endDate) : '—',
+          progress: Math.round(Math.max(0, Math.min(100, task.progress ?? 0))),
+          statusLabel: taskStatusPill(task, calendarTodayStart).label,
+          description: task.description?.trim() ?? '',
         })),
         updates: dayUpdates.map((row) => {
           const prev = previousProgressForUpdate(row, dayUpdates);
@@ -416,312 +457,672 @@ export default function DprScreen() {
     ]);
   };
 
-  return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
-      <Stack.Screen options={{ headerShown: false }} />
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="chevron-back" size={22} color={color.text} />
+  return (
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
+
+      {/* Header */}
+      <View style={styles.header}>
+        <Pressable
+          onPress={() => router.back()}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { backgroundColor: t.colors.fill3, borderRadius: 999 },
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <Ionicons name="chevron-back" size={18} color={t.colors.label} />
         </Pressable>
-        <View style={styles.navTitleWrap}>
-          <Text variant="bodyStrong" color="text">DPR</Text>
-          <Text variant="caption" color="textMuted">{prettyDate(dateStr)}</Text>
+        <View style={{ flex: 1 }}>
+          <Text variant="headline" color="label">
+            Daily report
+          </Text>
+          <Text
+            variant="caption2"
+            color="secondary"
+            style={{ letterSpacing: 0.5, marginTop: 1 }}
+          >
+            {prettyDate(dateStr).toUpperCase()}
+          </Text>
         </View>
         {existing ? (
-          <Pressable onPress={onDelete} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="trash-outline" size={20} color={color.danger} />
+          <Pressable
+            onPress={onDelete}
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.iconBtn,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Ionicons name="trash-outline" size={16} color={t.palette.red.base} />
           </Pressable>
         ) : (
-          <View style={styles.navBtn} />
+          <View style={styles.iconBtn} />
         )}
       </View>
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={{ paddingBottom: 32 }}
           keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
           nestedScrollEnabled
         >
-          <Text variant="caption" color="textMuted" style={styles.label}>TODAY&apos;S SNAPSHOT</Text>
-          <View style={styles.snapRow}>
-            <View style={styles.snapCard}>
-              <Ionicons name="people" size={18} color={color.primary} />
-              <Text variant="title" color="text">{attSummary.present}</Text>
-              <Text variant="caption" color="textMuted">Staff present</Text>
-            </View>
-            <View style={styles.snapCard}>
-              <Ionicons name="clipboard-outline" size={18} color={color.success} />
-              <Text variant="title" color="text">{requestsTodayCount}</Text>
-              <Text variant="caption" color="textMuted">Material requested</Text>
-            </View>
-            <View style={styles.snapCard}>
-              <Ionicons name="cash-outline" size={18} color={color.primary} />
-              <Text variant="title" color="text" style={{ fontSize: 14 }}>
-                {formatInr(requestsTodayValue)}
-              </Text>
-              <Text variant="caption" color="textMuted">Material value</Text>
+          {/* Snapshot tile */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+            <View
+              style={[
+                styles.snapCard,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: t.radii.card,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+              ]}
+            >
+              <SnapCol
+                label="STAFF"
+                value={`${attSummary.present}/${attSummary.total || 0}`}
+                color={t.palette.green.base}
+              />
+              <View style={[styles.snapDivider, { backgroundColor: t.colors.separator }]} />
+              <SnapCol
+                label="MATERIAL"
+                value={String(requestsTodayCount)}
+                color={t.palette.blue.base}
+              />
+              <View style={[styles.snapDivider, { backgroundColor: t.colors.separator }]} />
+              <SnapCol
+                label="VALUE"
+                value={inrCompact(requestsTodayValue)}
+                color={t.palette.orange.base}
+              />
             </View>
           </View>
 
-          <Text variant="caption" color="textMuted" style={styles.label}>
-            STAFF ROSTER ({staffSorted.length})
-          </Text>
-          {staffSorted.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Text variant="meta" color="textMuted">No attendance marked for this date.</Text>
-            </View>
-          ) : (
-            <>
-              {staffSorted.map((r) => {
-                const est = estimatedPayForAttendanceRecord(r);
-                return (
-                  <View key={r.id} style={styles.staffCard}>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                      <Text variant="bodyStrong" color="text" numberOfLines={1}>
-                        {r.labourName}
-                      </Text>
-                      <Text variant="caption" color="textMuted" numberOfLines={1}>
-                        {r.labourRole || '—'} · {formatAttendanceRateLabel(r)}
-                      </Text>
-                    </View>
-                    <View style={styles.staffCardRight}>
-                      <View style={[styles.miniPill, { backgroundColor: color.surfaceAlt }]}>
-                        <Text variant="caption" color="text">
-                          {attendanceStatusLabel(r.status)}
+          {/* Notes */}
+          <FormGroup header="Notes">
+            <InputRow
+              label="Work done"
+              value={workDone}
+              onChangeText={setWorkDone}
+              placeholder="Describe what was completed on site today…"
+              multiline
+            />
+            <InputRow
+              label="Issues / delays"
+              value={issues}
+              onChangeText={setIssues}
+              placeholder="Manpower shortage, material delay, etc."
+              multiline
+            />
+            <InputRow
+              label="Tomorrow's plan"
+              value={tomorrowPlan}
+              onChangeText={setTomorrowPlan}
+              placeholder="Planned activities for the next working day"
+              multiline
+              divider={false}
+            />
+          </FormGroup>
+
+          {/* Staff */}
+          <Section header="Staff" count={staffSorted.length}>
+            {staffSorted.length === 0 ? (
+              <EmptyRow text="No attendance marked for this date" icon="people-outline" />
+            ) : (
+              <>
+                {staffSorted.map((r, idx) => {
+                  const est = estimatedPayForAttendanceRecord(r);
+                  const statusTone = (() => {
+                    if (r.status === 'present') return t.palette.green;
+                    if (r.status === 'half_day') return t.palette.orange;
+                    if (r.status === 'absent') return t.palette.red;
+                    // Fallback (e.g. 'leave' or unknown) → orange (pending),
+                    // since yellow isn't in our 4-colour palette.
+                    return t.palette.orange;
+                  })();
+                  const last = idx === staffSorted.length - 1 && staffPayTotal == null;
+                  return (
+                    <View
+                      key={r.id}
+                      style={[
+                        styles.staffRow,
+                        { position: 'relative' },
+                      ]}
+                    >
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text
+                          variant="body"
+                          color="label"
+                         
+                          numberOfLines={1}
+                        >
+                          {r.labourName}
+                        </Text>
+                        <Text
+                          variant="caption1"
+                          color="secondary"
+                          style={{ marginTop: 2 }}
+                          numberOfLines={1}
+                        >
+                          {r.labourRole || '—'} · {formatAttendanceRateLabel(r)}
                         </Text>
                       </View>
-                      <Text variant="caption" color="text" style={{ marginTop: 6 }}>
-                        {formatEstimatedPayLabel(est)}
-                      </Text>
+                      <View style={{ alignItems: 'flex-end', marginLeft: 8 }}>
+                        <View
+                          style={[
+                            styles.statusPill,
+                            {
+                              backgroundColor:
+                                t.mode === 'dark' ? statusTone.softDark : statusTone.soft,
+                              borderRadius: 999,
+                            },
+                          ]}
+                        >
+                          <Text
+                            variant="caption2"
+                            style={{
+                              color: statusTone.base,
+                              fontWeight: '700',
+                              letterSpacing: 0.4,
+                            }}
+                          >
+                            {attendanceStatusLabel(r.status).toUpperCase()}
+                          </Text>
+                        </View>
+                        <Text
+                          variant="caption1"
+                          color="label"
+                          style={{ marginTop: 4, fontWeight: '600' }}
+                        >
+                          {formatEstimatedPayLabel(est)}
+                        </Text>
+                      </View>
+                      {!last ? (
+                        <View
+                          style={[
+                            styles.rowDivider,
+                            { backgroundColor: t.colors.separator, left: 16 },
+                          ]}
+                        />
+                      ) : null}
                     </View>
-                  </View>
-                );
-              })}
-              {staffPayTotal != null ? (
-                <Text variant="caption" color="textMuted" style={styles.staffTotalLine}>
-                  Estimated payroll (rated rows): {formatInr(staffPayTotal)}
-                </Text>
-              ) : null}
-            </>
-          )}
-
-          <Text variant="caption" color="textMuted" style={styles.label}>
-            MATERIAL REQUESTED (DETAIL)
-          </Text>
-          {requestsToday.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Text variant="meta" color="textMuted">No material requests created this day.</Text>
-            </View>
-          ) : (
-            requestsToday.map((req) => (
-              <View key={req.id} style={styles.matCard}>
-                <View style={styles.matCardHead}>
-                  <Text variant="bodyStrong" color="text" style={{ flex: 1 }} numberOfLines={2}>
-                    {req.title}
-                  </Text>
-                  <View style={[styles.miniPill, { backgroundColor: color.primarySoft }]}>
-                    <Text variant="caption" color="primary">
-                      {materialRequestStatusLabel(req.status)}
+                  );
+                })}
+                {staffPayTotal != null ? (
+                  <View style={styles.staffTotalRow}>
+                    <Text variant="footnote" color="secondary">
+                      Estimated payroll
+                    </Text>
+                    <Text
+                      variant="footnote"
+                      style={{ color: t.palette.blue.base, fontWeight: '700' }}
+                    >
+                      {formatInr(staffPayTotal)}
                     </Text>
                   </View>
-                </View>
-                <Text variant="caption" color="primary" style={{ marginBottom: space.xs }}>
-                  {formatInr(req.totalValue ?? 0)}
-                </Text>
-                {req.items.map((it, idx) => (
-                  <Text key={`${req.id}-it-${idx}`} variant="meta" color="textMuted" numberOfLines={3}>
-                    • {it.name} · {it.quantity} {it.unit} × {formatInr(it.rate)} ={' '}
-                    {formatInr(it.totalCost)}
-                  </Text>
-                ))}
-              </View>
-            ))
-          )}
+                ) : null}
+              </>
+            )}
+          </Section>
 
-          <TextField
-            label="Work done today"
-            placeholder="Describe what was completed on site today…"
-            multiline
-            value={workDone}
-            onChangeText={setWorkDone}
-          />
-
-          <TextField
-            label="Issues / delays"
-            placeholder="Manpower shortage, material delay, etc."
-            multiline
-            value={issues}
-            onChangeText={setIssues}
-          />
-
-          <TextField
-            label="Tomorrow's plan"
-            placeholder="Planned activities for the next working day"
-            multiline
-            value={tomorrowPlan}
-            onChangeText={setTomorrowPlan}
-          />
-
-          <Text variant="caption" color="textMuted" style={styles.label}>
-            TODAY&apos;S TASKS (ACTIVE OR UPDATED THIS DAY)
-          </Text>
-          {siteTasks.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Text variant="meta" color="textMuted">No tasks for this date.</Text>
-            </View>
-          ) : (
-            siteTasks.map((task) => {
-              const pill = taskStatusPill(task, calendarTodayStart);
-              const pct = Math.max(0, Math.min(100, task.progress ?? 0));
-              return (
-                <Pressable
-                  key={task.id}
-                  onPress={() => openTask(task.id)}
-                  style={({ pressed }) => [styles.taskRow, pressed && { opacity: 0.85 }]}
-                >
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text variant="bodyStrong" color="text" numberOfLines={1}>{task.title}</Text>
-                    <Text variant="caption" color="textMuted" numberOfLines={2}>
-                      {getCategoryLabel(task.category)}
-                      {task.assignedToName ? ` · ${task.assignedToName}` : ''}
-                    </Text>
-                    <Text variant="caption" color="textMuted" numberOfLines={1}>
-                      {fmtTaskTs(task.startDate)} · {task.endDate ? fmtTaskTs(task.endDate) : '—'} ·{' '}
-                      {Math.round(pct)}%
-                    </Text>
-                    {!!task.description?.trim() && (
-                      <Text variant="meta" color="textMuted" numberOfLines={4}>
-                        {task.description.trim()}
-                      </Text>
-                    )}
-                    <View style={styles.progressTrack}>
-                      <View style={[styles.progressFill, { width: `${pct}%` }]} />
-                    </View>
-                  </View>
-                  <View style={[styles.statusPill, { backgroundColor: pill.bg }]}>
-                    <Text variant="caption" style={{ color: pill.fg }}>{pill.label}</Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
-                </Pressable>
-              );
-            })
-          )}
-
-          <Text variant="caption" color="textMuted" style={styles.label}>
-            TIMELINE UPDATES (THIS DAY)
-          </Text>
-          {dayUpdates.length === 0 ? (
-            <View style={styles.emptyCard}>
-              <Text variant="meta" color="textMuted">No progress posts for this date.</Text>
-            </View>
-          ) : (
-            dayUpdates.map((row) => {
-              const prev = previousProgressForUpdate(row, dayUpdates);
-              const delta = row.progress - prev;
-              const deltaLabel = delta === 0 ? '' : `${delta > 0 ? '+' : ''}${delta}% → `;
-              const initial = row.authorName.charAt(0).toUpperCase();
-              return (
-                <Pressable
-                  key={`${row.taskId}-${row.id}`}
-                  onPress={() => openTask(row.taskId)}
-                  style={({ pressed }) => [styles.updateRow, pressed && { opacity: 0.88 }]}
-                >
-                  <View style={styles.updateAvatar}>
-                    <Text variant="metaStrong" style={{ color: color.primary }}>{initial}</Text>
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text variant="caption" color="textMuted" numberOfLines={1}>
-                      {row.authorName}
-                    </Text>
-                    <Text variant="metaStrong" color="text" numberOfLines={1}>
-                      {row.taskTitle}
-                    </Text>
-                    <Text variant="caption" color="primary">
-                      {deltaLabel}{row.progress}%
-                    </Text>
-                    {!!row.text?.trim() && (
-                      <Text variant="meta" color="textMuted" numberOfLines={3}>
-                        {row.text}
-                      </Text>
-                    )}
-                    {row.photoUris && row.photoUris.length > 0 ? (
-                      <ScrollView
-                        horizontal
-                        nestedScrollEnabled
-                        showsHorizontalScrollIndicator={false}
-                        style={styles.updatePhotoScroll}
-                        contentContainerStyle={styles.updatePhotoScrollInner}
+          {/* Materials */}
+          <Section header="Material requests" count={requestsToday.length}>
+            {requestsToday.length === 0 ? (
+              <EmptyRow
+                text="No material requests created this day"
+                icon="cube-outline"
+              />
+            ) : (
+              requestsToday.map((req, idx) => {
+                const tone = t.palette[statusToneFor(req.status)];
+                const isLast = idx === requestsToday.length - 1;
+                return (
+                  <View
+                    key={req.id}
+                    style={[
+                      styles.matCard,
+                      { position: 'relative' },
+                    ]}
+                  >
+                    <View style={styles.matHead}>
+                      <Text
+                        variant="body"
+                        color="label"
+                        style={{ flex: 1, fontWeight: '700' }}
+                        numberOfLines={2}
                       >
-                        {row.photoUris.map((uri) => (
-                          <Image key={uri} source={{ uri }} style={styles.updatePhotoThumb} />
-                        ))}
-                      </ScrollView>
+                        {req.title}
+                      </Text>
+                      <View
+                        style={[
+                          styles.statusPill,
+                          {
+                            backgroundColor:
+                              t.mode === 'dark' ? tone.softDark : tone.soft,
+                            borderRadius: 999,
+                            marginLeft: 8,
+                          },
+                        ]}
+                      >
+                        <Text
+                          variant="caption2"
+                          style={{
+                            color: tone.base,
+                            fontWeight: '700',
+                            letterSpacing: 0.4,
+                          }}
+                        >
+                          {materialRequestStatusLabel(req.status).toUpperCase()}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text
+                      variant="callout"
+                      style={{
+                        color: t.palette.blue.base,
+                        fontWeight: '700',
+                        marginTop: 4,
+                      }}
+                    >
+                      {formatInr(req.totalValue ?? 0)}
+                    </Text>
+                    <View style={{ marginTop: 8, gap: 4 }}>
+                      {req.items.map((it, itemIdx) => (
+                        <Text
+                          key={`${req.id}-it-${itemIdx}`}
+                          variant="caption1"
+                          color="secondary"
+                          numberOfLines={2}
+                        >
+                          • {it.name} · {it.quantity} {it.unit} ×{' '}
+                          {formatInr(it.rate)} = {formatInr(it.totalCost)}
+                        </Text>
+                      ))}
+                    </View>
+                    {!isLast ? (
+                      <View
+                        style={[
+                          styles.rowDivider,
+                          { backgroundColor: t.colors.separator, left: 16 },
+                        ]}
+                      />
                     ) : null}
                   </View>
-                </Pressable>
-              );
-            })
-          )}
+                );
+              })
+            )}
+          </Section>
 
-          <Text variant="caption" color="textMuted" style={styles.label}>SITE PHOTOS</Text>
-          <View style={styles.photoRow}>
-            {existingPhotos.map((url) => (
-              <View key={`exist-${url}`} style={styles.photoThumbWrap}>
-                <Image source={{ uri: url }} style={styles.photoThumb} />
-                <Pressable
-                  onPress={() => removeExistingPhoto(url)}
-                  style={styles.photoClose}
-                  hitSlop={6}
-                >
-                  <Ionicons name="close" size={14} color="#fff" />
-                </Pressable>
+          {/* Tasks on this day */}
+          <Section header="Tasks on this day" count={siteTasks.length}>
+            {siteTasks.length === 0 ? (
+              <EmptyRow
+                text="No tasks active or updated on this day"
+                icon="list-outline"
+              />
+            ) : (
+              siteTasks.map((task, idx) => {
+                const pill = taskStatusPill(task, calendarTodayStart);
+                const pct = Math.max(0, Math.min(100, task.progress ?? 0));
+                const isLast = idx === siteTasks.length - 1;
+                return (
+                  <Pressable
+                    key={task.id}
+                    onPress={() => openTask(task.id)}
+                    style={({ pressed }) => [
+                      styles.taskRow,
+                      pressed && { backgroundColor: t.colors.fill3 },
+                    ]}
+                  >
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <View style={styles.taskTitleRow}>
+                        <Text
+                          variant="body"
+                          color="label"
+                          style={{ flex: 1, fontWeight: '600' }}
+                          numberOfLines={1}
+                        >
+                          {task.title}
+                        </Text>
+                        <View
+                          style={[
+                            styles.statusPill,
+                            { backgroundColor: pill.bg, borderRadius: 999, marginLeft: 8 },
+                          ]}
+                        >
+                          <Text
+                            variant="caption2"
+                            style={{ color: pill.fg, fontWeight: '700', letterSpacing: 0.4 }}
+                          >
+                            {pill.label.toUpperCase()}
+                          </Text>
+                        </View>
+                      </View>
+                      <Text
+                        variant="caption1"
+                        color="secondary"
+                        style={{ marginTop: 2 }}
+                        numberOfLines={2}
+                      >
+                        {getCategoryLabel(task.category)}
+                        {task.assignedToName ? ` · ${task.assignedToName}` : ''}
+                        {' · '}
+                        {fmtTaskTs(task.startDate)} → {task.endDate ? fmtTaskTs(task.endDate) : '—'}
+                      </Text>
+                      {!!task.description?.trim() && (
+                        <Text
+                          variant="caption1"
+                          color="secondary"
+                          style={{ marginTop: 4 }}
+                          numberOfLines={3}
+                        >
+                          {task.description.trim()}
+                        </Text>
+                      )}
+                      {/* Progress bar */}
+                      <View style={styles.progressRow}>
+                        <View
+                          style={[
+                            styles.progressTrack,
+                            { backgroundColor: t.colors.fill3, borderRadius: 2 },
+                          ]}
+                        >
+                          <View
+                            style={{
+                              width: `${pct}%`,
+                              height: '100%',
+                              backgroundColor: t.palette.blue.base,
+                              borderRadius: 2,
+                            }}
+                          />
+                        </View>
+                        <Text
+                          variant="caption1"
+                          color="label"
+                          style={{
+                            marginLeft: 8,
+                            minWidth: 32,
+                            fontWeight: '600',
+                            textAlign: 'right',
+                          }}
+                        >
+                          {Math.round(pct)}%
+                        </Text>
+                      </View>
+                    </View>
+                    {!isLast ? (
+                      <View
+                        style={[
+                          styles.rowDivider,
+                          { backgroundColor: t.colors.separator, left: 16 },
+                        ]}
+                      />
+                    ) : null}
+                  </Pressable>
+                );
+              })
+            )}
+          </Section>
+
+          {/* Timeline updates */}
+          <Section header="Timeline updates" count={dayUpdates.length}>
+            {dayUpdates.length === 0 ? (
+              <EmptyRow
+                text="No progress posts for this date"
+                icon="chatbubbles-outline"
+              />
+            ) : (
+              dayUpdates.map((row, idx) => {
+                const prev = previousProgressForUpdate(row, dayUpdates);
+                const delta = row.progress - prev;
+                const deltaLabel = delta === 0 ? '' : `${delta > 0 ? '+' : ''}${delta}% → `;
+                const initial = (row.authorName.charAt(0) || '?').toUpperCase();
+                const isLast = idx === dayUpdates.length - 1;
+                return (
+                  <Pressable
+                    key={`${row.taskId}-${row.id}`}
+                    onPress={() => openTask(row.taskId)}
+                    style={({ pressed }) => [
+                      styles.updateRow,
+                      pressed && { backgroundColor: t.colors.fill3 },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.updateAvatar,
+                        {
+                          backgroundColor:
+                            t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                          borderRadius: t.radii.tile,
+                        },
+                      ]}
+                    >
+                      <Text
+                        variant="footnote"
+                        style={{ color: t.palette.blue.base, fontWeight: '700' }}
+                      >
+                        {initial}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+                      <Text
+                        variant="caption1"
+                        color="secondary"
+                        numberOfLines={1}
+                      >
+                        {row.authorName}
+                      </Text>
+                      <Text
+                        variant="body"
+                        color="label"
+                        style={{ fontWeight: '600', marginTop: 1 }}
+                        numberOfLines={1}
+                      >
+                        {row.taskTitle}
+                      </Text>
+                      <Text
+                        variant="caption1"
+                        style={{
+                          color: t.palette.blue.base,
+                          fontWeight: '700',
+                          marginTop: 2,
+                        }}
+                      >
+                        {deltaLabel}
+                        {row.progress}%
+                      </Text>
+                      {!!row.text?.trim() && (
+                        <Text
+                          variant="caption1"
+                          color="secondary"
+                          style={{ marginTop: 4 }}
+                          numberOfLines={3}
+                        >
+                          {row.text}
+                        </Text>
+                      )}
+                      {row.photoUris && row.photoUris.length > 0 ? (
+                        <ScrollView
+                          horizontal
+                          nestedScrollEnabled
+                          showsHorizontalScrollIndicator={false}
+                          style={{ marginTop: 8, maxHeight: 64 }}
+                          contentContainerStyle={{
+                            flexDirection: 'row',
+                            gap: 6,
+                            paddingRight: 8,
+                          }}
+                        >
+                          {row.photoUris.map((uri) => (
+                            <Image
+                              key={uri}
+                              source={{ uri }}
+                              style={[
+                                styles.updatePhoto,
+                                { borderRadius: t.radii.tile },
+                              ]}
+                            />
+                          ))}
+                        </ScrollView>
+                      ) : null}
+                    </View>
+                    {!isLast ? (
+                      <View
+                        style={[
+                          styles.rowDivider,
+                          { backgroundColor: t.colors.separator, left: 60 },
+                        ]}
+                      />
+                    ) : null}
+                  </Pressable>
+                );
+              })
+            )}
+          </Section>
+
+          {/* Site photos */}
+          <Section
+            header="Site photos"
+            count={existingPhotos.length + staged.length}
+          >
+            <View style={styles.photoArea}>
+              <View style={styles.photoRow}>
+                {existingPhotos.map((url) => (
+                  <View key={`exist-${url}`} style={styles.photoThumbWrap}>
+                    <Image
+                      source={{ uri: url }}
+                      style={[
+                        styles.photoThumb,
+                        { borderRadius: t.radii.tile },
+                      ]}
+                    />
+                    <Pressable
+                      onPress={() => removeExistingPhoto(url)}
+                      style={[
+                        styles.photoClose,
+                        { backgroundColor: t.palette.red.base },
+                      ]}
+                      hitSlop={6}
+                    >
+                      <Ionicons name="close" size={12} color="#fff" />
+                    </Pressable>
+                  </View>
+                ))}
+                {staged.map((p) => (
+                  <View key={p.id} style={styles.photoThumbWrap}>
+                    <Image
+                      source={{ uri: p.localUri }}
+                      style={[
+                        styles.photoThumb,
+                        { borderRadius: t.radii.tile },
+                      ]}
+                    />
+                    <Pressable
+                      onPress={() => removeStagedPhoto(p.id)}
+                      style={[
+                        styles.photoClose,
+                        { backgroundColor: t.palette.red.base },
+                      ]}
+                      hitSlop={6}
+                    >
+                      <Ionicons name="close" size={12} color="#fff" />
+                    </Pressable>
+                  </View>
+                ))}
+                <PhotoBtn
+                  label="Gallery"
+                  icon="images-outline"
+                  onPress={() => void pickPhotos()}
+                />
+                <PhotoBtn
+                  label="Camera"
+                  icon="camera-outline"
+                  onPress={() => void takePhoto()}
+                />
               </View>
-            ))}
-            {staged.map((p) => (
-              <View key={p.id} style={styles.photoThumbWrap}>
-                <Image source={{ uri: p.localUri }} style={styles.photoThumb} />
-                <Pressable
-                  onPress={() => removeStagedPhoto(p.id)}
-                  style={styles.photoClose}
-                  hitSlop={6}
-                >
-                  <Ionicons name="close" size={14} color="#fff" />
-                </Pressable>
-              </View>
-            ))}
-            <Pressable onPress={pickPhotos} style={styles.photoAdd}>
-              <Ionicons name="images-outline" size={20} color={color.primary} />
-              <Text variant="caption" color="primary">Gallery</Text>
-            </Pressable>
-            <Pressable onPress={takePhoto} style={styles.photoAdd}>
-              <Ionicons name="camera-outline" size={20} color={color.primary} />
-              <Text variant="caption" color="primary">Camera</Text>
-            </Pressable>
-          </View>
+            </View>
+          </Section>
         </ScrollView>
 
-        <View style={styles.footer}>
+        {/* Footer */}
+        <View
+          style={[
+            styles.footer,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopColor: t.colors.separator,
+              borderTopWidth: t.hairline,
+            },
+          ]}
+        >
           {existing ? (
-            <Button
-              variant="secondary"
-              label="Share PDF"
-              onPress={onSharePdf}
-              loading={pdfBusy}
-              disabled={!project}
-              style={styles.footerBtn}
-            />
+            <Pressable
+              onPress={() => void onSharePdf()}
+              disabled={pdfBusy || !project}
+              style={({ pressed }) => [
+                styles.footerBtn,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: 999,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+                pressed && { opacity: 0.85 },
+                (pdfBusy || !project) && { opacity: 0.5 },
+              ]}
+            >
+              <Ionicons
+                name="document-text-outline"
+                size={16}
+                color={t.colors.label}
+              />
+              <Text
+                variant="callout"
+                color="label"
+                style={{ fontWeight: '700', marginLeft: 8 }}
+              >
+                {pdfBusy ? 'Building…' : 'Share PDF'}
+              </Text>
+            </Pressable>
           ) : null}
-          <Button
-            label={savePhase ?? (existing ? 'Update DPR' : 'Save DPR')}
-            onPress={onSave}
-            loading={saving}
-            style={styles.footerBtn}
-          />
+          <Pressable
+            onPress={() => void onSave()}
+            disabled={saving}
+            style={({ pressed }) => [
+              styles.footerBtn,
+              {
+                backgroundColor: t.palette.blue.base,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.85 },
+              saving && { opacity: 0.7 },
+            ]}
+          >
+            <Text
+              variant="callout"
+              style={{ color: '#fff', fontWeight: '700' }}
+            >
+              {savePhase ?? (existing ? 'Update report' : 'Save report')}
+            </Text>
+          </Pressable>
         </View>
       </KeyboardAvoidingView>
 
@@ -730,135 +1131,286 @@ export default function DprScreen() {
         intent="saveDpr"
         phaseLabel={savePhase}
       />
-    </Screen>
+    </View>
+  );
+}
+
+function Section({
+  header,
+  count,
+  children,
+}: {
+  header: string;
+  count: number;
+  children: React.ReactNode;
+}) {
+  const t = useThemeV2();
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+  return (
+    <View style={{ marginTop: 24 }}>
+      <View style={styles.sectionHeader}>
+        <Text variant="caption2" color="secondary" style={{ letterSpacing: 0.4 }}>
+          {header.toUpperCase()}
+        </Text>
+        <Text variant="caption2" color="tertiary">
+          {count}
+        </Text>
+      </View>
+      <View
+        style={[
+          styles.sectionCard,
+          {
+            backgroundColor: cardBg,
+            borderRadius: t.radii.group,
+            borderColor: cardBorder,
+            borderWidth: t.hairline,
+          },
+        ]}
+      >
+        {children}
+      </View>
+    </View>
+  );
+}
+
+function SnapCol({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <View style={styles.snapCol}>
+      <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4 }}>
+        {label}
+      </Text>
+      <Text
+        variant="title3"
+        style={{ color, marginTop: 4, fontWeight: '700' }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function EmptyRow({
+  text,
+  icon,
+}: {
+  text: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}) {
+  const t = useThemeV2();
+  return (
+    <View style={styles.emptyRow}>
+      <Ionicons name={icon} size={20} color={t.colors.tertiary} />
+      <Text
+        variant="callout"
+        color="secondary"
+        style={{ marginLeft: 10, flex: 1 }}
+      >
+        {text}
+      </Text>
+    </View>
+  );
+}
+
+function PhotoBtn({
+  label,
+  icon,
+  onPress,
+}: {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.photoBtn,
+        {
+          backgroundColor:
+            t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+          borderRadius: t.radii.tile,
+          borderColor: t.palette.blue.base + '33',
+          borderWidth: t.hairline,
+          borderStyle: 'dashed',
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Ionicons name={icon} size={20} color={t.palette.blue.base} />
+      <Text
+        variant="caption2"
+        style={{
+          color: t.palette.blue.base,
+          fontWeight: '700',
+          marginTop: 2,
+          letterSpacing: 0.4,
+        }}
+      >
+        {label.toUpperCase()}
+      </Text>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  navBar: {
+  // Header
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingBottom: space.xs,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+    gap: 10,
   },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navTitleWrap: { flex: 1, alignItems: 'center' },
-  scroll: { paddingHorizontal: screenInset, paddingTop: space.md, paddingBottom: space.xl },
-  label: { marginTop: space.md, marginBottom: space.xs },
-  snapRow: { flexDirection: 'row', gap: space.sm, marginBottom: space.sm },
-  snapCard: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 2,
-    paddingVertical: space.sm,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.separator,
-  },
-  emptyCard: {
-    paddingVertical: space.md,
-    paddingHorizontal: space.sm,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.separator,
-    marginBottom: space.sm,
-  },
-  staffCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: space.sm,
-    padding: space.sm,
-    marginBottom: space.xs,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.separator,
-  },
-  staffCardRight: { alignItems: 'flex-end', maxWidth: '42%' },
-  miniPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-  },
-  staffTotalLine: { marginBottom: space.sm },
-  matCard: {
-    padding: space.sm,
-    marginBottom: space.xs,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.separator,
-  },
-  matCardHead: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: space.sm,
-    marginBottom: 4,
-  },
-  taskRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: space.sm,
-    padding: space.sm,
-    marginBottom: space.xs,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.separator,
-  },
-  progressTrack: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.surfaceAlt,
-    marginTop: 8,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: '100%',
-    backgroundColor: color.primary,
-    borderRadius: 2,
-  },
-  statusPill: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: radius.pill,
-  },
-  updateRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: space.sm,
-    padding: space.sm,
-    marginBottom: space.xs,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.separator,
-  },
-  updateAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: color.primarySoft,
+  iconBtn: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  updatePhotoScroll: { marginTop: space.xs, maxHeight: 72 },
-  updatePhotoScrollInner: { flexDirection: 'row', gap: 6, paddingRight: space.sm },
-  updatePhotoThumb: {
-    width: 64,
-    height: 64,
-    borderRadius: radius.sm,
-    backgroundColor: color.surfaceAlt,
+
+  // Snap card
+  snapCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
   },
-  photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
+  snapCol: { flex: 1, alignItems: 'center' },
+  snapDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    marginHorizontal: 10,
+  },
+
+  // Section
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingBottom: 7,
+  },
+  sectionCard: {
+    marginHorizontal: 16,
+    overflow: 'hidden',
+  },
+
+  // Staff row
+  staffRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    minHeight: 60,
+  },
+  statusPill: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
+  staffTotalRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(0,0,0,0.06)',
+  },
+
+  // Material card
+  matCard: {
+    paddingHorizontal: 14,
+    paddingTop: 12,
+    paddingBottom: 12,
+  },
+  matHead: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+
+  // Task row
+  taskRow: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    position: 'relative',
+  },
+  taskTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  progressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  progressTrack: {
+    flex: 1,
+    height: 4,
+    overflow: 'hidden',
+  },
+
+  // Update row
+  updateRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    position: 'relative',
+  },
+  updateAvatar: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  updatePhoto: {
+    width: 56,
+    height: 56,
+  },
+
+  // Empty row inside section card
+  emptyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    minHeight: 56,
+  },
+
+  // Divider
+  rowDivider: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    height: 0.5,
+  },
+
+  // Photos
+  photoArea: {
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+  },
+  photoRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
   photoThumbWrap: { position: 'relative' },
-  photoThumb: { width: 88, height: 88, borderRadius: radius.sm, backgroundColor: color.bgGrouped },
+  photoThumb: { width: 80, height: 80 },
   photoClose: {
     position: 'absolute',
     top: -6,
@@ -866,30 +1418,29 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: color.danger,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  photoAdd: {
-    width: 88,
-    height: 88,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.primary,
-    borderStyle: 'dashed',
+  photoBtn: {
+    width: 80,
+    height: 80,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.primarySoft,
-    gap: 2,
   },
+
+  // Footer
   footer: {
     flexDirection: 'row',
-    gap: space.sm,
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    paddingBottom: 24,
+    gap: 8,
   },
-  footerBtn: { flex: 1 },
+  footerBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+  },
 });

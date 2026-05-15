@@ -1,28 +1,29 @@
 /**
- * Add Laminate — select room, enter brand, finish, edge band code,
- * laminate code, and upload a photo.
+ * Add Laminate — v2 design.
+ *
+ * Layout:
+ *   1. SheetHeader: Cancel · "Add laminate" · Save
+ *   2. Photo block (staged image OR camera/gallery picker)
+ *   3. FormGroup "Identity" — Room (RoomPickerSheet) · Brand
+ *   4. FormGroup "Spec" — Code · Finish · Edge band
+ *   5. FormGroup "Notes" — multiline
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as ImagePicker from 'expo-image-picker';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
+import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { Controller, useForm } from 'react-hook-form';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   Alert,
   Image,
-  Keyboard,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { z } from 'zod';
 
@@ -32,15 +33,16 @@ import { createLaminate } from '@/src/features/laminates/laminates';
 import { useLaminates } from '@/src/features/laminates/useLaminates';
 import { guessImageMimeType, recordStorageEvent } from '@/src/lib/r2Upload';
 import { commitStagedFiles, type StagedFile } from '@/src/lib/commitStagedFiles';
-import { Button } from '@/src/ui/Button';
-import { useKeyboardVerticalOffset } from '@/src/ui/KeyboardFormLayout';
-import { useKeyboardHeightWhile } from '@/src/ui/useKeyboardHeightWhile';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
-import { color, radius, screenInset, space } from '@/src/theme';
 
-// Common room names for quick selection
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { RoomPickerSheet } from '@/src/features/laminates/RoomPickerSheet';
+import { useThemeV2 } from '@/src/theme/v2';
+
 const COMMON_ROOMS = [
   'Living Room', 'Master Bedroom', 'Bedroom 2', 'Bedroom 3',
   'Kitchen', 'Bathroom', 'Kids Room', 'Study Room',
@@ -53,7 +55,6 @@ const schema = z.object({
   brand: z.string().trim().min(1, 'Brand required'),
   laminateCode: z.string().trim().optional().or(z.literal('')),
   finish: z.string().trim().min(1, 'Finish required'),
-  // Optional — many laminates ship without a separate edge-band SKU.
   edgeBandCode: z.string().trim().optional().or(z.literal('')),
   notes: z.string().optional(),
 });
@@ -62,6 +63,7 @@ type FormData = z.infer<typeof schema>;
 
 export default function AddLaminateScreen() {
   useGuardedRoute({ capability: 'laminate.write' });
+  const t = useThemeV2();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -69,41 +71,9 @@ export default function AddLaminateScreen() {
   const { roomNames: existingRooms } = useLaminates(projectId);
 
   const [showRoomPicker, setShowRoomPicker] = useState(false);
-  const [roomSearch, setRoomSearch] = useState('');
-  // Photo is staged locally on pick — R2 upload only happens during
-  // Save, so abandoning the form leaves nothing in the bucket.
   const [stagedPhoto, setStagedPhoto] = useState<StagedFile | null>(null);
   const [savePhase, setSavePhase] = useState<string>();
   const [submitError, setSubmitError] = useState<string>();
-  const insets = useSafeAreaInsets();
-  const { height: windowHeight } = useWindowDimensions();
-  const roomKeyboardHeight = useKeyboardHeightWhile(showRoomPicker);
-  const keyboardVerticalOffset = useKeyboardVerticalOffset(0);
-
-  const closeRoomPicker = useCallback(() => {
-    Keyboard.dismiss();
-    setShowRoomPicker(false);
-    setRoomSearch('');
-  }, []);
-
-  const roomListMaxHeight = useMemo(() => {
-    const headerBlock = 200;
-    if (roomKeyboardHeight > 0) {
-      return Math.max(140, windowHeight - roomKeyboardHeight - headerBlock - 16);
-    }
-    return Math.min(380, windowHeight * 0.44);
-  }, [windowHeight, roomKeyboardHeight]);
-  // iOS handles keyboard insets natively on the ScrollView (auto-scroll +
-  // contentInset). Android relies on KeyboardAvoidingView padding behavior.
-  const KeyboardWrap = Platform.OS === 'ios' ? View : KeyboardAvoidingView;
-  const keyboardWrapProps =
-    Platform.OS === 'ios'
-      ? { style: styles.flex }
-      : {
-          style: styles.flex,
-          behavior: 'padding' as const,
-          keyboardVerticalOffset,
-        };
 
   const {
     control,
@@ -125,16 +95,6 @@ export default function AddLaminateScreen() {
   });
 
   const selectedRoom = watch('roomName');
-
-  // Combine existing rooms + common rooms, deduplicated
-  const allRooms = [...new Set([...existingRooms, ...COMMON_ROOMS])];
-  const filteredRooms = roomSearch
-    ? allRooms.filter((r) => r.toLowerCase().includes(roomSearch.toLowerCase()))
-    : allRooms;
-
-  // ── Photo picker ──
-  // Picking just stores the local URI. Upload happens during Save
-  // (see onSubmit) so backing out without saving creates no orphans.
 
   const stagePicked = useCallback((asset: ImagePicker.ImagePickerAsset) => {
     setSubmitError(undefined);
@@ -168,13 +128,10 @@ export default function AddLaminateScreen() {
     if (!result.canceled && result.assets[0]) stagePicked(result.assets[0]);
   }, [stagePicked]);
 
-  // ── Submit ──
-
   async function onSubmit(data: FormData) {
     if (!user || !orgId || !projectId) return;
     setSubmitError(undefined);
     try {
-      // Step 1 — upload the staged photo (if any) to R2.
       let photoPublicUrl: string | undefined;
       let photoKey: string | undefined;
       let photoSize = 0;
@@ -199,7 +156,6 @@ export default function AddLaminateScreen() {
         photoContentType = ok.contentType;
       }
 
-      // Step 2 — create the laminate doc.
       setSavePhase('Saving laminate…');
       const laminateId = await createLaminate({
         projectId,
@@ -215,7 +171,6 @@ export default function AddLaminateScreen() {
         createdBy: user.uid,
       });
 
-      // Step 3 — record storage event (best effort).
       if (photoKey) {
         void recordStorageEvent({
           projectId,
@@ -227,7 +182,6 @@ export default function AddLaminateScreen() {
           action: 'upload',
         });
       }
-      // Snapshot-propagation buffer (see add-transaction.tsx).
       await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
@@ -237,508 +191,273 @@ export default function AddLaminateScreen() {
     }
   }
 
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* Nav */}
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="close" size={22} color={color.text} />
-        </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.navTitle}>
-          Add Laminate
-        </Text>
-        <View style={styles.navBtn} />
-      </View>
+      <SheetHeader
+        title="Add laminate"
+        cancelLabel="Cancel"
+        saveLabel={savePhase ?? 'Save'}
+        saveLoading={isSubmitting}
+        saveDisabled={!isValid || !orgId}
+        onCancel={() => router.back()}
+        onSave={() => void handleSubmit(onSubmit)()}
+      />
 
-      <KeyboardWrap {...keyboardWrapProps}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
         <ScrollView
-          style={styles.flex}
           contentContainerStyle={styles.scroll}
           keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
-          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
-          contentInsetAdjustmentBehavior={Platform.OS === 'ios' ? 'automatic' : 'never'}
         >
           {/* Photo */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-            LAMINATE PHOTO
-          </Text>
-          {stagedPhoto ? (
-            <View style={styles.photoPreview}>
-              <Image
-                source={{ uri: stagedPhoto.localUri }}
-                style={styles.photoImage}
-                resizeMode="cover"
-              />
-              <Pressable
-                onPress={() => setStagedPhoto(null)}
-                style={styles.photoRemove}
-              >
-                <Ionicons name="close-circle" size={24} color={color.danger} />
-              </Pressable>
-            </View>
-          ) : (
-            <View style={styles.photoActions}>
-              <Pressable onPress={takePhoto} style={styles.photoBtn}>
-                <Ionicons name="camera-outline" size={24} color={color.primary} />
-                <Text variant="meta" color="primary">Camera</Text>
-              </Pressable>
-              <Pressable onPress={pickPhoto} style={styles.photoBtn}>
-                <Ionicons name="image-outline" size={24} color={color.primary} />
-                <Text variant="meta" color="primary">Gallery</Text>
-              </Pressable>
-            </View>
-          )}
-
-          {/* Room */}
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>
-            ROOM *
-          </Text>
-          <Pressable
-            onPress={() => setShowRoomPicker(true)}
-            style={[styles.dropdown, selectedRoom ? styles.dropdownActive : undefined]}
-          >
-            <Ionicons name="home-outline" size={18} color={selectedRoom ? color.primary : color.textMuted} />
+          <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
             <Text
-              variant="body"
-              color={selectedRoom ? 'text' : 'textFaint'}
-              style={styles.flex}
+              variant="caption2"
+              color="secondary"
+              style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingBottom: 8 }}
             >
-              {selectedRoom || 'Select room'}
+              LAMINATE PHOTO
             </Text>
-            <Ionicons name="chevron-down" size={18} color={color.textMuted} />
-          </Pressable>
-          {errors.roomName?.message && (
-            <Text variant="caption" color="danger" style={{ marginTop: 4 }}>
-              {errors.roomName.message}
-            </Text>
-          )}
-
-          {/* Brand */}
-          <Controller
-            control={control}
-            name="brand"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Brand *"
-                placeholder="e.g. Merino, Greenlam, Century"
-                autoCapitalize="words"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.brand?.message}
-              />
-            )}
-          />
-
-          {/* Laminate Code */}
-          <Controller
-            control={control}
-            name="laminateCode"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Laminate Code"
-                placeholder="e.g. 22003 RGL, ST-15"
-                autoCapitalize="characters"
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-              />
-            )}
-          />
-
-          {/* Finish */}
-          <Controller
-            control={control}
-            name="finish"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Finish *"
-                placeholder="e.g. Matte, Gloss, Suede, Texture"
-                autoCapitalize="words"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.finish?.message}
-              />
-            )}
-          />
-
-          {/* Edge Band Code */}
-          <Controller
-            control={control}
-            name="edgeBandCode"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Edge Band Code"
-                placeholder="Optional — e.g. EB-22003, Matching"
-                autoCapitalize="characters"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.edgeBandCode?.message}
-              />
-            )}
-          />
-
-          {/* Notes */}
-          <Controller
-            control={control}
-            name="notes"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Notes"
-                placeholder="Any additional details..."
-                multiline
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-              />
-            )}
-          />
-
-          {submitError && (
-            <Text variant="caption" color="danger" style={{ marginTop: space.sm }}>
-              {submitError}
-            </Text>
-          )}
-
-          {/* Save inside scroll so Notes + CTA can scroll above the keyboard */}
-          <View style={styles.footer}>
-            <Button
-              label={savePhase ?? 'Save Laminate'}
-              onPress={handleSubmit(onSubmit)}
-              loading={isSubmitting}
-              disabled={!isValid || !orgId}
-            />
-          </View>
-        </ScrollView>
-      </KeyboardWrap>
-
-      {/* ── Room Picker Modal ── */}
-      <Modal
-        visible={showRoomPicker}
-        animationType="slide"
-        transparent
-        onRequestClose={closeRoomPicker}
-      >
-        <View style={styles.modalRoot}>
-          <Pressable style={styles.modalBackdrop} onPress={closeRoomPicker} accessibilityRole="button" />
-          <View
-            style={[
-              styles.modalSheet,
-              {
-                marginBottom:
-                  roomKeyboardHeight > 0
-                    ? roomKeyboardHeight
-                    : Math.max(insets.bottom, space.sm),
-              },
-            ]}
-          >
-          <View style={styles.modalHandle} />
-          <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-            Select Room
-          </Text>
-
-          <View style={styles.searchBar}>
-            <Ionicons name="search" size={18} color={color.textMuted} />
-            <TextInput
-              placeholder="Search or type new room..."
-              placeholderTextColor={color.textFaint}
-              value={roomSearch}
-              onChangeText={setRoomSearch}
-              style={styles.searchInput}
-              autoFocus
-              returnKeyType="search"
-            />
-          </View>
-
-          {/* Existing project rooms header */}
-          {existingRooms.length > 0 && !roomSearch && (
-            <View style={styles.roomSectionHeader}>
-              <Text variant="caption" color="textMuted">PROJECT ROOMS</Text>
-            </View>
-          )}
-
-          <ScrollView
-            showsVerticalScrollIndicator={false}
-            style={[styles.modalList, { maxHeight: roomListMaxHeight }]}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-          >
-            {/* Existing project rooms first */}
-            {!roomSearch && existingRooms.map((r) => (
-              <Pressable
-                key={`existing_${r}`}
-                onPress={() => {
-                  setValue('roomName', r, { shouldValidate: true });
-                  Keyboard.dismiss();
-                  closeRoomPicker();
-                }}
-                style={({ pressed }) => [
-                  styles.roomOption,
-                  selectedRoom === r && styles.roomOptionActive,
-                  pressed && { opacity: 0.7 },
+            {stagedPhoto ? (
+              <View
+                style={[
+                  styles.photoWrap,
+                  {
+                    backgroundColor: cardBg,
+                    borderRadius: t.radii.card,
+                    borderColor: cardBorder,
+                    borderWidth: t.hairline,
+                  },
                 ]}
               >
-                <Ionicons name="home" size={16} color={selectedRoom === r ? color.primary : color.textMuted} />
-                <Text
-                  variant="body"
-                  color={selectedRoom === r ? 'primary' : 'text'}
-                  style={selectedRoom === r ? { fontWeight: '600' } : undefined}
-                >
-                  {r}
-                </Text>
-                {selectedRoom === r && (
-                  <Ionicons name="checkmark-circle" size={18} color={color.primary} style={{ marginLeft: 'auto' }} />
-                )}
-              </Pressable>
-            ))}
-
-            {/* Divider */}
-            {!roomSearch && existingRooms.length > 0 && (
-              <View style={styles.roomSectionHeader}>
-                <Text variant="caption" color="textMuted">COMMON ROOMS</Text>
-              </View>
-            )}
-
-            {/* Common / filtered rooms */}
-            {filteredRooms
-              .filter((r) => roomSearch || !existingRooms.includes(r))
-              .map((r) => (
+                <Image
+                  source={{ uri: stagedPhoto.localUri }}
+                  style={styles.photo}
+                  resizeMode="cover"
+                />
                 <Pressable
-                  key={r}
-                  onPress={() => {
-                    setValue('roomName', r, { shouldValidate: true });
-                    Keyboard.dismiss();
-                    closeRoomPicker();
-                  }}
-                  style={({ pressed }) => [
-                    styles.roomOption,
-                    selectedRoom === r && styles.roomOptionActive,
-                    pressed && { opacity: 0.7 },
+                  onPress={() => setStagedPhoto(null)}
+                  hitSlop={6}
+                  style={[
+                    styles.photoClose,
+                    { backgroundColor: 'rgba(255,255,255,0.92)' },
                   ]}
                 >
-                  <Ionicons name="home-outline" size={16} color={selectedRoom === r ? color.primary : color.textMuted} />
-                  <Text
-                    variant="body"
-                    color={selectedRoom === r ? 'primary' : 'text'}
-                    style={selectedRoom === r ? { fontWeight: '600' } : undefined}
-                  >
-                    {r}
-                  </Text>
-                  {selectedRoom === r && (
-                    <Ionicons name="checkmark-circle" size={18} color={color.primary} style={{ marginLeft: 'auto' }} />
-                  )}
+                  <Ionicons name="close-circle" size={22} color={t.palette.red.base} />
                 </Pressable>
-              ))}
-          </ScrollView>
-
-          {/* Add custom room */}
-          {roomSearch.trim() && !allRooms.some((r) => r.toLowerCase() === roomSearch.toLowerCase()) && (
-            <Pressable
-              onPress={() => {
-                setValue('roomName', roomSearch.trim(), { shouldValidate: true });
-                Keyboard.dismiss();
-                closeRoomPicker();
-              }}
-              style={styles.addCustomRoom}
-            >
-              <Ionicons name="add-circle-outline" size={18} color={color.primary} />
-              <Text variant="metaStrong" color="primary">
-                Add "{roomSearch.trim()}" as room
-              </Text>
-            </Pressable>
-          )}
+              </View>
+            ) : (
+              <View style={styles.photoBtnRow}>
+                <PhotoBtn icon="camera-outline" label="Camera" onPress={takePhoto} />
+                <PhotoBtn icon="image-outline" label="Gallery" onPress={pickPhoto} />
+              </View>
+            )}
           </View>
-        </View>
-      </Modal>
-    </Screen>
+
+          {/* Identity */}
+          <FormGroup header="Identity">
+            <Row
+              label="Room"
+              value={selectedRoom || 'Pick a room'}
+              valueColor={selectedRoom ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setShowRoomPicker(true)}
+            />
+            <Controller
+              control={control}
+              name="brand"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Brand"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. Merino, Greenlam"
+                  autoCapitalize="words"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+          {(errors.roomName?.message || errors.brand?.message) ? (
+            <FieldNote
+              text={errors.roomName?.message ?? errors.brand?.message ?? ''}
+              tone={t.palette.red.base}
+            />
+          ) : null}
+
+          {/* Spec */}
+          <FormGroup header="Specification">
+            <Controller
+              control={control}
+              name="laminateCode"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Code"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. 22003 RGL"
+                  autoCapitalize="characters"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="finish"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Finish"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. Matte, Gloss, Suede"
+                  autoCapitalize="words"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="edgeBandCode"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Edge band"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Optional · EB-22003"
+                  autoCapitalize="characters"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+          {errors.finish?.message ? (
+            <FieldNote text={errors.finish.message} tone={t.palette.red.base} />
+          ) : null}
+
+          {/* Notes */}
+          <FormGroup header="Notes">
+            <Controller
+              control={control}
+              name="notes"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Note"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Additional details"
+                  multiline
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+
+          {submitError ? (
+            <FieldNote text={submitError} tone={t.palette.red.base} />
+          ) : null}
+
+          <View style={{ height: 60 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      <RoomPickerSheet
+        open={showRoomPicker}
+        selected={selectedRoom}
+        existingRooms={existingRooms}
+        commonRooms={COMMON_ROOMS}
+        onPick={(r) => setValue('roomName', r, { shouldValidate: true })}
+        onClose={() => setShowRoomPicker(false)}
+      />
+    </View>
+  );
+}
+
+function FieldNote({ text, tone }: { text: string; tone: string }) {
+  return (
+    <Text
+      variant="caption2"
+      style={{ color: tone, paddingHorizontal: 32, marginTop: 8 }}
+    >
+      {text}
+    </Text>
+  );
+}
+
+function PhotoBtn({
+  icon,
+  label,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={6}
+      style={({ pressed }) => [
+        styles.photoBtn,
+        {
+          backgroundColor:
+            t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+          borderRadius: t.radii.field,
+          borderColor: t.palette.blue.base + '33',
+          borderWidth: t.hairline,
+          borderStyle: 'dashed',
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Ionicons name={icon} size={22} color={t.palette.blue.base} />
+      <Text
+        variant="footnote"
+        style={{
+          color: t.palette.blue.base,
+          fontWeight: '700',
+          marginTop: 4,
+        }}
+      >
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
+  scroll: { paddingBottom: 60 },
 
-  navBar: {
+  photoWrap: { overflow: 'hidden', position: 'relative' },
+  photo: { width: '100%', height: 220 },
+  photoClose: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    borderRadius: 12,
+  },
+  photoBtnRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingBottom: space.xs,
-    backgroundColor: color.surface,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
-  },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navTitle: { flex: 1, textAlign: 'center' },
-  scroll: {
-    flexGrow: 1,
-    paddingHorizontal: screenInset,
-    paddingTop: space.md,
-    paddingBottom: space.xl,
-  },
-
-  sectionLabel: {
-    marginTop: space.sm,
-    marginBottom: space.xs,
-  },
-
-  // Photo
-  photoActions: {
-    flexDirection: 'row',
-    gap: space.sm,
+    gap: 8,
   },
   photoBtn: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space.xs,
-    paddingVertical: space.lg,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.primary,
-    // Match the New File form's Image/PDF picker — white surface
-    // with a primary border, not a primary-soft fill. The dashed
-    // outline is dropped because the New File form uses a solid
-    // border there too.
-    backgroundColor: color.bg,
-  },
-  photoPreview: {
-    width: '100%',
-    height: 200,
-    borderRadius: radius.sm,
-    overflow: 'hidden',
-    backgroundColor: color.bgGrouped,
-  },
-  photoImage: {
-    width: '100%',
-    height: 200,
-  },
-  photoRemove: {
-    position: 'absolute',
-    top: space.xs,
-    right: space.xs,
-  },
-  // Translucent overlay shown while the picked photo uploads to R2.
-  photoUploadOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(15,23,42,0.55)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  // Dropdown
-  dropdown: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
-    backgroundColor: color.bgGrouped,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.border,
-    paddingHorizontal: space.md,
-    paddingVertical: space.md,
-    minHeight: 52,
-  },
-  dropdownActive: {
-    borderColor: color.primary,
-    backgroundColor: color.primarySoft,
-  },
-
-  // Footer (inside ScrollView — scrolls with form above keyboard)
-  footer: {
-    marginTop: space.lg,
-    marginHorizontal: -screenInset,
-    paddingHorizontal: screenInset,
-    paddingTop: space.md,
-    paddingBottom: space.lg,
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
-  },
-
-  // Modal — bottom sheet lifted by keyboard via marginBottom + listeners
-  modalRoot: {
-    flex: 1,
-    justifyContent: 'flex-end',
-  },
-  modalBackdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  modalSheet: {
-    backgroundColor: color.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.lg,
-    maxHeight: '88%',
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.border,
-    alignSelf: 'center',
-    marginBottom: space.sm,
-  },
-  modalTitle: {
-    textAlign: 'center',
-    marginBottom: space.sm,
-  },
-  modalList: {
-    paddingHorizontal: screenInset,
-  },
-
-  searchBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.xs,
-    marginHorizontal: screenInset,
-    marginBottom: space.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xs,
-    borderRadius: radius.sm,
-    backgroundColor: color.bgGrouped,
-    borderWidth: 1,
-    borderColor: color.border,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    lineHeight: 20,
-    color: color.text,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
-  },
-
-  roomSectionHeader: {
-    paddingVertical: space.xs,
-    paddingHorizontal: screenInset,
-  },
-  roomOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.separator,
-  },
-  roomOptionActive: {
-    backgroundColor: color.primarySoft,
-    borderRadius: radius.sm,
-  },
-  addCustomRoom: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: space.xs,
-    paddingVertical: space.md,
-    marginHorizontal: screenInset,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.separator,
+    paddingVertical: 22,
   },
 });

@@ -1,5 +1,5 @@
 /**
- * OtpDigits — six-box one-time-code input.
+ * OtpDigits — six-box one-time-code input (v2 design).
  *
  * Six `<TextInput>`s in a row with refs for:
  *   - auto-advance (typing a digit jumps focus to the next box)
@@ -13,6 +13,10 @@
  * string and gets called back via `onChange(next)`. `onComplete` is
  * a convenience callback fired when the value reaches 6 digits, so
  * the verify screen can auto-submit on the last keystroke.
+ *
+ * Styling pulls from `useThemeV2()` so the boxes match the rest of
+ * the v2 surfaces — fill3 background, hairline border, blue.soft when
+ * filled, red.base when in error state.
  */
 import { forwardRef, useImperativeHandle, useRef } from 'react';
 import {
@@ -24,7 +28,7 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { color } from '@/src/theme/tokens';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const DIGIT_COUNT = 6;
 
@@ -64,6 +68,7 @@ export const OtpDigits = forwardRef<OtpDigitsHandle, OtpDigitsProps>(
     },
     ref,
   ) {
+    const t = useThemeV2();
     const inputs = useRef<Array<TextInput | null>>([]);
 
     useImperativeHandle(ref, () => ({
@@ -126,10 +131,17 @@ export const OtpDigits = forwardRef<OtpDigitsHandle, OtpDigitsProps>(
       }
     }
 
+    const baseBg = t.colors.fill3;
+    const baseBorder =
+      t.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+    const filledBg =
+      t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft;
+
     return (
       <View style={[styles.row, style]}>
         {Array.from({ length: DIGIT_COUNT }).map((_, idx) => {
           const ch = value[idx] ?? '';
+          const filled = !!ch;
           return (
             <TextInput
               key={idx}
@@ -137,7 +149,7 @@ export const OtpDigits = forwardRef<OtpDigitsHandle, OtpDigitsProps>(
                 inputs.current[idx] = el;
               }}
               value={ch}
-              onChangeText={(t) => handleChange(idx, t)}
+              onChangeText={(tx) => handleChange(idx, tx)}
               onKeyPress={(e) => handleKeyPress(idx, e)}
               keyboardType="number-pad"
               inputMode="numeric"
@@ -148,12 +160,21 @@ export const OtpDigits = forwardRef<OtpDigitsHandle, OtpDigitsProps>(
               autoComplete={idx === 0 ? 'sms-otp' : 'off'}
               textContentType={idx === 0 ? 'oneTimeCode' : 'none'}
               autoFocus={autoFocus && idx === 0}
-              selectionColor={color.primary}
+              selectionColor={t.palette.blue.base}
               style={[
                 styles.box,
-                ch && styles.boxFilled,
-                error && styles.boxError,
-                disabled && styles.boxDisabled,
+                {
+                  backgroundColor: filled ? filledBg : baseBg,
+                  borderColor: error
+                    ? t.palette.red.base
+                    : filled
+                      ? t.palette.blue.base + '55'
+                      : baseBorder,
+                  borderWidth: filled || error ? 1.5 : t.hairline,
+                  color: t.colors.label,
+                  borderRadius: t.radii.field,
+                },
+                disabled && { opacity: 0.5 },
               ]}
             />
           );
@@ -169,29 +190,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   box: {
-    width: 46,
-    height: 54,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: color.borderStrong,
-    backgroundColor: '#FFFFFF',
+    width: 48,
+    height: 56,
     textAlign: 'center',
     fontSize: 22,
-    fontWeight: '600',
-    color: color.text,
-    // RN-iOS quirk: setting a large fontSize without an explicit
-    // padding sometimes vertically crops the glyph. paddingVertical
-    // on a fixed-height box is fine because we control height.
+    fontWeight: '700',
     paddingVertical: 0,
-  },
-  boxFilled: {
-    borderColor: color.primary,
-    backgroundColor: color.lavenderWash,
-  },
-  boxError: {
-    borderColor: color.danger,
-  },
-  boxDisabled: {
-    opacity: 0.5,
+    letterSpacing: 0.4,
   },
 });

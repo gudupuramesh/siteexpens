@@ -1,12 +1,18 @@
 /**
- * Big-number result row. Used inside results sections of every
- * calculator — a label + a hero numeric value (+ optional unit and
- * sub-line for derived calculations like wastage).
+ * v2 ResultRow — labelled output card.
+ *
+ * Visual: surface card (radii.field) with caption label top, a hero/title
+ * value + unit in the middle, optional secondary sub-line below.
+ *
+ * Two tones:
+ *  • default — neutral surface, label + value in label/secondary colors
+ *  • primary — blue-tinted surface, label/value in blue.base for the
+ *              "hero" answer of each calculator
  */
 import { StyleSheet, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 export type ResultRowProps = {
   label: string;
@@ -15,7 +21,7 @@ export type ResultRowProps = {
   unit?: string;
   /** Smaller sub-text under the result — derived numbers, hints, etc. */
   sub?: string;
-  /** Visual weight: "primary" = blue accent, "default" = slate. */
+  /** Visual weight: "primary" = blue accent, "default" = neutral surface. */
   tone?: 'default' | 'primary';
 };
 
@@ -26,70 +32,87 @@ export function ResultRow({
   sub,
   tone = 'default',
 }: ResultRowProps) {
+  const t = useThemeV2();
   const isPrimary = tone === 'primary';
+
+  const cardBg = isPrimary
+    ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+    : t.colors.surface;
+  const cardBorder = isPrimary
+    ? t.palette.blue.base + '33' // ~20% blue tint
+    : t.mode === 'dark'
+      ? 'rgba(255,255,255,0.05)'
+      : 'rgba(0,0,0,0.04)';
+
+  const labelColor = isPrimary ? t.palette.blue.base : t.colors.tertiary;
+  const valueColor = isPrimary ? t.palette.blue.base : t.colors.label;
+  const unitColor = isPrimary ? t.palette.blue.base : t.colors.tertiary;
+  const subColor = t.colors.secondary;
+
   return (
-    <View style={[styles.wrap, isPrimary ? styles.wrapPrimary : null]}>
-      <Text style={isPrimary ? { ...styles.label, color: color.primary } : styles.label}>
-        {label}
+    <View
+      style={[
+        styles.card,
+        {
+          backgroundColor: cardBg,
+          borderRadius: t.radii.field,
+          borderColor: cardBorder,
+          borderWidth: t.hairline,
+        },
+      ]}
+    >
+      <Text
+        variant="caption2"
+        style={{ color: labelColor, letterSpacing: 0.5 }}
+      >
+        {label.toUpperCase()}
       </Text>
+
       <View style={styles.row}>
         <Text
-          style={isPrimary ? { ...styles.value, color: color.primary } : styles.value}
-          tabular
+          variant="title2"
+          style={{
+            color: valueColor,
+            fontWeight: '700',
+            fontVariant: ['tabular-nums'],
+          }}
         >
           {value || '—'}
         </Text>
-        {unit ? <Text style={styles.unit}>{unit}</Text> : null}
+        {unit ? (
+          <Text
+            variant="footnote"
+            style={{
+              color: unitColor,
+              marginLeft: 6,
+              fontWeight: '600',
+            }}
+          >
+            {unit}
+          </Text>
+        ) : null}
       </View>
-      {sub ? <Text style={styles.sub}>{sub}</Text> : null}
+
+      {sub ? (
+        <Text
+          variant="caption1"
+          style={{ color: subColor, marginTop: 2 }}
+        >
+          {sub}
+        </Text>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: {
-    backgroundColor: color.surface,
-    borderRadius: radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
+  card: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     gap: 4,
-  },
-  wrapPrimary: {
-    backgroundColor: color.primarySoft,
-    borderColor: color.primary,
-  },
-  label: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.textMuted,
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
   },
   row: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    gap: 6,
-  },
-  value: {
-    fontFamily: fontFamily.sans,
-    fontSize: 24,
-    fontWeight: '700',
-    color: color.text,
-    letterSpacing: -0.4,
-  },
-  unit: {
-    fontFamily: fontFamily.mono,
-    fontSize: 12,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 0.6,
-  },
-  sub: {
-    fontSize: 12,
-    color: color.textMuted,
-    marginTop: 2,
   },
 });

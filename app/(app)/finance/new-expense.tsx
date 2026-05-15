@@ -1,22 +1,29 @@
 /**
- * Add a studio finance entry (expense or income).
+ * Add a studio finance entry (expense or income) — v2 design.
  *
- * Relocated from `app/(app)/finances/new.tsx` as part of the Finance hub
- * consolidation. The legacy path now redirects here.
+ * Layout (top → bottom):
+ *   1. SheetHeader: Cancel · "New entry" · Save
+ *   2. KeyboardAvoidingView + ScrollView so keyboard never overlaps inputs
+ *      a. Type pill row (Expense / Income)
+ *      b. FormGroup "Details" — Category (sheet) · Payee/Member (sheet/input) ·
+ *         Amount · Paid on (date sheet)
+ *      c. FormGroup "Payment" — Method pill row · Note (multiline)
+ *
+ * Date picker uses v2 DateTimeSheet (with Done button). Category +
+ * Member pickers use v2 SelectSheet.
  */
 import { router, Stack } from 'expo-router';
 import { useState } from 'react';
 import {
   Alert,
-  FlatList,
-  Modal,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
 
 import { auth } from '@/src/lib/firebase';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
@@ -29,11 +36,16 @@ import {
   type OrgFinanceKind,
   type OrgFinancePaymentMethod,
 } from '@/src/features/finances/types';
-import { DatePickerModal } from '@/src/ui/DatePickerModal';
-import { KeyboardFormLayout } from '@/src/ui/KeyboardFormLayout';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { color, radius, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const PAY_METHODS: { key: OrgFinancePaymentMethod; label: string }[] = [
   { key: 'cash', label: 'Cash' },
@@ -42,7 +54,22 @@ const PAY_METHODS: { key: OrgFinancePaymentMethod; label: string }[] = [
   { key: 'card', label: 'Card' },
 ];
 
+const KIND_OPTIONS: { key: OrgFinanceKind; label: string }[] = [
+  { key: 'expense', label: 'Expense' },
+  { key: 'income', label: 'Income' },
+];
+
+function fmtDate(d: Date): string {
+  return d.toLocaleDateString('en-IN', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 export default function NewOrgFinanceScreen() {
+  const t = useThemeV2();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
   const { members } = useOrgMembers(orgId || undefined);
@@ -55,6 +82,7 @@ export default function NewOrgFinanceScreen() {
   const [showDate, setShowDate] = useState(false);
   const [payee, setPayee] = useState('');
   const [payeeUid, setPayeeUid] = useState<string | null>(null);
+  const [showCategoryPick, setShowCategoryPick] = useState(false);
   const [showMemberPick, setShowMemberPick] = useState(false);
   const [method, setMethod] = useState<OrgFinancePaymentMethod>('bank');
   const [note, setNote] = useState('');
@@ -62,12 +90,21 @@ export default function NewOrgFinanceScreen() {
 
   if (!can('finance.write')) {
     return (
-      <Screen bg="grouped" padded>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <Text variant="body" color="textMuted">
-          {"You don't have permission to add studio finances."}
-        </Text>
-      </Screen>
+        <AmbientBackground />
+        <SheetHeader
+          title="New entry"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary">
+            You don't have permission to add studio finances.
+          </Text>
+        </View>
+      </View>
     );
   }
 
@@ -103,225 +140,277 @@ export default function NewOrgFinanceScreen() {
     }
   };
 
+  const categoryLabel =
+    ORG_FINANCE_CATEGORIES.find((c) => c.key === category)?.label ?? '—';
+  const isSalary = category === 'salary';
+
   return (
-    <Screen bg="grouped" padded={false}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
-      <KeyboardFormLayout>
-        <View style={styles.header}>
-          <Pressable onPress={() => router.back()} hitSlop={12}>
-            <Ionicons name="close" size={26} color={color.text} />
-          </Pressable>
-          <Text variant="title" color="text" style={{ flex: 1 }}>
-            Add entry
-          </Text>
-          <Pressable onPress={save} disabled={busy} hitSlop={12}>
-            <Text variant="bodyStrong" color="primary">{busy ? '…' : 'Save'}</Text>
-          </Pressable>
-        </View>
+      <AmbientBackground />
 
-        <ScrollView contentContainerStyle={styles.form} keyboardShouldPersistTaps="handled">
-          <Text variant="caption" color="textMuted" style={styles.label}>KIND</Text>
-          <View style={styles.rowChips}>
-            {(['expense', 'income'] as OrgFinanceKind[]).map((k) => (
-              <Pressable
-                key={k}
-                onPress={() => setKind(k)}
-                style={[styles.bigChip, kind === k && styles.bigChipOn]}
-              >
-                <Text variant="metaStrong" color={kind === k ? 'onPrimary' : 'text'}>
-                  {k === 'expense' ? 'Expense' : 'Income'}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <Text variant="caption" color="textMuted" style={styles.label}>CATEGORY</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: space.sm }}>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              {ORG_FINANCE_CATEGORIES.map((c) => (
-                <Pressable
-                  key={c.key}
-                  onPress={() => {
-                    setCategory(c.key);
-                    if (c.key !== 'salary') {
-                      setPayeeUid(null);
-                    }
-                  }}
-                  style={[styles.bigChip, category === c.key && styles.bigChipOn]}
-                >
-                  <Text variant="meta" color={category === c.key ? 'onPrimary' : 'text'}>
-                    {c.label}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </ScrollView>
-
-          {category === 'salary' ? (
-            <>
-              <Text variant="caption" color="textMuted" style={styles.label}>TEAM MEMBER</Text>
-              <Pressable
-                onPress={() => setShowMemberPick(true)}
-                style={styles.inputLike}
-              >
-                <Text variant="body" color={payee ? 'text' : 'textMuted'}>
-                  {payee || 'Pick a team member'}
-                </Text>
-                <Ionicons name="chevron-down" size={18} color={color.textMuted} />
-              </Pressable>
-            </>
-          ) : (
-            <>
-              <Text variant="caption" color="textMuted" style={styles.label}>PAYEE / VENDOR</Text>
-              <TextInput
-                value={payee}
-                onChangeText={setPayee}
-                placeholder="Name"
-                placeholderTextColor={color.textFaint}
-                style={styles.input}
-              />
-            </>
-          )}
-
-          <Text variant="caption" color="textMuted" style={styles.label}>AMOUNT (₹)</Text>
-          <TextInput
-            value={amount}
-            onChangeText={setAmount}
-            keyboardType="decimal-pad"
-            placeholder="0"
-            placeholderTextColor={color.textFaint}
-            style={styles.input}
-          />
-
-          <Text variant="caption" color="textMuted" style={styles.label}>PAID ON</Text>
-          <Pressable onPress={() => setShowDate(true)} style={styles.inputLike}>
-            <Text variant="body" color="text">
-              {paidAt.toLocaleDateString('en-IN')}
-            </Text>
-          </Pressable>
-
-          <Text variant="caption" color="textMuted" style={styles.label}>METHOD</Text>
-          <View style={styles.rowChips}>
-            {PAY_METHODS.map((m) => (
-              <Pressable
-                key={m.key}
-                onPress={() => setMethod(m.key)}
-                style={[styles.bigChip, method === m.key && styles.bigChipOn]}
-              >
-                <Text variant="meta" color={method === m.key ? 'onPrimary' : 'text'}>
-                  {m.label}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-
-          <Text variant="caption" color="textMuted" style={styles.label}>NOTE</Text>
-          <TextInput
-            value={note}
-            onChangeText={setNote}
-            placeholder="Optional"
-            placeholderTextColor={color.textFaint}
-            style={[styles.input, { minHeight: 80, textAlignVertical: 'top' }]}
-            multiline
-          />
-        </ScrollView>
-      </KeyboardFormLayout>
-
-      <DatePickerModal
-        visible={showDate}
-        value={paidAt}
-        onClose={() => setShowDate(false)}
-        onConfirm={(d) => {
-          setPaidAt(d);
-          setShowDate(false);
-        }}
+      <SheetHeader
+        title="New entry"
+        cancelLabel="Cancel"
+        saveLabel="Save"
+        saveLoading={busy}
+        onCancel={() => router.back()}
+        onSave={() => void save()}
       />
 
-      <Modal visible={showMemberPick} animationType="slide" transparent>
-        <Pressable style={styles.modalBackdrop} onPress={() => setShowMemberPick(false)} />
-        <View style={styles.modalSheet}>
-          <Text variant="bodyStrong" color="text" style={{ marginBottom: space.sm }}>
-            Select member
-          </Text>
-          <FlatList
-            data={members}
-            keyExtractor={(m) => m.uid}
-            renderItem={({ item }) => (
-              <Pressable
-                style={styles.memberRow}
-                onPress={() => {
-                  setPayeeUid(item.uid);
-                  setPayee(item.displayName);
-                  setShowMemberPick(false);
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Type pill row */}
+          <View style={styles.pillBlock}>
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={[styles.pillBlockLabel, { letterSpacing: 0.5 }]}
+            >
+              TYPE
+            </Text>
+            <View style={styles.pillRow}>
+              {KIND_OPTIONS.map((k) => {
+                const sel = kind === k.key;
+                const isExpense = k.key === 'expense';
+                const tone = sel
+                  ? (isExpense ? t.palette.red.base : t.palette.green.base)
+                  : t.colors.secondary;
+                const bg = sel
+                  ? (isExpense
+                      ? (t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft)
+                      : (t.mode === 'dark' ? t.palette.green.softDark : t.palette.green.soft))
+                  : t.colors.fill3;
+                return (
+                  <Pressable
+                    key={k.key}
+                    onPress={() => setKind(k.key)}
+                    hitSlop={6}
+                    style={({ pressed }) => [
+                      styles.pillChip,
+                      {
+                        backgroundColor: bg,
+                        borderRadius: t.radii.pill,
+                        borderColor: sel ? tone + '33' : 'transparent',
+                        borderWidth: sel ? 1 : 0,
+                      },
+                      pressed && { opacity: 0.85 },
+                    ]}
+                  >
+                    <View style={[styles.pillDot, { backgroundColor: tone }]} />
+                    <Text
+                      variant="footnote"
+                      style={{
+                        color: tone,
+                        fontWeight: sel ? '700' : '500',
+                        marginLeft: 5,
+                      }}
+                    >
+                      {k.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Details */}
+          <FormGroup header="Details">
+            <Row
+              label="Category"
+              value={categoryLabel}
+              chevron
+              onPress={() => setShowCategoryPick(true)}
+            />
+            {isSalary ? (
+              <Row
+                label="Team member"
+                value={payee || 'Pick a member'}
+                chevron
+                onPress={() => setShowMemberPick(true)}
+              />
+            ) : (
+              <InputRow
+                label="Payee"
+                value={payee}
+                onChangeText={(v) => {
+                  setPayee(v);
+                  setPayeeUid(null);
                 }}
-              >
-                <Text variant="body" color="text">{item.displayName}</Text>
-              </Pressable>
+                placeholder="Vendor name"
+                autoCapitalize="words"
+              />
             )}
-          />
-        </View>
-      </Modal>
-    </Screen>
+            <InputRow
+              label="Amount"
+              value={amount}
+              onChangeText={setAmount}
+              placeholder="₹0"
+              keyboardType="decimal-pad"
+              autoCapitalize="none"
+            />
+            <Row
+              label="Paid on"
+              value={fmtDate(paidAt)}
+              chevron
+              onPress={() => setShowDate(true)}
+              divider={false}
+            />
+          </FormGroup>
+
+          {/* Payment */}
+          <FormGroup header="Payment">
+            <View style={styles.methodRowBlock}>
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingTop: 12 }}
+              >
+                METHOD
+              </Text>
+              <View style={[styles.pillRow, { paddingHorizontal: 12, paddingVertical: 10 }]}>
+                {PAY_METHODS.map((m) => {
+                  const sel = method === m.key;
+                  return (
+                    <Pressable
+                      key={m.key}
+                      onPress={() => setMethod(m.key)}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.pillChip,
+                        {
+                          backgroundColor: sel
+                            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                            : t.colors.fill3,
+                          borderRadius: t.radii.pill,
+                          borderColor: sel ? t.palette.blue.base + '33' : 'transparent',
+                          borderWidth: sel ? 1 : 0,
+                        },
+                        pressed && { opacity: 0.85 },
+                      ]}
+                    >
+                      <Text
+                        variant="footnote"
+                        style={{
+                          color: sel ? t.palette.blue.base : t.colors.secondary,
+                          fontWeight: sel ? '700' : '500',
+                        }}
+                      >
+                        {m.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <View
+                style={[
+                  styles.methodDivider,
+                  { backgroundColor: t.colors.separator },
+                ]}
+              />
+            </View>
+            <InputRow
+              label="Note"
+              value={note}
+              onChangeText={setNote}
+              placeholder="Optional"
+              multiline
+              divider={false}
+            />
+          </FormGroup>
+
+          <View style={{ height: 24 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* Category picker */}
+      <SelectSheet
+        open={showCategoryPick}
+        title="Category"
+        options={ORG_FINANCE_CATEGORIES}
+        selected={category}
+        onPick={(k) => {
+          setCategory(k as OrgFinanceCategory);
+          if (k !== 'salary') {
+            setPayeeUid(null);
+          }
+        }}
+        onClose={() => setShowCategoryPick(false)}
+      />
+
+      {/* Team member picker (only relevant when category === salary) */}
+      <SelectSheet
+        open={showMemberPick}
+        title="Team member"
+        options={members.map((m) => ({ key: m.uid, label: m.displayName }))}
+        selected={payeeUid ?? undefined}
+        onPick={(uid) => {
+          const m = members.find((x) => x.uid === uid);
+          if (m) {
+            setPayeeUid(m.uid);
+            setPayee(m.displayName);
+          }
+        }}
+        onClose={() => setShowMemberPick(false)}
+      />
+
+      {/* Date picker — bottom sheet with Done */}
+      <DateTimeSheet
+        open={showDate}
+        value={paidAt}
+        onChange={setPaidAt}
+        onClose={() => setShowDate(false)}
+        mode="date"
+        title="Paid on"
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  header: {
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  scroll: { paddingTop: 8, paddingBottom: 60 },
+
+  // Type pill row block
+  pillBlock: {
+    paddingTop: 16,
+    paddingBottom: 4,
+  },
+  pillBlockLabel: {
+    paddingHorizontal: 32,
+    paddingBottom: 8,
+  },
+  pillRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    gap: 7,
+  },
+  pillChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    gap: space.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
   },
-  form: { padding: screenInset, paddingBottom: 120 },
-  label: { marginTop: space.md, marginBottom: 6, letterSpacing: 0.5 },
-  input: {
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    borderRadius: radius.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: color.text,
-    backgroundColor: color.bg,
+  pillDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
-  inputLike: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    borderRadius: radius.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: 12,
-    backgroundColor: color.bg,
+
+  // Method row inside Payment FormGroup
+  methodRowBlock: {
+    paddingBottom: 0,
   },
-  rowChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  bigChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-  },
-  bigChipOn: { backgroundColor: color.primary, borderColor: color.primary },
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  modalSheet: {
-    maxHeight: '50%',
-    backgroundColor: color.surface,
-    padding: screenInset,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-  },
-  memberRow: {
-    paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
+  methodDivider: {
+    height: 0.5,
+    marginLeft: 16,
   },
 });

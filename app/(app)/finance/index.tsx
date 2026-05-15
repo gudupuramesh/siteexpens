@@ -1,15 +1,20 @@
 /**
- * Studio Finance hub — tabbed home for org-level money + people:
- *   Dashboard · Expenses · Staff   (Phase 1)
- *   Payroll · Attendance           (Phase 2 — coming next)
+ * Studio Finance hub — v2 design.
+ *
+ * Tabbed home for org-level money + people:
+ *   Dashboard · Expenses · Staff · Payroll · Attendance
  *
  * Permission: gated behind `finance.read` (existing capability —
- * SuperAdmin / Admin / Accountant only). Direct URL hits without
- * the capability render a friendly access-denied state instead of
- * the tab pager.
+ * SuperAdmin / Admin / Accountant only). Direct URL hits without the
+ * capability render a friendly access-denied state instead of the
+ * tab pager.
  *
- * Pattern: mirrors `app/(app)/projects/[id]/index.tsx` — horizontally
- * scrollable hairline tab strip + a `FlatList` pager underneath.
+ * Layout:
+ *   1. v2 header (transparent over AmbientBackground): back · "Finance" + "STUDIO HUB" caption
+ *   2. v2 SubTabs strip (underline-style)
+ *   3. Pager — `FlatList` with `pagingEnabled` for swipeable tab body
+ *
+ * Mirrors the per-project tabs at `app/(app)/projects/[id]/index.tsx`.
  */
 import { router, Stack } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -17,18 +22,18 @@ import {
   Dimensions,
   FlatList,
   Pressable,
-  ScrollView,
   StyleSheet,
   View,
-  type LayoutChangeEvent,
   type ViewToken,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { usePermissions } from '@/src/features/org/usePermissions';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily } from '@/src/theme/tokens';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { SubTabs } from '@/src/ui/v2/SubTabs';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { DashboardTab } from '@/src/features/finance/tabs/DashboardTab';
 import { ExpensesTab } from '@/src/features/finance/tabs/ExpensesTab';
@@ -65,44 +70,22 @@ function TabContent({ tab }: { tab: TabKey }) {
 }
 
 export default function FinanceScreen() {
+  const t = useThemeV2();
   const { can } = usePermissions();
   const canRead = can('finance.read');
 
   const [tab, setTab] = useState<TabKey>('dashboard');
   const pagerRef = useRef<FlatList>(null);
-  const tabBarRef = useRef<ScrollView>(null);
-  const tabLayouts = useRef<Partial<Record<TabKey, { x: number; width: number }>>>({});
-  const tabBarWidth = useRef(0);
   const isUserSwipe = useRef(true);
 
-  const onTabBarLayout = useCallback((e: LayoutChangeEvent) => {
-    tabBarWidth.current = e.nativeEvent.layout.width;
+  const handleTabChange = useCallback((key: TabKey) => {
+    setTab(key);
+    const idx = TABS.findIndex((tt) => tt.key === key);
+    if (idx >= 0) {
+      isUserSwipe.current = false;
+      pagerRef.current?.scrollToIndex({ index: idx, animated: true });
+    }
   }, []);
-
-  const onTabLayout = useCallback((key: TabKey, e: LayoutChangeEvent) => {
-    const { x, width } = e.nativeEvent.layout;
-    tabLayouts.current[key] = { x, width };
-  }, []);
-
-  const syncTabBarToActive = useCallback((key: TabKey, animated = true) => {
-    const layout = tabLayouts.current[key];
-    if (!layout || !tabBarRef.current) return;
-    const targetX = Math.max(0, layout.x - (tabBarWidth.current - layout.width) / 2);
-    tabBarRef.current.scrollTo({ x: targetX, animated });
-  }, []);
-
-  const handleTabChange = useCallback(
-    (key: TabKey) => {
-      setTab(key);
-      syncTabBarToActive(key, true);
-      const idx = TABS.findIndex((t) => t.key === key);
-      if (idx >= 0) {
-        isUserSwipe.current = false;
-        pagerRef.current?.scrollToIndex({ index: idx, animated: true });
-      }
-    },
-    [syncTabBarToActive],
-  );
 
   const onViewableItemsChanged = useRef(
     ({ viewableItems }: { viewableItems: ViewToken[] }) => {
@@ -120,12 +103,17 @@ export default function FinanceScreen() {
     isUserSwipe.current = true;
   }, []);
 
+  // Reset to true on programmatic scroll completion (matches the
+  // pager pattern used in `projects/[id]/index.tsx`).
   useEffect(() => {
-    syncTabBarToActive(tab, true);
-  }, [tab, syncTabBarToActive]);
+    const id = setTimeout(() => {
+      isUserSwipe.current = true;
+    }, 400);
+    return () => clearTimeout(id);
+  }, [tab]);
 
-  // Hook MUST be defined before any conditional return below — moving it
-  // past the `!canRead` early return would change the hook count between
+  // Hook MUST stay above the conditional return below — moving it past
+  // the `!canRead` early return would change the hook count between
   // renders (the classic "Rendered more hooks than during the previous
   // render" crash).
   const renderTabPage = useCallback(
@@ -139,86 +127,109 @@ export default function FinanceScreen() {
 
   if (!canRead) {
     return (
-      <Screen bg="grouped" padded>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.deniedHeader}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="arrow-back" size={22} color={color.text} />
+        <AmbientBackground />
+
+        <View style={styles.header}>
+          <Pressable
+            onPress={() => router.back()}
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.iconBtn,
+              { backgroundColor: t.colors.fill3, borderRadius: 999 },
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Ionicons name="chevron-back" size={18} color={t.colors.label} />
           </Pressable>
+          <View style={{ flex: 1 }}>
+            <Text variant="headline" color="label">
+              Finance
+            </Text>
+          </View>
+          <View style={styles.iconBtn} />
         </View>
-        <Text variant="title" color="text" style={{ marginTop: 24 }}>
-          Finance
-        </Text>
-        <Text variant="body" color="textMuted" style={{ marginTop: 8 }}>
-          You don't have permission to view studio finances. Ask a Super Admin
-          or Admin to grant you the Accountant role.
-        </Text>
-      </Screen>
+
+        <View style={styles.deniedBody}>
+          <View
+            style={[
+              styles.deniedIcon,
+              {
+                backgroundColor:
+                  t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft,
+                borderRadius: t.radii.tile + 4,
+              },
+            ]}
+          >
+            <Ionicons
+              name="lock-closed-outline"
+              size={28}
+              color={t.palette.orange.base}
+            />
+          </View>
+          <Text
+            variant="title3"
+            color="label"
+            style={{ marginTop: 14, fontWeight: '700' }}
+          >
+            Finance is restricted
+          </Text>
+          <Text
+            variant="callout"
+            color="secondary"
+            style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}
+          >
+            You don't have permission to view studio finances. Ask a Super
+            Admin or Admin to grant you the Accountant role.
+          </Text>
+        </View>
+      </View>
     );
   }
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* Nav */}
-      <View style={styles.navBar}>
+      {/* Header — transparent so the AmbientBackground flows through */}
+      <View style={styles.header}>
         <Pressable
           onPress={() => router.back()}
-          hitSlop={12}
-          style={({ pressed }) => [styles.navBackBtn, pressed && { opacity: 0.6 }]}
-          accessibilityLabel="Back"
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { backgroundColor: t.colors.fill3, borderRadius: 999 },
+            pressed && { opacity: 0.7 },
+          ]}
         >
-          <Ionicons name="chevron-back" size={20} color={color.textMuted} />
+          <Ionicons name="chevron-back" size={18} color={t.colors.label} />
         </Pressable>
-        <View style={styles.navTitleWrap}>
-          <Text style={styles.navTitle}>Finance</Text>
-          <Text style={styles.navSub}>STUDIO HUB</Text>
+        <View style={{ flex: 1 }}>
+          <Text variant="headline" color="label">
+            Finance
+          </Text>
+          <Text
+            variant="caption2"
+            color="secondary"
+            style={{ letterSpacing: 0.5, marginTop: 1 }}
+          >
+            STUDIO HUB
+          </Text>
         </View>
+        <View style={styles.iconBtn} />
       </View>
 
-      {/* Tab strip */}
-      <ScrollView
-        ref={tabBarRef}
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.tabBar}
-        contentContainerStyle={styles.tabBarContent}
-        onLayout={onTabBarLayout}
-      >
-        {TABS.map((item) => {
-          const active = tab === item.key;
-          return (
-            <Pressable
-              key={item.key}
-              onPress={() => handleTabChange(item.key)}
-              style={styles.tabBtn}
-              onLayout={(e) => onTabLayout(item.key, e)}
-            >
-              <Text
-                style={[
-                  styles.tabLabel,
-                  {
-                    color: active ? color.text : color.textMuted,
-                    fontWeight: active ? '600' : '500',
-                  },
-                ]}
-              >
-                {item.label}
-              </Text>
-              <View
-                style={[
-                  styles.tabUnderline,
-                  active && { backgroundColor: color.primary },
-                ]}
-              />
-            </Pressable>
-          );
-        })}
-      </ScrollView>
+      {/* SubTabs */}
+      <SubTabs
+        items={TABS}
+        selected={tab}
+        onChange={handleTabChange}
+      />
 
       {/* Pager */}
-      <View style={styles.pagerWrap}>
+      <View style={{ flex: 1 }}>
         <FlatList
           ref={pagerRef}
           data={TABS}
@@ -240,70 +251,38 @@ export default function FinanceScreen() {
           onMomentumScrollEnd={onMomentumScrollEnd}
         />
       </View>
-    </Screen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  deniedHeader: {
-    flexDirection: 'row',
-    paddingTop: 4,
-  },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navBar: {
+  // Header
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    paddingBottom: 10,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
+    paddingTop: 50,
+    paddingBottom: 12,
     gap: 10,
   },
-  navBackBtn: {
-    width: 28,
-    height: 28,
+  iconBtn: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  navTitleWrap: { flex: 1, minWidth: 0 },
-  navTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 17,
-    fontWeight: '700',
-    color: color.text,
-    letterSpacing: -0.3,
-  },
-  navSub: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    color: color.textFaint,
-    letterSpacing: 1.2,
-    marginTop: 1,
-  },
-  tabBar: {
-    flexGrow: 0,
-    backgroundColor: color.bgGrouped,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-  },
-  tabBarContent: { paddingHorizontal: 16 },
-  tabBtn: { paddingHorizontal: 12, paddingTop: 10 },
-  tabLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    paddingBottom: 8,
-  },
-  tabUnderline: {
-    height: 2,
-    backgroundColor: 'transparent',
-    marginBottom: -StyleSheet.hairlineWidth,
-  },
-  pagerWrap: {
+
+  // Access-denied state
+  deniedBody: {
     flex: 1,
-    backgroundColor: color.bgGrouped,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+  },
+  deniedIcon: {
+    width: 72,
+    height: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

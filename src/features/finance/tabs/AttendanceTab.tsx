@@ -21,6 +21,7 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   StyleSheet,
   View,
 } from 'react-native';
@@ -40,7 +41,8 @@ import {
 } from '@/src/features/staff/types';
 import { useStaff } from '@/src/features/staff/useStaff';
 import { useStaffAttendance } from '@/src/features/staff/useStaffAttendance';
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
 import { color, fontFamily, screenInset, space } from '@/src/theme';
 
 function startOfMonth(d: Date): Date {
@@ -71,6 +73,7 @@ const STATUS_PILLS: { key: StaffAttendanceStatus; label: string; tone: string; t
 ];
 
 export function AttendanceTab() {
+  const refresh = usePullToRefresh();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? undefined;
   const { can } = usePermissions();
@@ -223,15 +226,15 @@ export function AttendanceTab() {
           style={styles.rowMeta}
         >
           <View style={styles.avatar}>
-            <Text variant="metaStrong" style={{ color: color.primary }}>
+            <Text variant="footnote" style={{ color: color.primary }}>
               {item.name.charAt(0).toUpperCase() || '?'}
             </Text>
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text variant="rowTitle" color="text" numberOfLines={1}>
+            <Text variant="callout" color="label" numberOfLines={1}>
               {item.name}
             </Text>
-            <Text variant="meta" color="textMuted" numberOfLines={1}>
+            <Text variant="caption1" color="secondary" numberOfLines={1}>
               {item.role || 'Staff'}
             </Text>
           </View>
@@ -287,10 +290,10 @@ export function AttendanceTab() {
           style={styles.dateLabelWrap}
           accessibilityLabel="Pick date"
         >
-          <Text variant="rowTitle" color="text">
+          <Text variant="callout" color="label">
             {isToday ? 'Today' : fmtDateLong(date)}
           </Text>
-          <Text variant="meta" color="textMuted" style={{ marginTop: 1 }}>
+          <Text variant="caption1" color="secondary" style={{ marginTop: 1 }}>
             {isToday ? fmtDateLong(date) : 'Tap to change'}
           </Text>
         </Pressable>
@@ -317,6 +320,7 @@ export function AttendanceTab() {
         data={activeStaff}
         keyExtractor={(s) => s.id}
         renderItem={renderRow}
+        refreshControl={<RefreshControl {...refresh.props} />}
         ListHeaderComponent={
           <View>
             <View style={styles.summaryCard}>
@@ -339,10 +343,10 @@ export function AttendanceTab() {
           ) : (
             <View style={styles.empty}>
               <Ionicons name="people-outline" size={28} color={color.textFaint} />
-              <Text variant="bodyStrong" color="text" style={{ marginTop: space.xs }}>
+              <Text variant="headline" color="label" style={{ marginTop: space.xs }}>
                 No active staff
               </Text>
-              <Text variant="meta" color="textMuted" align="center" style={{ marginTop: 4 }}>
+              <Text variant="caption1" color="secondary" style={{ marginTop: 4, textAlign: "center" }}>
                 Add staff in the Staff tab to start marking attendance.
               </Text>
             </View>
@@ -382,9 +386,9 @@ export function AttendanceTab() {
             <View style={styles.modalSheet}>
               <View style={styles.modalHandle} />
               <View style={styles.modalHeader}>
-                <Text variant="bodyStrong" color="text">Pick a date</Text>
+                <Text variant="headline" color="label">Pick a date</Text>
                 <Pressable onPress={() => setDatePickerOpen(false)} hitSlop={12}>
-                  <Text variant="metaStrong" color="primary">Done</Text>
+                  <Text variant="footnote" color="label">Done</Text>
                 </Pressable>
               </View>
               <DateTimePicker
@@ -453,9 +457,8 @@ const styles = StyleSheet.create({
     backgroundColor: color.primarySoft,
   },
   todayChipText: {
-    fontFamily: fontFamily.sans,
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.primary,
     letterSpacing: 0.8,
   },
@@ -474,24 +477,23 @@ const styles = StyleSheet.create({
   summaryCell: { flex: 1, paddingVertical: 12, paddingHorizontal: 6, gap: 4, alignItems: 'center' },
   summaryDivider: { width: StyleSheet.hairlineWidth, backgroundColor: color.borderStrong },
   summaryLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.0,
   },
   summaryValue: {
-    fontFamily: fontFamily.mono,
     fontSize: 18,
-    fontWeight: '800',
+    fontWeight: '600',
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.3,
   },
 
   sectionLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.4,
     paddingHorizontal: screenInset,
@@ -534,9 +536,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pillText: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '600',
     letterSpacing: 0.4,
   },
 

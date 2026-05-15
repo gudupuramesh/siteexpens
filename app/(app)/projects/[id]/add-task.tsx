@@ -1,18 +1,29 @@
 /**
- * Add Task form. Title, description, status, priority, dates, quantity, unit,
- * assignee (project member picker), photos.
+ * Add Task — v2 design.
+ *
+ * Layout:
+ *   1. SheetHeader: Cancel · "New milestone" · Save
+ *   2. Title hero card — large editable title + status pill row
+ *   3. FormGroup "Details" — Category (SelectSheet) · Description (multiline)
+ *   4. FormGroup "Schedule" — Start date · End date (DateTimeSheet pickers)
+ *   5. FormGroup "Assignee" — Party row (opens PartyPickerModal)
+ *   6. Reference photos block — staged thumbnails + "Add photo" tile
+ *
+ * Photos are staged locally on pick — R2 upload happens during Save so
+ * backing out leaves no orphans in the bucket. Default start date is
+ * suggested from the latest existing milestone (day after) clamped to
+ * today.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
+import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { Controller, useForm } from 'react-hook-form';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import {
   Alert,
   Image,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -37,18 +48,23 @@ import {
 import { useTaskCategories } from '@/src/features/tasks/useTaskCategories';
 import { type TaskCategory, type TaskStatus, type Task } from '@/src/features/tasks/types';
 import { useTasks } from '@/src/features/tasks/useTasks';
-import { Button } from '@/src/ui/Button';
-import { DatePickerModal } from '@/src/ui/DatePickerModal';
 import { PartyPickerModal } from '@/src/ui/PartyPickerModal';
-import { Screen } from '@/src/ui/Screen';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
 import { SubmitProgressOverlay } from '@/src/ui/SubmitProgressOverlay';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
 import { formatDate } from '@/src/lib/format';
-import { color, radius, screenInset, space } from '@/src/theme';
+import { useThemeV2 } from '@/src/theme/v2';
+
+import { CategorySheet } from '@/src/features/tasks/CategorySheet';
 
 const STATUS_OPTIONS: Array<{ key: TaskStatus; label: string }> = [
-  { key: 'not_started', label: 'Not Started' },
+  { key: 'not_started', label: 'Not started' },
   { key: 'ongoing', label: 'Ongoing' },
   { key: 'completed', label: 'Completed' },
 ];
@@ -68,25 +84,17 @@ function addCalendarDaysStart(d: Date, days: number): Date {
   return n;
 }
 
-/** Next milestone start: day after latest end (or start if no end); not before today. */
 function suggestedNextTaskStart(existing: Task[], today: Date): Date {
   const todayStart = startOfLocalDay(today).getTime();
-  if (existing.length === 0) {
-    return new Date(todayStart);
-  }
+  if (existing.length === 0) return new Date(todayStart);
   let best = -Infinity;
   for (const t of existing) {
     const end = t.endDate?.toDate();
     const start = t.startDate?.toDate();
-    if (end) {
-      best = Math.max(best, startOfLocalDay(end).getTime());
-    } else if (start) {
-      best = Math.max(best, startOfLocalDay(start).getTime());
-    }
+    if (end) best = Math.max(best, startOfLocalDay(end).getTime());
+    else if (start) best = Math.max(best, startOfLocalDay(start).getTime());
   }
-  if (best === -Infinity) {
-    return new Date(todayStart);
-  }
+  if (best === -Infinity) return new Date(todayStart);
   const after = addCalendarDaysStart(new Date(best), 1);
   const afterStart = startOfLocalDay(after).getTime();
   return new Date(Math.max(afterStart, todayStart));
@@ -94,6 +102,7 @@ function suggestedNextTaskStart(existing: Task[], today: Date): Date {
 
 export default function AddTaskScreen() {
   useGuardedRoute({ capability: 'task.write' });
+  const t = useThemeV2();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -128,15 +137,13 @@ export default function AddTaskScreen() {
       }
     };
   }, [projectId, tasksLoading, existingTasks]);
+
   const [showStartDate, setShowStartDate] = useState(false);
   const [showEndDate, setShowEndDate] = useState(false);
   const [assignedTo, setAssignedTo] = useState('');
   const [assignedToName, setAssignedToName] = useState('');
-  // Photos are staged locally on pick — no R2 round-trip. Upload
-  // happens when the user taps Save (see onSubmit).
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [savePhase, setSavePhase] = useState<string>();
-  const [saveProgress, setSaveProgress] = useState<{ done: number; total: number } | null>(null);
   const [showPartyPicker, setShowPartyPicker] = useState(false);
   const [showCategorySheet, setShowCategorySheet] = useState(false);
   const [newCategory, setNewCategory] = useState('');
@@ -160,7 +167,7 @@ export default function AddTaskScreen() {
     mode: 'onChange',
   });
 
-  const selectedStatus = watch('status');
+  const selectedStatus = watch('status') as TaskStatus;
   const selectedCategory = watch('category') as TaskCategory;
   const selectedCategoryLabel =
     categoryOptions.find((c) => c.key === selectedCategory)?.label ?? 'General';
@@ -191,7 +198,6 @@ export default function AddTaskScreen() {
       quality: 0.85,
     });
     if (res.canceled) return;
-    // Stage locally — no R2 round-trip. Upload runs during Save.
     const newEntries = res.assets.map((a) =>
       makeStagedFile({
         localUri: a.uri,
@@ -209,7 +215,6 @@ export default function AddTaskScreen() {
     if (!user || !orgId || !projectId) return;
     setSubmitError(undefined);
     try {
-      // Step 1 — upload all staged files in parallel (if any).
       let uploadedFiles: { publicUrl: string; key: string; sizeBytes: number; contentType: string }[] = [];
       let failedCount = 0;
       if (staged.length > 0) {
@@ -219,23 +224,20 @@ export default function AddTaskScreen() {
           kind: 'task_photo',
           refId: projectId,
           compress: 'balanced',
-          onProgress: (done, total) => {
-            setSaveProgress({ done, total });
-            setSavePhase(`Uploading ${done} of ${total}…`);
-          },
+          onProgress: (done, total) => setSavePhase(`Uploading ${done} of ${total}…`),
         });
         uploadedFiles = uploaded;
         failedCount = failed.length;
         if (uploaded.length === 0 && failed.length > 0) {
-          setSubmitError(`All ${failed.length} photo(s) failed to upload. Check your connection and try Save again.`);
+          setSubmitError(
+            `All ${failed.length} photo(s) failed to upload. Check your connection and try Save again.`,
+          );
           setSavePhase(undefined);
-          setSaveProgress(null);
           return;
         }
       }
 
-      // Step 2 — create the task.
-      setSavePhase('Saving task…');
+      setSavePhase('Saving milestone…');
       const taskId = await createTask({
         orgId,
         projectId,
@@ -247,12 +249,10 @@ export default function AddTaskScreen() {
         endDate,
         assignedTo,
         assignedToName,
-        // Only successfully-uploaded R2 URLs land on the doc.
         photoUris: uploadedFiles.map((u) => u.publicUrl),
         createdBy: user.uid,
       });
 
-      // Step 3 — record storage events for each uploaded file.
       for (const u of uploadedFiles) {
         void recordStorageEvent({
           projectId,
@@ -266,206 +266,286 @@ export default function AddTaskScreen() {
       }
 
       if (failedCount > 0) {
-        // Partial success — surface the count via Alert, then exit
-        // (the doc was still saved with what succeeded).
         Alert.alert(
           'Some uploads failed',
-          `${failedCount} of ${staged.length} photo${staged.length === 1 ? '' : 's'} failed to upload. The task was saved with the rest.`,
+          `${failedCount} of ${staged.length} photo${staged.length === 1 ? '' : 's'} failed to upload. The milestone was saved with the rest.`,
         );
       }
-      // Snapshot-propagation buffer (see add-transaction.tsx).
       await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
       setSubmitError((err as Error).message);
     } finally {
       setSavePhase(undefined);
-      setSaveProgress(null);
     }
   }
 
-  return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
-      <Stack.Screen options={{ headerShown: false }} />
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="arrow-back" size={20} color={color.text} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>TIMELINE</Text>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>Add Task</Text>
-        </View>
-        <View style={styles.navBtn} />
-      </View>
+  return (
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
+
+      <SheetHeader
+        title="New milestone"
+        cancelLabel="Cancel"
+        saveLabel="Save"
+        saveLoading={isSubmitting}
+        saveDisabled={!isValid || !orgId}
+        onCancel={() => router.back()}
+        onSave={() => void handleSubmit(onSubmit)()}
+      />
 
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardDismissMode="on-drag"
+          keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Category */}
-          <Text variant="caption" color="textMuted" style={styles.label}>CATEGORY</Text>
-          <Pressable onPress={() => setShowCategorySheet(true)} style={styles.assignBtn}>
-            <Ionicons name="layers-outline" size={18} color={color.textMuted} />
-            <Text variant="body" color="text" style={styles.flex}>
-              {selectedCategoryLabel}
-            </Text>
-            <Ionicons name="chevron-down" size={16} color={color.textFaint} />
-          </Pressable>
-          {errors.category?.message ? (
-            <Text variant="caption" color="danger" style={{ marginTop: 4 }}>
-              {errors.category.message}
-            </Text>
+          {/* Title hero */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+            <View
+              style={[
+                styles.titleCard,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: t.radii.hero,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+              ]}
+            >
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ letterSpacing: 0.5 }}
+              >
+                MILESTONE TITLE
+              </Text>
+              <Controller
+                control={control}
+                name="title"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <TextInput
+                    value={value}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="e.g. Install kitchen cabinets"
+                    placeholderTextColor={t.colors.tertiary}
+                    autoCapitalize="sentences"
+                    style={[
+                      styles.titleInput,
+                      {
+                        color: t.colors.label,
+                        ...t.type.title3,
+                        fontWeight: '700',
+                      },
+                    ]}
+                    multiline
+                  />
+                )}
+              />
+              <View style={styles.statusRow}>
+                {STATUS_OPTIONS.map((s) => {
+                  const active = selectedStatus === s.key;
+                  const tone =
+                    s.key === 'completed'
+                      ? { fg: t.palette.green.base, bg: t.mode === 'dark' ? t.palette.green.softDark : t.palette.green.soft }
+                      : s.key === 'ongoing'
+                        ? { fg: t.palette.blue.base, bg: t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft }
+                        : { fg: t.colors.secondary, bg: t.colors.fill3 };
+                  return (
+                    <Pressable
+                      key={s.key}
+                      onPress={() => setValue('status', s.key, { shouldValidate: true })}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.statusChip,
+                        {
+                          backgroundColor: active ? tone.bg : t.colors.fill3,
+                          borderRadius: 999,
+                          borderColor: active ? tone.fg + '33' : 'transparent',
+                          borderWidth: active ? 1 : 0,
+                        },
+                        pressed && { opacity: 0.85 },
+                      ]}
+                    >
+                      <View
+                        style={{
+                          width: 5,
+                          height: 5,
+                          borderRadius: 3,
+                          backgroundColor: active ? tone.fg : t.colors.tertiary,
+                          marginRight: 5,
+                        }}
+                      />
+                      <Text
+                        variant="caption2"
+                        style={{
+                          color: active ? tone.fg : t.colors.secondary,
+                          fontWeight: '700',
+                          letterSpacing: 0.3,
+                        }}
+                      >
+                        {s.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </View>
+          {errors.title?.message ? (
+            <FieldNote text={errors.title.message} tone={t.palette.red.base} />
           ) : null}
 
-          <Controller
-            control={control}
-            name="title"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Task Title"
-                placeholder="e.g. Install kitchen cabinets"
-                autoCapitalize="sentences"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.title?.message}
-                square
-                strongBorder
-              />
-            )}
-          />
+          {/* Details */}
+          <FormGroup header="Details">
+            <Row
+              label="Category"
+              value={selectedCategoryLabel}
+              chevron
+              onPress={() => setShowCategorySheet(true)}
+            />
+            <Controller
+              control={control}
+              name="description"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Description"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="Details about this milestone"
+                  multiline
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+          {errors.category?.message ? (
+            <FieldNote text={errors.category.message} tone={t.palette.red.base} />
+          ) : null}
 
-          <Controller
-            control={control}
-            name="description"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Description (optional)"
-                placeholder="Details about the task"
-                multiline
-                value={value ?? ''}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                square
-                strongBorder
-              />
-            )}
-          />
-
-          {/* Status */}
-          <Text variant="caption" color="textMuted" style={styles.label}>STATUS</Text>
-          <View style={styles.chipRow}>
-            {STATUS_OPTIONS.map((s) => {
-              const active = selectedStatus === s.key;
-              return (
-                <Pressable
-                  key={s.key}
-                  onPress={() => setValue('status', s.key, { shouldValidate: true })}
-                  style={[styles.chip, active && styles.chipActive]}
-                >
-                  <Text variant="caption" style={{ color: active ? '#fff' : color.text }}>
-                    {s.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-
-          {/* Dates */}
-          <View style={styles.dateRow}>
-            <View style={styles.dateField}>
-              <Text variant="caption" color="textMuted" style={styles.label}>START DATE</Text>
-              <Pressable
-                onPress={() => {
-                  setShowEndDate(false);
-                  setShowStartDate(true);
-                }}
-                style={styles.dateBtn}
-              >
-                <Text variant="body" color="text">{formatDate(startDate)}</Text>
-              </Pressable>
-              <DatePickerModal
-                visible={showStartDate}
-                value={startDate}
-                onClose={() => setShowStartDate(false)}
-                onConfirm={(d) => {
-                  userTouchedStartRef.current = true;
-                  setStartDate(d);
-                }}
-              />
-            </View>
-            <View style={styles.dateField}>
-              <Text variant="caption" color="textMuted" style={styles.label}>END DATE</Text>
-              <Pressable
-                onPress={() => {
-                  setShowStartDate(false);
-                  setShowEndDate(true);
-                }}
-                style={styles.dateBtn}
-              >
-                <Text variant="body" color="text">{endDate ? formatDate(endDate) : 'Not set'}</Text>
-              </Pressable>
-              <DatePickerModal
-                visible={showEndDate}
-                value={endDate ?? new Date()}
-                onClose={() => setShowEndDate(false)}
-                onConfirm={(d) => setEndDate(d)}
-              />
-            </View>
-          </View>
+          {/* Schedule */}
+          <FormGroup header="Schedule">
+            <Row
+              label="Start date"
+              value={formatDate(startDate)}
+              chevron
+              onPress={() => {
+                setShowEndDate(false);
+                setShowStartDate(true);
+              }}
+            />
+            <Row
+              label="End date"
+              value={endDate ? formatDate(endDate) : 'Optional'}
+              valueColor={endDate ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => {
+                setShowStartDate(false);
+                setShowEndDate(true);
+              }}
+              divider={false}
+            />
+          </FormGroup>
 
           {/* Assignee */}
-          <Text variant="caption" color="textMuted" style={styles.label}>ASSIGNED TO</Text>
-          <Pressable onPress={() => setShowPartyPicker(true)} style={styles.assignBtn}>
-            <Ionicons name="person-circle-outline" size={20} color={color.textMuted} />
-            <Text variant="body" color={assignedToName ? 'text' : 'textMuted'} style={styles.flex}>
-              {assignedToName || 'Pick a party'}
-            </Text>
-            <Ionicons name="chevron-forward" size={18} color={color.textFaint} />
-          </Pressable>
+          <FormGroup header="Assignee">
+            <Row
+              label="Party"
+              value={assignedToName || 'Unassigned'}
+              valueColor={assignedToName ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setShowPartyPicker(true)}
+              divider={false}
+            />
+          </FormGroup>
 
-          {/* Photos — staged locally; uploaded only on Save. */}
-          <Text variant="caption" color="textMuted" style={styles.label}>PHOTOS</Text>
-          <View style={styles.photoRow}>
-            {staged.map((p) => (
-              <View key={p.id} style={styles.photoThumbWrap}>
-                <Image source={{ uri: p.localUri }} style={styles.photoThumb} />
-                <Pressable
-                  onPress={() => removePhoto(p.id)}
-                  style={styles.photoClose}
-                  hitSlop={6}
-                >
-                  <Ionicons name="close" size={14} color="#fff" />
-                </Pressable>
-              </View>
-            ))}
-            <Pressable onPress={pickPhotos} style={styles.photoAdd}>
-              <Ionicons name="add" size={22} color={color.primary} />
-            </Pressable>
+          {/* Reference photos */}
+          <View style={{ paddingHorizontal: 16, marginTop: 22 }}>
+            <Text
+              variant="caption2"
+              color="secondary"
+              style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingBottom: 8 }}
+            >
+              REFERENCE PHOTOS
+            </Text>
+            <View style={styles.photoRow}>
+              {staged.map((p) => (
+                <View key={p.id} style={styles.photoThumbWrap}>
+                  <Image
+                    source={{ uri: p.localUri }}
+                    style={[styles.photoThumb, { borderRadius: t.radii.tile }]}
+                  />
+                  <Pressable
+                    onPress={() => removePhoto(p.id)}
+                    hitSlop={6}
+                    style={[
+                      styles.photoClose,
+                      { backgroundColor: t.palette.red.base },
+                    ]}
+                  >
+                    <Ionicons name="close" size={12} color="#fff" />
+                  </Pressable>
+                </View>
+              ))}
+              <Pressable
+                onPress={pickPhotos}
+                style={({ pressed }) => [
+                  styles.photoAdd,
+                  {
+                    backgroundColor:
+                      t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                    borderRadius: t.radii.tile,
+                    borderColor: t.palette.blue.base + '33',
+                    borderWidth: t.hairline,
+                    borderStyle: 'dashed',
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Ionicons name="add" size={20} color={t.palette.blue.base} />
+              </Pressable>
+            </View>
           </View>
 
-          {submitError && (
-            <Text variant="caption" color="danger" style={{ marginTop: space.xs }}>
-              {submitError}
-            </Text>
-          )}
-        </ScrollView>
+          {submitError ? (
+            <FieldNote text={submitError} tone={t.palette.red.base} />
+          ) : null}
 
-        <View style={styles.footer}>
-          <Button
-            label={savePhase ?? 'Create Timeline'}
-            onPress={handleSubmit(onSubmit)}
-            loading={isSubmitting}
-            disabled={!isValid || !orgId}
-          />
-        </View>
+          <View style={{ height: 60 }} />
+        </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Date pickers */}
+      <DateTimeSheet
+        open={showStartDate}
+        value={startDate}
+        onChange={(d) => {
+          userTouchedStartRef.current = true;
+          setStartDate(d);
+        }}
+        onClose={() => setShowStartDate(false)}
+        mode="date"
+        title="Start date"
+      />
+      <DateTimeSheet
+        open={showEndDate}
+        value={endDate ?? new Date()}
+        onChange={(d) => setEndDate(d)}
+        onClose={() => setShowEndDate(false)}
+        mode="date"
+        title="End date"
+      />
 
       <PartyPickerModal
         visible={showPartyPicker}
@@ -480,157 +560,77 @@ export default function AddTaskScreen() {
         onClose={() => setShowPartyPicker(false)}
       />
 
-      <Modal
-        visible={showCategorySheet}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowCategorySheet(false)}
-      >
-        <Pressable style={styles.overlay} onPress={() => setShowCategorySheet(false)}>
-          <View />
-        </Pressable>
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={styles.sheetWrap}
-        >
-          <View style={styles.sheet}>
-            <View style={styles.sheetHandle} />
-            <Text variant="bodyStrong" color="text" style={styles.sheetTitle}>
-              Select category
-            </Text>
-            <ScrollView
-              style={{ maxHeight: 360 }}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-              <View style={styles.newCategoryRow}>
-                <TextInput
-                  value={newCategory}
-                  onChangeText={setNewCategory}
-                  placeholder="Add new category"
-                  placeholderTextColor={color.textFaint}
-                  style={styles.newCategoryInput}
-                />
-                <Pressable
-                  onPress={addCategoryNow}
-                  disabled={!newCategory.trim() || addingCategory}
-                  style={({ pressed }) => [
-                    styles.newCategoryBtn,
-                    (!newCategory.trim() || addingCategory) && { opacity: 0.5 },
-                    pressed && { opacity: 0.8 },
-                  ]}
-                >
-                  <Text variant="metaStrong" style={{ color: color.onPrimary }}>
-                    ADD
-                  </Text>
-                </Pressable>
-              </View>
-
-              {categoryOptions.map((c) => {
-                const active = selectedCategory === c.key;
-                return (
-                  <Pressable
-                    key={c.key}
-                    onPress={() => {
-                      setValue('category', c.key, { shouldValidate: true });
-                      setShowCategorySheet(false);
-                    }}
-                    style={[styles.sheetOption, active && styles.sheetOptionActive]}
-                  >
-                    <Text variant="body" color="text">
-                      {c.label}
-                    </Text>
-                    {active ? <Ionicons name="checkmark" size={16} color={color.primary} /> : null}
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      <CategorySheet
+        open={showCategorySheet}
+        onClose={() => setShowCategorySheet(false)}
+        categoryOptions={categoryOptions}
+        selectedCategory={selectedCategory}
+        onPick={(k) => setValue('category', k, { shouldValidate: true })}
+        newCategory={newCategory}
+        setNewCategory={setNewCategory}
+        addingCategory={addingCategory}
+        onAddCategory={addCategoryNow}
+      />
 
       <SubmitProgressOverlay
         visible={isSubmitting}
         intent="createTask"
         phaseLabel={savePhase}
       />
-    </Screen>
+    </View>
+  );
+}
+
+function FieldNote({ text, tone }: { text: string; tone: string }) {
+  return (
+    <Text
+      variant="caption2"
+      style={{ color: tone, paddingHorizontal: 32, marginTop: 8 }}
+    >
+      {text}
+    </Text>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  navBar: {
+  scroll: { paddingBottom: 60 },
+
+  // Title hero
+  titleCard: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  titleInput: {
+    marginTop: 6,
+    paddingVertical: 0,
+    margin: 0,
+    minHeight: 30,
+  },
+  statusRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: 8,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-  },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navCenter: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navEyebrow: { letterSpacing: 1.2 },
-  navTitle: { textAlign: 'center' },
-  scroll: {
-    paddingHorizontal: screenInset,
-    paddingTop: 12,
-    paddingBottom: space.xl,
-    backgroundColor: color.bgGrouped,
-  },
-  label: { marginTop: space.md, marginBottom: space.xs },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexWrap: 'wrap',
     gap: 6,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xs,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
+    marginTop: 12,
   },
-  chipActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
-  },
-  dateRow: { flexDirection: 'row', gap: space.sm },
-  dateField: { flex: 1 },
-  dateBtn: {
-    paddingVertical: space.sm,
-    paddingHorizontal: space.sm,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-  },
-  assignBtn: {
+  statusChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.xs,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.sm,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  photoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: space.xs },
-  photoThumbWrap: { position: 'relative' },
+
+  // Photos
+  photoRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  photoThumbWrap: {
+    position: 'relative',
+  },
   photoThumb: {
     width: 72,
     height: 72,
-    borderRadius: radius.sm,
-    backgroundColor: color.surface,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
   },
   photoClose: {
     position: 'absolute',
@@ -639,93 +639,12 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: color.danger,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  // Status overlay on each photo thumb — translucent dark while
-  // uploading; red when the upload errored.
-  photoOverlay: {
-    position: 'absolute',
-    top: 0, left: 0, right: 0, bottom: 0,
-    backgroundColor: 'rgba(15,23,42,0.55)',
-    alignItems: 'center', justifyContent: 'center',
   },
   photoAdd: {
     width: 72,
     height: 72,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: color.bg,
-  },
-  footer: {
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.bgGrouped,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-  },
-  overlay: { flex: 1, backgroundColor: 'rgba(15,23,42,0.4)' },
-  sheetWrap: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-  sheet: {
-    backgroundColor: color.bg,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    borderTopWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: screenInset,
-    paddingTop: 8,
-    paddingBottom: 20,
-  },
-  sheetHandle: {
-    width: 34,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.borderStrong,
-    alignSelf: 'center',
-    marginBottom: 10,
-  },
-  sheetTitle: { marginBottom: 10 },
-  sheetOption: {
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    paddingHorizontal: space.sm,
-    marginBottom: 8,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  sheetOptionActive: {
-    backgroundColor: color.primarySoft,
-  },
-  newCategoryRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-  },
-  newCategoryInput: {
-    flex: 1,
-    minHeight: 42,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    paddingHorizontal: space.sm,
-    color: color.text,
-  },
-  newCategoryBtn: {
-    width: 72,
-    minHeight: 42,
-    borderRadius: radius.sm,
-    backgroundColor: color.primary,
-    borderWidth: 1,
-    borderColor: color.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },

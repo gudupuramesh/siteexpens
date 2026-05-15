@@ -6,16 +6,12 @@
  * (millimetres for length, square metres for area). The active field
  * tracks which input owns the truth so we don't ping-pong rounding
  * errors back at it.
- *
- * Length supports the awkward "ft + in" composite that interior
- * designers actually quote on site, alongside mm/cm/m. Area covers the
- * Indian "Gaj" (sq yd) trio.
  */
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -31,7 +27,6 @@ type LengthField = 'ft' | 'in' | 'mm' | 'cm' | 'm';
 /** Round to a sensible number of decimals — avoids "12.000000001" garbage. */
 function fmt(n: number, decimals = 3): string {
   if (!Number.isFinite(n)) return '';
-  // Strip trailing zeros after decimal but keep up to `decimals`.
   const fixed = n.toFixed(decimals);
   return fixed.replace(/\.?0+$/, '');
 }
@@ -44,7 +39,6 @@ function LengthSection() {
   const [cm, setCm] = useState('30.48');
   const [m, setM] = useState('0.305');
 
-  // Compute base mm from whichever field the user just edited.
   function recompute(from: LengthField, raw: string, otherFt?: string) {
     setActive(from);
     let baseMm = 0;
@@ -60,19 +54,12 @@ function LengthSection() {
       baseMm = (parseNum(raw) ?? 0) * LENGTH.mToMm;
     }
 
-    // Update every field EXCEPT the one the user is typing in
-    // (so caret + raw input is preserved).
     if (from !== 'ft' && from !== 'in') {
-      // Convert mm → ft + leftover inches.
       const totalIn = baseMm / LENGTH.inToMm;
       const wholeFt = Math.floor(totalIn / 12);
       const leftoverIn = totalIn - wholeFt * 12;
       setFt(fmt(wholeFt, 0));
       setInch(fmt(leftoverIn, 2));
-    } else if (from === 'ft') {
-      // User changed ft, leave inch as-is.
-    } else {
-      // User changed inch, leave ft as-is.
     }
     if (from !== 'mm') setMm(fmt(baseMm, 2));
     if (from !== 'cm') setCm(fmt(baseMm / LENGTH.cmToMm, 3));
@@ -130,7 +117,11 @@ function ActiveCaption({ active }: { active: LengthField }) {
     ft: 'feet', in: 'inches', mm: 'millimetres', cm: 'centimetres', m: 'metres',
   };
   return (
-    <Text style={styles.caption}>
+    <Text
+      variant="caption1"
+      color="tertiary"
+      style={{ paddingHorizontal: 4, marginTop: 2, fontStyle: 'italic' }}
+    >
       Showing values converted from {labels[active]}.
     </Text>
   );
@@ -164,29 +155,34 @@ function AreaSection() {
   return (
     <Section title="Area">
       <NumberField
-        label="Square Feet"
+        label="Square feet"
         unit="sq ft"
         value={sqft}
         onChangeText={(t) => { setSqft(t); recompute('sqft', t); }}
         size="lg"
       />
       <NumberField
-        label="Square Metres"
+        label="Square metres"
         unit="m²"
         value={sqm}
         onChangeText={(t) => { setSqm(t); recompute('sqm', t); }}
         size="lg"
       />
       <NumberField
-        label="Square Yards (Gaj)"
+        label="Square yards (Gaj)"
         unit="gaj"
         value={sqyd}
         onChangeText={(t) => { setSqyd(t); recompute('sqyd', t); }}
         size="lg"
         hint="1 Gaj = 9 sq ft = 0.836 m²"
       />
-      <Text style={styles.caption}>
-        Showing values converted from {active === 'sqft' ? 'square feet' : active === 'sqm' ? 'square metres' : 'gaj'}.
+      <Text
+        variant="caption1"
+        color="tertiary"
+        style={{ paddingHorizontal: 4, marginTop: 2, fontStyle: 'italic' }}
+      >
+        Showing values converted from{' '}
+        {active === 'sqft' ? 'square feet' : active === 'sqm' ? 'square metres' : 'gaj'}.
       </Text>
     </Section>
   );
@@ -206,17 +202,32 @@ export function UnitConverter({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>('length');
+  const t = useThemeV2();
 
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="Unit Converter"
-      eyebrow="INDIAN SITE"
-    >
-      <View style={styles.tabRow}>
-        <TabBtn label="LENGTH" active={tab === 'length'} onPress={() => setTab('length')} />
-        <TabBtn label="AREA" active={tab === 'area'} onPress={() => setTab('area')} />
+    <ToolModal visible={visible} onClose={onClose} title="Unit converter">
+      {/* Segmented tabs — iOS-style pill segments */}
+      <View style={styles.segmentWrap}>
+        <View
+          style={[
+            styles.segment,
+            {
+              backgroundColor: t.colors.fill3,
+              borderRadius: t.radii.field,
+            },
+          ]}
+        >
+          <SegBtn
+            label="Length"
+            active={tab === 'length'}
+            onPress={() => setTab('length')}
+          />
+          <SegBtn
+            label="Area"
+            active={tab === 'area'}
+            onPress={() => setTab('area')}
+          />
+        </View>
       </View>
 
       {tab === 'length' ? <LengthSection /> : <AreaSection />}
@@ -224,7 +235,7 @@ export function UnitConverter({
   );
 }
 
-function TabBtn({
+function SegBtn({
   label,
   active,
   onPress,
@@ -233,13 +244,24 @@ function TabBtn({
   active: boolean;
   onPress: () => void;
 }) {
+  const t = useThemeV2();
   return (
     <Pressable
       onPress={onPress}
-      style={[styles.tab, active && styles.tabActive]}
+      style={({ pressed }) => [
+        styles.segBtn,
+        {
+          backgroundColor: active ? t.colors.surface : 'transparent',
+          borderRadius: t.radii.field - 2,
+          ...(active ? t.shadows.resting : null),
+        },
+        pressed && !active && { opacity: 0.7 },
+      ]}
     >
       <Text
-        style={active ? { ...styles.tabLabel, ...styles.tabLabelActive } : styles.tabLabel}
+        variant="footnote"
+        color={active ? 'label' : 'secondary'}
+        style={{ fontWeight: active ? '700' : '500' }}
       >
         {label}
       </Text>
@@ -248,36 +270,16 @@ function TabBtn({
 }
 
 const styles = StyleSheet.create({
-  tabRow: {
+  segmentWrap: { paddingHorizontal: 16 },
+  segment: {
     flexDirection: 'row',
-    backgroundColor: color.surface,
-    borderRadius: radius.md,
-    padding: 4,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
+    padding: 3,
   },
-  tab: {
+  segBtn: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 10,
-    borderRadius: radius.sm,
+    paddingVertical: 9,
   },
-  tabActive: { backgroundColor: color.primary },
-  tabLabel: {
-    fontFamily: fontFamily.mono,
-    fontSize: 11,
-    fontWeight: '600',
-    color: color.textMuted,
-    letterSpacing: 1.2,
-  },
-  tabLabelActive: { color: '#fff' },
-
-  row2: { flexDirection: 'row', gap: space.sm },
+  row2: { flexDirection: 'row', gap: 10 },
   col: { flex: 1 },
-  caption: {
-    fontSize: 11,
-    color: color.textFaint,
-    fontStyle: 'italic',
-    marginTop: 4,
-  },
 });

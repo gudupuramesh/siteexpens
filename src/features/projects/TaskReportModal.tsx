@@ -26,7 +26,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
 import { color, fontFamily, radius, space } from '@/src/theme';
 
 import { DEFAULT_TASK_CATEGORIES, type Task } from '@/src/features/tasks/types';
@@ -159,7 +159,7 @@ export function TaskReportModal({
           </Pressable>
           <View style={styles.appHeaderTitle}>
             <Text style={styles.appHeaderEyebrow}>TIMESHEET</Text>
-            <Text variant="bodyStrong" color="text">Project Report</Text>
+            <Text variant="headline" color="label">Project Report</Text>
           </View>
           <Pressable onPress={handleShare} hitSlop={12} style={styles.headerBtn}>
             <Ionicons name="share-outline" size={20} color={color.primary} />
@@ -714,7 +714,7 @@ const styles = StyleSheet.create({
   headerBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   appHeaderTitle: { flex: 1, alignItems: 'center' },
   appHeaderEyebrow: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '700',
     color: color.textFaint,
@@ -734,14 +734,13 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   coverEyebrow: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '700',
     color: color.primary,
     letterSpacing: 1.4,
   },
   coverTitle: {
-    fontFamily: fontFamily.sans,
     fontSize: 22,
     fontWeight: '700',
     color: color.text,
@@ -750,7 +749,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   coverMeta: {
-    fontFamily: fontFamily.sans,
     fontSize: 12,
     color: color.textMuted,
     marginTop: 2,
@@ -762,7 +760,7 @@ const styles = StyleSheet.create({
     gap: space.xs,
   },
   sectionTitle: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 10,
     fontWeight: '700',
     color: color.textFaint,
@@ -786,14 +784,13 @@ const styles = StyleSheet.create({
   },
   periodCol: { flex: 1 },
   periodLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '700',
     color: color.textFaint,
     letterSpacing: 1.2,
   },
   periodValue: {
-    fontFamily: fontFamily.sans,
     fontSize: 16,
     fontWeight: '700',
     color: color.text,
@@ -811,14 +808,13 @@ const styles = StyleSheet.create({
   },
   kvRow: { gap: 2 },
   kvLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1,
   },
   kvValue: {
-    fontFamily: fontFamily.sans,
     fontSize: 13,
     fontWeight: '600',
     color: color.text,
@@ -839,13 +835,12 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   statValue: {
-    fontFamily: fontFamily.sans,
     fontSize: 22,
     fontWeight: '700',
     letterSpacing: -0.3,
   },
   statLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '600',
     letterSpacing: 1.2,
@@ -857,14 +852,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   progressLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '600',
     color: color.textMuted,
     letterSpacing: 1.2,
   },
   progressValue: {
-    fontFamily: fontFamily.sans,
     fontSize: 13,
     fontWeight: '700',
     color: color.primary,
@@ -888,7 +882,7 @@ const styles = StyleSheet.create({
     borderBottomColor: color.borderStrong,
   },
   thCell: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '700',
     color: color.textMuted,
@@ -905,7 +899,6 @@ const styles = StyleSheet.create({
   },
   tableRowAlt: { backgroundColor: color.surface },
   tdCell: {
-    fontFamily: fontFamily.sans,
     fontSize: 13,
     color: color.text,
     flex: 1,
@@ -929,7 +922,7 @@ const styles = StyleSheet.create({
     gap: space.xs,
   },
   taskIndex: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 10,
     fontWeight: '700',
     color: color.textFaint,
@@ -937,7 +930,6 @@ const styles = StyleSheet.create({
     paddingTop: 2,
   },
   taskTitle: {
-    fontFamily: fontFamily.sans,
     fontSize: 14,
     fontWeight: '700',
     color: color.text,
@@ -945,7 +937,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   taskCategory: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '600',
     color: color.primary,
@@ -959,14 +951,13 @@ const styles = StyleSheet.create({
   },
   dateCol: { flex: 1, gap: 2 },
   dateColLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1,
   },
   dateColValue: {
-    fontFamily: fontFamily.sans,
     fontSize: 12,
     fontWeight: '600',
     color: color.text,
@@ -985,7 +976,6 @@ const styles = StyleSheet.create({
   },
   taskProgressFill: { height: '100%', backgroundColor: color.primary },
   taskProgressText: {
-    fontFamily: fontFamily.mono,
     fontSize: 11,
     fontWeight: '700',
     color: color.textMuted,
@@ -994,14 +984,12 @@ const styles = StyleSheet.create({
     fontVariant: ['tabular-nums'],
   },
   taskNote: {
-    fontFamily: fontFamily.sans,
     fontSize: 12,
     color: color.textMuted,
     lineHeight: 16,
     paddingHorizontal: 4,
   },
   emptyText: {
-    fontFamily: fontFamily.sans,
     fontSize: 13,
     color: color.textMuted,
     textAlign: 'center',
@@ -1014,7 +1002,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
   },
   statusPillText: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     fontWeight: '700',
     letterSpacing: 0.8,
@@ -1027,7 +1015,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   footerText: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 9,
     color: color.textFaint,
     letterSpacing: 1.2,
@@ -1067,27 +1055,23 @@ const styles = StyleSheet.create({
     borderColor: color.primary,
   },
   pdfBtnTitle: {
-    fontFamily: fontFamily.sans,
     fontSize: 13,
     fontWeight: '700',
     color: '#fff',
     letterSpacing: -0.1,
   },
   pdfBtnSub: {
-    fontFamily: fontFamily.sans,
     fontSize: 10,
     color: 'rgba(255,255,255,0.85)',
     marginTop: 1,
   },
   pdfBtnTitleOutline: {
-    fontFamily: fontFamily.sans,
     fontSize: 13,
     fontWeight: '700',
     color: color.primary,
     letterSpacing: -0.1,
   },
   pdfBtnSubOutline: {
-    fontFamily: fontFamily.sans,
     fontSize: 10,
     color: color.textMuted,
     marginTop: 1,
@@ -1101,7 +1085,6 @@ const styles = StyleSheet.create({
     padding: 4,
   },
   textShareLinkText: {
-    fontFamily: fontFamily.sans,
     fontSize: 12,
     color: color.textMuted,
   },

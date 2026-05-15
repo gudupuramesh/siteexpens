@@ -1,5 +1,21 @@
 /**
- * Create / edit appointment — InteriorOS layout.
+ * Create or edit a CRM appointment — v2 design.
+ *
+ * Layout (top → bottom):
+ *   1. SheetHeader: Cancel · "New appointment" / "Edit appointment" · Save
+ *   2. ScrollView wrapped in KeyboardAvoidingView so the keyboard NEVER
+ *      overlaps the focused input.
+ *      a. Big editable title (the appointment title — most important field)
+ *      b. Type pill row (Site visit / Office / Virtual / Other)
+ *      c. Status pill row (Scheduled / Completed / Cancelled / No show)
+ *      d. FormGroup "Client" — Name · Phone · Address
+ *      e. FormGroup "Schedule" — Scheduled at (DateTimeSheet with Done) · Duration · Location
+ *      f. FormGroup "Team" — Attendees (member picker)
+ *      g. FormGroup "Notes" — Notes · Outcome (only when status is completed/cancelled/no_show)
+ *
+ * Date picker uses v2 `<DateTimeSheet>` which has a proper **Done** button
+ * in a bottom-sheet header. Type and Status are inline segmented pills so
+ * the most-changed fields stay visible.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
@@ -11,10 +27,9 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { z } from 'zod';
 
 import { useAuth } from '@/src/features/auth/useAuth';
 import { createAppointment, updateAppointment } from '@/src/features/crm/appointments';
@@ -27,20 +42,23 @@ import {
 import { useAppointment } from '@/src/features/crm/useAppointments';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useOrgMembers } from '@/src/features/org/useOrgMembers';
-import {
-  Group,
-  InputRow,
-  PickerRow,
-  PrimaryButton,
-  SelectModal,
-} from '@/src/ui/io';
 import { OrgMemberPickerModal } from '@/src/ui/OrgMemberPickerModal';
-import { PlatformDateTimePicker } from '@/src/ui/PlatformDateTimePicker';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { color, screenInset, space } from '@/src/theme';
 
-const typeKeys = APPOINTMENT_TYPES.map((t) => t.key) as [AppointmentType, ...AppointmentType[]];
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
+
+import { z } from 'zod';
+
+const typeKeys = APPOINTMENT_TYPES.map((tt) => tt.key) as [
+  AppointmentType,
+  ...AppointmentType[],
+];
 const statusKeys = APPOINTMENT_STATUSES.map((s) => s.key) as [
   AppointmentStatus,
   ...AppointmentStatus[],
@@ -61,7 +79,8 @@ const schema = z.object({
 
 type FormData = z.infer<typeof schema>;
 
-function fmtDateTime(d: Date): string {
+function fmtDateTime(d: Date | null): string | undefined {
+  if (!d) return undefined;
   return d.toLocaleString('en-IN', {
     weekday: 'short',
     day: 'numeric',
@@ -72,10 +91,32 @@ function fmtDateTime(d: Date): string {
   });
 }
 
+// ── Tone for the type picker pill (active state) ──
+// Type is purely categorical, so the active chip uses the standard "selected"
+// blue across all types. Inactive chips render in fill3 (handled at the call
+// site).
+function typeTone(t: ReturnType<typeof useThemeV2>, _k: AppointmentType) {
+  return { fg: t.palette.blue.base, bg: t.palette.blue.soft };
+}
+
+// ── Tone for the status picker pill (active state) ──
+// Status carries semantic weight, so the active chip earns colour:
+//   scheduled → blue   (default / pending — matches the standard active state)
+//   completed → green  (success outcome)
+//   cancelled → red    (didn't happen)
+//   no_show   → red    (problem outcome — yellow isn't in our 4-colour palette)
+function statusTone(t: ReturnType<typeof useThemeV2>, k: AppointmentStatus) {
+  switch (k) {
+    case 'scheduled': return { fg: t.palette.blue.base,  bg: t.palette.blue.soft };
+    case 'completed': return { fg: t.palette.green.base, bg: t.palette.green.soft };
+    case 'cancelled':
+    case 'no_show':   return { fg: t.palette.red.base,   bg: t.palette.red.soft };
+  }
+}
+
 export default function AddAppointmentScreen() {
-  const { appointmentId } = useLocalSearchParams<{
-    appointmentId?: string;
-  }>();
+  const t = useThemeV2();
+  const { appointmentId } = useLocalSearchParams<{ appointmentId?: string }>();
   const isEdit = !!appointmentId;
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -85,19 +126,19 @@ export default function AddAppointmentScreen() {
   );
   const { members } = useOrgMembers(orgId || undefined);
 
+  // Picker visibility + extra state
   const [scheduledAt, setScheduledAt] = useState<Date>(new Date());
   const [showSchedulePicker, setShowSchedulePicker] = useState(false);
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
   const [showMemberPicker, setShowMemberPicker] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
-  const [showTypePicker, setShowTypePicker] = useState(false);
-  const [showStatusPicker, setShowStatusPicker] = useState(false);
 
   const {
     control,
     handleSubmit,
     reset,
     setValue,
+    watch,
     formState: { errors, isSubmitting },
   } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -115,6 +156,7 @@ export default function AddAppointmentScreen() {
     },
   });
 
+  // Hydrate when editing
   useEffect(() => {
     if (!existing || !isEdit) return;
     reset({
@@ -134,20 +176,21 @@ export default function AddAppointmentScreen() {
     setAttendeeIds(existing.attendees ?? []);
   }, [existing, isEdit, reset]);
 
-  const typeOptions = useMemo(
-    () => APPOINTMENT_TYPES.map((t) => ({ key: t.key, label: t.label })),
-    [],
-  );
-  const statusOptions = useMemo(
-    () => APPOINTMENT_STATUSES.map((s) => ({ key: s.key, label: s.label })),
-    [],
-  );
+  // Live values
+  const watchedType = watch('type');
+  const watchedStatus = watch('status');
 
-  const attendeeLabels = useMemo(() => {
-    return attendeeIds
-      .map((id) => members.find((m) => m.uid === id)?.displayName ?? id)
-      .join(', ');
+  // Attendees label for the row
+  const attendeeLabel = useMemo(() => {
+    if (attendeeIds.length === 0) return undefined;
+    const first = members.find((m) => m.uid === attendeeIds[0])?.displayName ?? attendeeIds[0];
+    if (attendeeIds.length === 1) return first;
+    return `${first} +${attendeeIds.length - 1}`;
   }, [attendeeIds, members]);
+
+  // Outcome only makes sense after the meeting happened
+  const showOutcome =
+    watchedStatus === 'completed' || watchedStatus === 'cancelled' || watchedStatus === 'no_show';
 
   const onSave = handleSubmit(async (values) => {
     if (!user || !orgId) {
@@ -206,116 +249,224 @@ export default function AddAppointmentScreen() {
     }
   });
 
+  // Loading / not-found shells (edit flow)
   if (isEdit && apptLoading && !existing) {
     return (
-      <Screen>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <Text variant="body" color="textMuted">
-          Loading…
-        </Text>
-      </Screen>
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit appointment"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary">Loading…</Text>
+        </View>
+      </View>
     );
   }
-
   if (isEdit && !existing && !apptLoading) {
     return (
-      <Screen>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <Text variant="body" color="textMuted">
-          Appointment not found
-        </Text>
-        <Pressable onPress={() => router.back()} style={{ marginTop: space.md }}>
-          <Text variant="metaStrong" color="primary">
-            Back
-          </Text>
-        </Pressable>
-      </Screen>
+        <AmbientBackground />
+        <SheetHeader
+          title="Edit appointment"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary">Appointment not found</Text>
+          <Pressable onPress={() => router.back()} hitSlop={6} style={{ marginTop: 12 }}>
+            <Text variant="footnote" style={{ color: t.palette.blue.base, fontWeight: '600' }}>
+              Back
+            </Text>
+          </Pressable>
+        </View>
+      </View>
     );
   }
 
   return (
-    <Screen bg="grouped" padded={false}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
 
+      <AmbientBackground />
+
+      {/* Top: Cancel · Title · Save */}
+      <SheetHeader
+        title={isEdit ? 'Edit appointment' : 'New appointment'}
+        cancelLabel="Cancel"
+        saveLabel={isEdit ? 'Save' : 'Create'}
+        saveLoading={isSubmitting}
+        onCancel={() => router.back()}
+        onSave={() => void onSave()}
+      />
+
+      {/*
+        KeyboardAvoidingView + ScrollView keeps the focused input above
+        the keyboard. iOS uses 'padding' so the layout shrinks under the
+        keyboard; Android relies on app.json's adjustResize.
+      */}
       <KeyboardAvoidingView
-        style={styles.flex}
+        style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <View style={styles.header}>
-          <Pressable onPress={() => router.back()} hitSlop={12}>
-            <Ionicons name="close" size={22} color={color.textMuted} />
-          </Pressable>
-          <Text variant="rowTitle" color="text">
-            {isEdit ? 'Edit appointment' : 'New appointment'}
-          </Text>
-          <Pressable
-            onPress={onSave}
-            disabled={isSubmitting}
-            hitSlop={8}
-            style={({ pressed }) => [
-              styles.saveBtn,
-              isSubmitting && { opacity: 0.5 },
-              pressed && !isSubmitting && { opacity: 0.85 },
-            ]}
-          >
-            <Text variant="metaStrong" style={{ color: color.onPrimary }}>
-              {isSubmitting ? 'Saving…' : 'Save'}
-            </Text>
-          </Pressable>
-        </View>
-
         <ScrollView
           contentContainerStyle={styles.scroll}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           showsVerticalScrollIndicator={false}
         >
-          <Group header="Appointment">
+          {/* Big editable title */}
+          <View style={styles.titleBlock}>
+            <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.5 }}>
+              TITLE
+            </Text>
             <Controller
               control={control}
               name="title"
               render={({ field: { onChange, onBlur, value } }) => (
-                <InputRow
-                  label="Title"
+                <TextInput
                   value={value}
                   onChangeText={onChange}
                   onBlur={onBlur}
-                  placeholder="Site visit discussion"
+                  placeholder="Site visit at ABC"
+                  placeholderTextColor={t.colors.tertiary}
+                  autoCapitalize="sentences"
+                  style={[
+                    styles.bigTitle,
+                    {
+                      color: t.colors.label,
+                      ...t.type.title1,
+                    },
+                  ]}
+                  returnKeyType="next"
                 />
               )}
             />
-            <Controller
-              control={control}
-              name="type"
-              render={({ field: { value } }) => (
-                <PickerRow
-                  label="Type"
-                  value={typeOptions.find((x) => x.key === value)?.label}
-                  placeholder="Select"
-                  onPress={() => setShowTypePicker(true)}
-                />
-              )}
-            />
-            <Controller
-              control={control}
-              name="status"
-              render={({ field: { value } }) => (
-                <PickerRow
-                  label="Status"
-                  value={statusOptions.find((x) => x.key === value)?.label}
-                  placeholder="Select"
-                  onPress={() => setShowStatusPicker(true)}
-                  last
-                />
-              )}
-            />
-          </Group>
-          {errors.title?.message ? (
-            <Text variant="caption" color="danger" style={styles.fieldError}>
-              {errors.title.message}
-            </Text>
-          ) : null}
+            {errors.title?.message ? (
+              <Text variant="caption2" style={{ color: t.palette.red.base, marginTop: 4 }}>
+                {errors.title.message}
+              </Text>
+            ) : null}
+          </View>
 
-          <Group header="Client">
+          {/* Type pill row */}
+          <View style={styles.pillBlock}>
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={[styles.pillBlockLabel, { letterSpacing: 0.5 }]}
+            >
+              TYPE
+            </Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.pillRow}
+            >
+              {APPOINTMENT_TYPES.map((tp) => {
+                const sel = watchedType === tp.key;
+                const tone = typeTone(t, tp.key);
+                return (
+                  <Pressable
+                    key={tp.key}
+                    onPress={() => setValue('type', tp.key, { shouldDirty: true })}
+                    hitSlop={6}
+                    style={({ pressed }) => [
+                      styles.pillChip,
+                      {
+                        backgroundColor: sel ? tone.bg : t.colors.fill3,
+                        borderRadius: t.radii.pill,
+                        borderColor: sel ? tone.fg : 'transparent',
+                        borderWidth: sel ? 1 : 0,
+                      },
+                      pressed && { opacity: 0.85 },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.pillDot,
+                        { backgroundColor: sel ? tone.fg : t.colors.tertiary },
+                      ]}
+                    />
+                    <Text
+                      variant="footnote"
+                      style={{
+                        color: sel ? tone.fg : t.colors.secondary,
+                        fontWeight: sel ? '700' : '500',
+                        marginLeft: 5,
+                      }}
+                    >
+                      {tp.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Status pill row */}
+          <View style={[styles.pillBlock, { marginTop: 14 }]}>
+            <Text
+              variant="caption2"
+              color="tertiary"
+              style={[styles.pillBlockLabel, { letterSpacing: 0.5 }]}
+            >
+              STATUS
+            </Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.pillRow}
+            >
+              {APPOINTMENT_STATUSES.map((st) => {
+                const sel = watchedStatus === st.key;
+                const tone = statusTone(t, st.key);
+                return (
+                  <Pressable
+                    key={st.key}
+                    onPress={() => setValue('status', st.key, { shouldDirty: true })}
+                    hitSlop={6}
+                    style={({ pressed }) => [
+                      styles.pillChip,
+                      {
+                        backgroundColor: sel ? tone.bg : t.colors.fill3,
+                        borderRadius: t.radii.pill,
+                        borderColor: sel ? tone.fg : 'transparent',
+                        borderWidth: sel ? 1 : 0,
+                      },
+                      pressed && { opacity: 0.85 },
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.pillDot,
+                        { backgroundColor: sel ? tone.fg : t.colors.tertiary },
+                      ]}
+                    />
+                    <Text
+                      variant="footnote"
+                      style={{
+                        color: sel ? tone.fg : t.colors.secondary,
+                        fontWeight: sel ? '700' : '500',
+                        marginLeft: 5,
+                      }}
+                    >
+                      {st.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          </View>
+
+          {/* Client */}
+          <FormGroup header="Client">
             <Controller
               control={control}
               name="clientName"
@@ -326,6 +477,7 @@ export default function AddAppointmentScreen() {
                   onChangeText={onChange}
                   onBlur={onBlur}
                   placeholder="Who you are meeting"
+                  autoCapitalize="words"
                 />
               )}
             />
@@ -335,35 +487,23 @@ export default function AddAppointmentScreen() {
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
                   label="Phone"
+                  value={value ?? ''}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
                   keyboardType="phone-pad"
-                  value={value ?? ''}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  placeholder="+91 …"
+                  placeholder="+91 9876543210"
+                  divider={false}
                 />
               )}
             />
-            <Controller
-              control={control}
-              name="clientAddress"
-              render={({ field: { onChange, onBlur, value } }) => (
-                <InputRow
-                  label="Address"
-                  multiline
-                  value={value ?? ''}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  placeholder="Client / site address"
-                  last
-                />
-              )}
-            />
-          </Group>
+          </FormGroup>
 
-          <Group header="Schedule">
-            <PickerRow
+          {/* Schedule — DateTimeSheet has the Done button */}
+          <FormGroup header="Schedule">
+            <Row
               label="Scheduled at"
               value={fmtDateTime(scheduledAt)}
+              chevron
               onPress={() => setShowSchedulePicker(true)}
             />
             <Controller
@@ -372,11 +512,12 @@ export default function AddAppointmentScreen() {
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
                   label="Duration"
-                  keyboardType="number-pad"
                   value={value ?? ''}
                   onChangeText={onChange}
                   onBlur={onBlur}
+                  keyboardType="number-pad"
                   placeholder="Minutes"
+                  autoCapitalize="none"
                 />
               )}
             />
@@ -390,117 +531,101 @@ export default function AddAppointmentScreen() {
                   onChangeText={onChange}
                   onBlur={onBlur}
                   placeholder="Office, site, or map link"
-                  last
+                  autoCapitalize="sentences"
+                  divider={false}
                 />
               )}
             />
-          </Group>
-          <PlatformDateTimePicker
-            open={showSchedulePicker}
-            value={scheduledAt}
-            onChange={setScheduledAt}
-            onClose={() => setShowSchedulePicker(false)}
-          />
-          {Platform.OS === 'ios' && showSchedulePicker ? (
-            <Pressable onPress={() => setShowSchedulePicker(false)} style={styles.doneIos}>
-              <Text variant="metaStrong" color="primary">
-                Done
-              </Text>
-            </Pressable>
-          ) : null}
+          </FormGroup>
 
-          <Group header="Team">
-            <PickerRow
+          {/* Team */}
+          <FormGroup header="Team">
+            <Row
               label="Attendees"
-              value={attendeeIds.length ? attendeeLabels : undefined}
-              placeholder="Add team members"
+              value={attendeeLabel ?? 'None'}
+              chevron
               onPress={() => setShowMemberPicker(true)}
             />
-            <PickerRow
-              label="Clear attendees"
-              value={attendeeIds.length ? `${attendeeIds.length} selected` : 'None'}
-              onPress={() => setAttendeeIds([])}
-              last
-            />
-          </Group>
+            {attendeeIds.length > 0 ? (
+              <Row
+                label="Clear attendees"
+                valueColor={t.palette.red.base}
+                value={`${attendeeIds.length} selected`}
+                onPress={() => setAttendeeIds([])}
+                divider={false}
+              />
+            ) : (
+              <Row
+                label="No attendees added"
+                value=""
+                divider={false}
+              />
+            )}
+          </FormGroup>
 
-          <Group header="Notes">
+          {/* Notes */}
+          <FormGroup header="Notes">
             <Controller
               control={control}
               name="notes"
               render={({ field: { onChange, onBlur, value } }) => (
                 <InputRow
                   label="Notes"
-                  multiline
                   value={value ?? ''}
                   onChangeText={onChange}
                   onBlur={onBlur}
                   placeholder="Context and discussion notes"
-                />
-              )}
-            />
-            <Controller
-              control={control}
-              name="outcome"
-              render={({ field: { onChange, onBlur, value } }) => (
-                <InputRow
-                  label="Outcome"
                   multiline
-                  value={value ?? ''}
-                  onChangeText={onChange}
-                  onBlur={onBlur}
-                  placeholder="Result after meeting"
-                  last
+                  divider={showOutcome}
                 />
               )}
             />
-          </Group>
+            {showOutcome ? (
+              <Controller
+                control={control}
+                name="outcome"
+                render={({ field: { onChange, onBlur, value } }) => (
+                  <InputRow
+                    label="Outcome"
+                    value={value ?? ''}
+                    onChangeText={onChange}
+                    onBlur={onBlur}
+                    placeholder="Result after meeting"
+                    multiline
+                    divider={false}
+                  />
+                )}
+              />
+            ) : null}
+          </FormGroup>
 
           {submitError ? (
-            <Text variant="caption" color="danger" style={styles.fieldError}>
+            <Text
+              variant="caption2"
+              style={{
+                color: t.palette.red.base,
+                paddingHorizontal: 32,
+                marginTop: 12,
+              }}
+            >
               {submitError}
             </Text>
           ) : null}
 
-          <PrimaryButton
-            label={isEdit ? 'Save' : 'Create'}
-            onPress={onSave}
-            loading={isSubmitting}
-            disabled={isSubmitting}
-          />
+          <View style={{ height: 24 }} />
         </ScrollView>
       </KeyboardAvoidingView>
 
-      <Controller
-        control={control}
-        name="type"
-        render={({ field: { value, onChange } }) => (
-          <SelectModal
-            visible={showTypePicker}
-            title="Select type"
-            options={typeOptions}
-            value={value}
-            onClose={() => setShowTypePicker(false)}
-            onPick={(key) => onChange(key as AppointmentType)}
-          />
-        )}
+      {/* Date picker — bottom sheet with Done button */}
+      <DateTimeSheet
+        open={showSchedulePicker}
+        value={scheduledAt}
+        onChange={setScheduledAt}
+        onClose={() => setShowSchedulePicker(false)}
+        title="Scheduled at"
       />
 
-      <Controller
-        control={control}
-        name="status"
-        render={({ field: { value, onChange } }) => (
-          <SelectModal
-            visible={showStatusPicker}
-            title="Select status"
-            options={statusOptions}
-            value={value}
-            onClose={() => setShowStatusPicker(false)}
-            onPick={(key) => onChange(key as AppointmentStatus)}
-          />
-        )}
-      />
-
+      {/* Member picker (existing modal — kept) */}
       <OrgMemberPickerModal
         visible={showMemberPicker}
         orgId={orgId}
@@ -511,37 +636,56 @@ export default function AddAppointmentScreen() {
           setShowMemberPicker(false);
         }}
       />
-    </Screen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  header: {
-    flexDirection: 'row',
+  centered: {
+    flex: 1,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.bg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
-  },
-  saveBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 8,
-    backgroundColor: color.primary,
+    justifyContent: 'center',
   },
   scroll: {
-    paddingTop: space.md,
-    paddingHorizontal: 0,
-    paddingBottom: space.xl * 2,
+    paddingTop: 8,
+    paddingBottom: 40,
   },
-  fieldError: {
-    paddingHorizontal: screenInset,
-    marginTop: -16,
-    marginBottom: 16,
+
+  // Big editable title
+  titleBlock: {
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 4,
   },
-  doneIos: { alignSelf: 'flex-end', paddingVertical: space.xs },
+  bigTitle: {
+    paddingTop: 4,
+    paddingBottom: 0,
+    margin: 0,
+    fontWeight: '700',
+  },
+
+  // Type / Status pill rows
+  pillBlock: {
+    paddingTop: 18,
+    paddingBottom: 4,
+  },
+  pillBlockLabel: {
+    paddingHorizontal: 32,
+    paddingBottom: 8,
+  },
+  pillRow: {
+    paddingHorizontal: 16,
+    gap: 7,
+  },
+  pillChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+  },
+  pillDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
 });

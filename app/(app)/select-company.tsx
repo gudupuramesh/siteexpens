@@ -1,30 +1,29 @@
 /**
- * Select Company screen — full-page studio switcher.
+ * Select Studio — v2 design.
  *
- * Replaces the previous bottom-sheet flow. Reasons for the change:
- *  - More discoverable than a sheet (matches competitor patterns
- *    in Tally / Zoho / Onsite — users navigate to a "select org"
- *    page, not pull-up a modal).
- *  - Roomier for per-org settings + role labels + future filters.
- *  - Tappable cards include a settings shortcut on the active org.
+ * Layout (top → bottom):
+ *   1. v2 header: back · "Select studio" · count caption
+ *   2. Active studio hero card (when present) — full bleed surface
+ *      card with cover-y plan tint + name + role pill + plan badge +
+ *      "Active" status pill + Settings shortcut
+ *   3. "Other studios" section card with rows for the rest — tap to
+ *      switch (with spinner during the switch)
+ *   4. Dashed "Create your studio" CTA (only when user doesn't own one)
  *
- * UX rules:
- *  - Active org is highlighted with the primary tint and shows a
- *    small settings (gear) icon — tapping it routes to the studio
- *    profile / team-roles. Other orgs are tap-to-switch.
- *  - Each card shows: avatar (initials), role label in colored
- *    caps, studio name, owner name.
- *  - Tap any non-active row → setActiveOrg → router.replace home.
- *  - Tap active row → no-op (already active); tap its settings
- *    icon → routes to settings.
- *  - "+ Create your studio" footer appears only when the user
- *    doesn't yet own a studio (the one-owned-studio rule).
+ * Switching flow preserved exactly:
+ *   • One-shot snapshot listener waits for `users/{uid}.primaryOrgId`
+ *     to mirror the new org (~150 ms) before redirecting home — so
+ *     `usePermissions` sees the new role on the very first render.
+ *   • Auth claims refreshed via `refreshClaims`.
+ *   • Lands at `/(app)/(tabs)` so any deep route the user had open
+ *     doesn't render with the new role's reduced permissions.
  */
 import { router, Stack } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   View,
@@ -36,31 +35,43 @@ import { useAuth } from '@/src/features/auth/useAuth';
 import { db } from '@/src/lib/firebase';
 
 import { useCurrentOrganization } from '@/src/features/org/useCurrentOrganization';
-import { useMyOrganizations } from '@/src/features/org/useMyOrganizations';
+import { useMyOrganizations, type MyOrgRow } from '@/src/features/org/useMyOrganizations';
 import { useTokenClaims } from '@/src/features/org/useTokenClaims';
 import { setActiveOrg } from '@/src/features/org/setActiveOrg';
 import { PlanBadge } from '@/src/ui/PlanBadge';
 import { StudioAvatar } from '@/src/ui/StudioAvatar';
-import { Text } from '@/src/ui/Text';
-import { color, radius, screenInset, space } from '@/src/theme';
 
-/** Map role label colour to give each role a recognisable accent.
- *  Mirrors the competitor's "Supervisor (orange) / Super Admin
- *  (green) / Admin (teal)" pattern. */
-const ROLE_COLOR: Record<string, string> = {
-  'Super Admin': color.success,
-  Admin: color.info,
-  Manager: color.primary,
-  Accountant: color.warning,
-  'Site Engineer': color.primary,
-  Supervisor: color.warning,
-  Viewer: color.textMuted,
-  Client: color.textMuted,
-  Member: color.textMuted,
-};
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
+import { useThemeV2 } from '@/src/theme/v2';
+
+/**
+ * Per-role tone for the role pill on each org card.
+ *
+ * Color discipline: roles are categorical labels. Only "Super Admin" keeps
+ * a coloured pill (red, for emphasis on the privileged role). Everything else
+ * uses a neutral tone (fill3 + secondary).
+ *
+ * Returns a palette-shaped object so consuming JSX (`tone.soft`, `tone.base`)
+ * doesn't need branching.
+ */
+function roleTone(
+  roleLabel: string,
+  t: ReturnType<typeof useThemeV2>,
+): { base: string; soft: string; softDark: string } {
+  if (roleLabel === 'Super Admin') return t.palette.red;
+  return {
+    base: t.colors.secondary,
+    soft: t.colors.fill3,
+    softDark: t.colors.fill3,
+  };
+}
 
 export default function SelectCompanyScreen() {
+  const t = useThemeV2();
   const insets = useSafeAreaInsets();
+  const refresh = usePullToRefresh();
   const { user } = useAuth();
   const { data: currentOrg } = useCurrentOrganization();
   const { orgs, loading } = useMyOrganizations();
@@ -78,10 +89,9 @@ export default function SelectCompanyScreen() {
       setPendingTargetId(targetId);
       setBusy(true);
       try {
-        // One-shot snapshot listener to wait for the userDoc to
-        // reflect the new primaryOrgId (~150 ms). Mirrors the
-        // pattern in OrgSwitcherSheet so usePermissions sees the
-        // right primary before the next paint.
+        // One-shot snapshot listener — wait for userDoc.primaryOrgId
+        // to flip before redirecting so `usePermissions` sees the
+        // new role on the very first paint.
         const waitForUserDoc = () =>
           new Promise<void>((resolve) => {
             const unsub = db
@@ -89,9 +99,7 @@ export default function SelectCompanyScreen() {
               .doc(user.uid)
               .onSnapshot(
                 (snap) => {
-                  const next = snap.data() as
-                    | { primaryOrgId?: string }
-                    | undefined;
+                  const next = snap.data() as { primaryOrgId?: string } | undefined;
                   if (next?.primaryOrgId === targetId) {
                     unsub();
                     resolve();
@@ -107,9 +115,6 @@ export default function SelectCompanyScreen() {
           refresh: refreshClaims,
           waitForUserDoc,
         });
-        // Drop them at home in the new org so a deep-route they
-        // had open doesn't render with the new role's reduced
-        // permissions and look broken.
         router.replace('/(app)/(tabs)' as never);
       } catch (err) {
         console.warn('[SelectCompany] switch failed:', err);
@@ -126,243 +131,557 @@ export default function SelectCompanyScreen() {
     router.push('/(onboarding)/organization?mode=add' as never);
   }, [busy]);
 
+  const activeRow = orgs.find((o) => o.id === activeOrgId) ?? null;
+  const otherRows = orgs.filter((o) => o.id !== activeOrgId);
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
   return (
-    <>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
-      <View style={[styles.root, { paddingTop: insets.top }]}>
-        {/* Custom header — iOS 26's default Stack back button renders
-            as an enlarged "Liquid Glass" pill that doesn't always
-            respond. A plain chevron + label is more reliable and
-            visually quieter. */}
-        <View style={styles.header}>
-          <Pressable
-            onPress={() => {
-              if (router.canGoBack()) router.back();
-              else router.replace('/(app)/(tabs)' as never);
-            }}
-            hitSlop={12}
-            style={({ pressed }) => [
-              styles.backBtn,
-              pressed && { opacity: 0.6 },
-            ]}
-            accessibilityLabel="Back"
-          >
-            <Ionicons name="chevron-back" size={22} color={color.primary} />
-            <Text variant="body" color="primary">Back</Text>
-          </Pressable>
-          <Text variant="rowTitle" color="text" style={styles.headerTitle}>
-            Select Company
+      <AmbientBackground />
+
+      {/* Header — transparent so the ambient background flows through;
+          no bottom border (the section header below provides separation). */}
+      <View style={styles.header}>
+        <Pressable
+          onPress={() => {
+            if (router.canGoBack()) router.back();
+            else router.replace('/(app)/(tabs)' as never);
+          }}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { backgroundColor: t.colors.fill3, borderRadius: 999 },
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <Ionicons name="chevron-back" size={18} color={t.colors.label} />
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <Text variant="headline" color="label">
+            Select studio
           </Text>
-          <View style={styles.headerSpacer} />
-        </View>
-        {loading ? (
-          <View style={styles.loading}>
-            <ActivityIndicator color={color.primary} />
-          </View>
-        ) : (
-          <ScrollView
-            contentContainerStyle={styles.list}
-            showsVerticalScrollIndicator={false}
+          <Text
+            variant="caption2"
+            color="secondary"
+            style={{ letterSpacing: 0.5, marginTop: 1 }}
           >
-            {orgs.map((row) => {
-              const active = row.id === activeOrgId;
-              const roleColor = ROLE_COLOR[row.roleLabel] ?? color.textMuted;
-              const isPending = busy && pendingTargetId === row.id;
-              // Owner line — three states:
-              //   "You"        — you own this studio
-              //   "<Name>"     — owner's name resolved from memberPublic
-              //   "—"          — name not yet loaded OR access denied
-              //                  (clients can't read other members'
-              //                  memberPublic docs by design).
-              const ownerLine = row.isYourStudio
-                ? 'You'
-                : row.ownerName || '—';
+            {orgs.length} {orgs.length === 1 ? 'STUDIO' : 'STUDIOS'}
+          </Text>
+        </View>
+        <View style={styles.iconBtn} />
+      </View>
 
-              return (
-                <Pressable
-                  key={row.id}
-                  onPress={() => void onPickOrg(row.id)}
-                  disabled={busy || active}
-                  style={({ pressed }) => [
-                    styles.card,
-                    active && styles.cardActive,
-                    pressed && !active && { opacity: 0.85 },
-                  ]}
+      {loading ? (
+        <View style={styles.loading}>
+          <ActivityIndicator color={t.palette.blue.base} />
+        </View>
+      ) : (
+        <ScrollView
+          contentContainerStyle={{ paddingBottom: 32 + insets.bottom }}
+          showsVerticalScrollIndicator={false}
+          refreshControl={<RefreshControl {...refresh.props} />}
+        >
+          {/* Active studio hero */}
+          {activeRow ? (
+            <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+              <Text
+                variant="caption2"
+                color="secondary"
+                style={{ paddingHorizontal: 16, paddingBottom: 7, letterSpacing: 0.4 }}
+              >
+                ACTIVE
+              </Text>
+              <ActiveCard
+                row={activeRow}
+                onSettings={() => router.push('/(app)/team-roles' as never)}
+              />
+            </View>
+          ) : null}
+
+          {/* Other studios */}
+          {otherRows.length > 0 ? (
+            <View style={{ marginTop: 24 }}>
+              <View style={styles.sectionHeader}>
+                <Text
+                  variant="caption2"
+                  color="secondary"
+                  style={{ letterSpacing: 0.4 }}
                 >
-                  <StudioAvatar logoUrl={row.logoUrl} size="md" />
+                  SWITCH TO
+                </Text>
+                <Text variant="caption2" color="tertiary">
+                  {otherRows.length}
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.sectionCard,
+                  {
+                    backgroundColor: cardBg,
+                    borderRadius: t.radii.group,
+                    borderColor: cardBorder,
+                    borderWidth: t.hairline,
+                  },
+                ]}
+              >
+                {otherRows.map((row, idx) => {
+                  const isPending = busy && pendingTargetId === row.id;
+                  return (
+                    <OrgRow
+                      key={row.id}
+                      row={row}
+                      divider={idx < otherRows.length - 1}
+                      pending={isPending}
+                      disabled={busy}
+                      onPress={() => void onPickOrg(row.id)}
+                    />
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
 
-                  <View style={styles.body}>
-                    <View style={styles.titleRow}>
-                      <Text
-                        style={[styles.role, { color: roleColor }]}
-                        numberOfLines={1}
-                      >
-                        {row.roleLabel}
-                      </Text>
-                      <PlanBadge tier={row.tier} size="sm" />
-                    </View>
-                    <Text variant="rowTitle" color="text" numberOfLines={1}>
-                      {row.name}
-                    </Text>
-                    <Text variant="meta" color="textMuted" numberOfLines={1}>
-                      Owner: {ownerLine}
-                    </Text>
-                  </View>
+          {/* Empty state — only fires when there are 0 orgs at all */}
+          {orgs.length === 0 ? (
+            <View style={{ paddingVertical: 64, paddingHorizontal: 32, alignItems: 'center' }}>
+              <View
+                style={[
+                  styles.emptyIcon,
+                  {
+                    backgroundColor:
+                      t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                    borderRadius: t.radii.tile + 4,
+                  },
+                ]}
+              >
+                <Ionicons name="business-outline" size={28} color={t.palette.blue.base} />
+              </View>
+              <Text
+                variant="headline"
+                color="label"
+                style={{ marginTop: 12, fontWeight: '600' }}
+              >
+                No studios yet
+              </Text>
+              <Text
+                variant="footnote"
+                color="secondary"
+                style={{ marginTop: 4, textAlign: 'center' }}
+              >
+                Create one to start managing projects and your team.
+              </Text>
+            </View>
+          ) : null}
 
-                  {/* Trailing slot — settings icon for the active org,
-                      pending spinner during a switch, otherwise empty
-                      so taps register on the whole row. */}
-                  {isPending ? (
-                    <ActivityIndicator color={color.primary} />
-                  ) : active ? (
-                    <Pressable
-                      onPress={(e) => {
-                        e.stopPropagation();
-                        router.push('/(app)/team-roles' as never);
-                      }}
-                      style={styles.gearBtn}
-                      hitSlop={8}
-                      accessibilityLabel="Studio settings"
-                    >
-                      <Ionicons
-                        name="settings-outline"
-                        size={20}
-                        color={color.primary}
-                      />
-                    </Pressable>
-                  ) : null}
-                </Pressable>
-              );
-            })}
-
-            {!ownsAnOrg ? (
+          {/* Create studio CTA */}
+          {!ownsAnOrg ? (
+            <View style={{ paddingHorizontal: 16, marginTop: 24 }}>
               <Pressable
                 onPress={onCreateStudio}
                 disabled={busy}
                 style={({ pressed }) => [
                   styles.createCard,
+                  {
+                    backgroundColor:
+                      t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                    borderRadius: t.radii.card,
+                    borderColor: t.palette.blue.base + '55',
+                    borderWidth: 1.5,
+                    borderStyle: 'dashed',
+                  },
                   pressed && { opacity: 0.85 },
+                  busy && { opacity: 0.5 },
                 ]}
               >
-                <View style={styles.createIcon}>
-                  <Ionicons name="add" size={20} color={color.primary} />
+                <View
+                  style={[
+                    styles.createIcon,
+                    {
+                      backgroundColor: t.palette.blue.base,
+                      borderRadius: t.radii.tile,
+                    },
+                  ]}
+                >
+                  <Ionicons name="add" size={20} color="#fff" />
                 </View>
-                <View style={styles.body}>
-                  <Text variant="bodyStrong" color="primary">
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text
+                    variant="body"
+                    style={{
+                      color: t.palette.blue.base,
+                      fontWeight: '700',
+                    }}
+                  >
                     Create your studio
                   </Text>
-                  <Text variant="meta" color="textMuted">
+                  <Text
+                    variant="caption1"
+                    color="secondary"
+                    style={{ marginTop: 2 }}
+                  >
                     Set up your own workspace · You stay signed in
                   </Text>
                 </View>
                 <Ionicons
                   name="chevron-forward"
-                  size={18}
-                  color={color.primary}
+                  size={16}
+                  color={t.palette.blue.base}
                 />
               </Pressable>
-            ) : null}
-          </ScrollView>
-        )}
+            </View>
+          ) : null}
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+function ActiveCard({
+  row,
+  onSettings,
+}: {
+  row: MyOrgRow;
+  onSettings: () => void;
+}) {
+  const t = useThemeV2();
+  const tone = roleTone(row.roleLabel, t);
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+  const ownerLine = row.isYourStudio ? 'You' : row.ownerName || '—';
+
+  return (
+    <View
+      style={[
+        styles.activeCard,
+        {
+          backgroundColor: cardBg,
+          borderRadius: t.radii.card,
+          borderColor: t.palette.blue.base + '33',
+          borderWidth: 1.5,
+        },
+      ]}
+    >
+      {/* Top row: avatar + name + plan badge */}
+      <View style={styles.activeTop}>
+        <StudioAvatar logoUrl={row.logoUrl} size="md" />
+        <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+          <Text
+            variant="title3"
+            color="label"
+            numberOfLines={1}
+            style={{ fontWeight: '700', letterSpacing: -0.3 }}
+          >
+            {row.name}
+          </Text>
+          <Text
+            variant="caption1"
+            color="secondary"
+            numberOfLines={1}
+            style={{ marginTop: 2 }}
+          >
+            Owner: {ownerLine}
+          </Text>
+        </View>
+        <Pressable
+          onPress={onSettings}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.gearBtn,
+            {
+              backgroundColor:
+                t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+              borderRadius: 999,
+            },
+            pressed && { opacity: 0.7 },
+          ]}
+          accessibilityLabel="Manage team & roles"
+        >
+          {/* person-add reads as "add a teammate" — clearer than a
+              gear here since this jumps straight into Team & Roles
+              where the user can invite a new member. */}
+          <Ionicons
+            name="person-add"
+            size={15}
+            color={t.palette.blue.base}
+          />
+        </Pressable>
       </View>
-    </>
+
+      {/* Pill row */}
+      <View style={[styles.activePillRow, { borderTopColor: cardBorder, borderTopWidth: t.hairline }]}>
+        <View
+          style={[
+            styles.activePill,
+            {
+              backgroundColor: t.mode === 'dark' ? t.palette.green.softDark : t.palette.green.soft,
+              borderRadius: 999,
+            },
+          ]}
+        >
+          <View
+            style={{
+              width: 5,
+              height: 5,
+              borderRadius: 3,
+              backgroundColor: t.palette.green.base,
+              marginRight: 5,
+            }}
+          />
+          <Text
+            variant="caption2"
+            style={{
+              color: t.palette.green.base,
+              fontWeight: '700',
+              letterSpacing: 0.4,
+            }}
+          >
+            ACTIVE
+          </Text>
+        </View>
+        <View
+          style={[
+            styles.activePill,
+            {
+              backgroundColor: t.mode === 'dark' ? tone.softDark : tone.soft,
+              borderRadius: 999,
+            },
+          ]}
+        >
+          <Text
+            variant="caption2"
+            style={{
+              color: tone.base,
+              fontWeight: '700',
+              letterSpacing: 0.4,
+            }}
+            numberOfLines={1}
+          >
+            {row.roleLabel.toUpperCase()}
+          </Text>
+        </View>
+        <View style={{ flex: 1 }} />
+        <PlanBadge tier={row.tier} size="sm" />
+      </View>
+    </View>
+  );
+}
+
+function OrgRow({
+  row,
+  divider,
+  pending,
+  disabled,
+  onPress,
+}: {
+  row: MyOrgRow;
+  divider: boolean;
+  pending: boolean;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  const tone = roleTone(row.roleLabel, t);
+  const ownerLine = row.isYourStudio ? 'You' : row.ownerName || '—';
+
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.orgRow,
+        pressed && !disabled && { backgroundColor: t.colors.fill3 },
+        disabled && pending && { opacity: 1 },
+        disabled && !pending && { opacity: 0.5 },
+      ]}
+    >
+      <StudioAvatar logoUrl={row.logoUrl} size="md" />
+
+      <View style={{ flex: 1, marginLeft: 12, minWidth: 0 }}>
+        <View style={styles.rowTitleLine}>
+          <Text
+            variant="body"
+            color="label"
+            style={{ flex: 1 }}
+            numberOfLines={1}
+          >
+            {row.name}
+          </Text>
+          <PlanBadge tier={row.tier} size="sm" />
+        </View>
+        <View style={styles.rowMetaLine}>
+          <View
+            style={[
+              styles.rolePill,
+              {
+                backgroundColor: t.mode === 'dark' ? tone.softDark : tone.soft,
+                borderRadius: 999,
+              },
+            ]}
+          >
+            <Text
+              variant="caption2"
+              style={{
+                color: tone.base,
+                fontWeight: '700',
+                letterSpacing: 0.4,
+              }}
+              numberOfLines={1}
+            >
+              {row.roleLabel.toUpperCase()}
+            </Text>
+          </View>
+          <Text
+            variant="caption1"
+            color="secondary"
+            numberOfLines={1}
+            style={{ marginLeft: 8, flex: 1 }}
+          >
+            Owner: {ownerLine}
+          </Text>
+        </View>
+      </View>
+
+      {pending ? (
+        <ActivityIndicator color={t.palette.blue.base} style={{ marginLeft: 8 }} />
+      ) : (
+        <Ionicons
+          name="chevron-forward"
+          size={14}
+          color={t.colors.tertiary}
+          style={{ marginLeft: 8 }}
+        />
+      )}
+
+      {divider ? (
+        <View
+          style={[
+            styles.rowDivider,
+            { backgroundColor: t.colors.separator, left: 64 },
+          ]}
+        />
+      ) : null}
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: color.bgGrouped,
-  },
+  // Header
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
-    backgroundColor: color.bg,
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
+    gap: 10,
   },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    minWidth: 80,
-  },
-  headerTitle: {
-    flex: 1,
-    textAlign: 'center',
-  },
-  headerSpacer: {
-    minWidth: 80,
-  },
-  loading: {
-    flex: 1,
+  iconBtn: {
+    width: 32,
+    height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  list: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.md,
-    paddingBottom: space.huge,
-    gap: 12,
-  },
 
-  card: {
+  loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
+  // Active card
+  activeCard: {
+    overflow: 'hidden',
+  },
+  activeTop: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    padding: space.md,
-    backgroundColor: color.bg,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 14,
   },
-  cardActive: {
-    borderColor: color.primary,
-    backgroundColor: color.primarySoft,
+  gearBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
   },
-  body: { flex: 1, minWidth: 0, gap: 2 },
-  titleRow: {
+  activePillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  activePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+
+  // Section
+  sectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+    paddingBottom: 7,
+  },
+  sectionCard: {
+    marginHorizontal: 16,
+    overflow: 'hidden',
+  },
+
+  // Org row
+  orgRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    minHeight: 76,
+    position: 'relative',
+  },
+  rowTitleLine: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 2,
   },
-  role: {
-    fontSize: 12,
-    fontWeight: '600',
-    letterSpacing: 0.4,
-  },
-  gearBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+  rowMetaLine: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+    marginTop: 4,
+  },
+  rolePill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    maxWidth: 130,
+  },
+  rowDivider: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    height: 0.5,
   },
 
+  // Empty
+  emptyIcon: {
+    width: 72,
+    height: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // Create CTA
   createCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 14,
-    padding: space.md,
-    backgroundColor: color.bg,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: color.primary,
-    borderStyle: 'dashed',
-    marginTop: space.xs,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
   },
   createIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.primarySoft,
   },
 });

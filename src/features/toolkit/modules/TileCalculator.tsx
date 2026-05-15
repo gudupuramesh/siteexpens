@@ -5,8 +5,7 @@
 import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -25,7 +24,6 @@ export function TileCalculator({
   const [tileLen, setTileLen] = useState('2');         // ft
   const [tileWid, setTileWid] = useState('2');         // ft
 
-  // Memoised so we don't recompute on unrelated re-renders.
   const result = useMemo(() => {
     const area = parseNum(floorArea) ?? 0;
     const len = parseNum(tileLen) ?? 0;
@@ -40,15 +38,10 @@ export function TileCalculator({
   }, [floorArea, tileLen, tileWid]);
 
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="Tile Calculator"
-      eyebrow="ESTIMATOR"
-    >
+    <ToolModal visible={visible} onClose={onClose} title="Tile calculator">
       <Section title="Inputs">
         <NumberField
-          label="Total Floor Area"
+          label="Total floor area"
           unit="sq ft"
           value={floorArea}
           onChangeText={setFloorArea}
@@ -57,7 +50,7 @@ export function TileCalculator({
         <View style={styles.row2}>
           <View style={styles.col}>
             <NumberField
-              label="Tile Length"
+              label="Tile length"
               unit="ft"
               value={tileLen}
               onChangeText={setTileLen}
@@ -65,14 +58,14 @@ export function TileCalculator({
           </View>
           <View style={styles.col}>
             <NumberField
-              label="Tile Width"
+              label="Tile width"
               unit="ft"
               value={tileWid}
               onChangeText={setTileWid}
             />
           </View>
         </View>
-        <Text style={styles.helper}>
+        <Text variant="caption1" color="secondary" style={styles.helper}>
           Common sizes: 2×2, 2×4, 1×1, 1.5×1.5 ft. Tile area:{' '}
           {result.tileArea ? result.tileArea.toFixed(2) : '—'} sq ft.
         </Text>
@@ -97,12 +90,10 @@ export function TileCalculator({
 }
 
 const styles = StyleSheet.create({
-  row2: { flexDirection: 'row', gap: space.sm },
+  row2: { flexDirection: 'row', gap: 10 },
   col: { flex: 1 },
   helper: {
-    fontSize: 11,
-    color: color.textFaint,
-    fontFamily: fontFamily.sans,
-    marginTop: 4,
+    marginTop: 2,
+    paddingHorizontal: 4,
   },
 });

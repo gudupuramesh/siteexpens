@@ -15,7 +15,7 @@ import { useMemo } from 'react';
 import { Dimensions, StyleSheet, View } from 'react-native';
 import { BarChart, PieChart } from 'react-native-gifted-charts';
 
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
 import { color, fontFamily, screenInset, space } from '@/src/theme';
 import {
   ORG_FINANCE_CATEGORIES,
@@ -252,7 +252,7 @@ export function DashboardCharts({
               </View>
             </>
           ) : (
-            <Text variant="meta" color="textMuted" style={styles.empty}>
+            <Text variant="caption1" color="secondary" style={styles.empty}>
               No transactions in the last 6 months.
             </Text>
           )}
@@ -283,7 +283,7 @@ export function DashboardCharts({
                 {pieData.map((p) => (
                   <View key={p.label} style={styles.pieLegendRow}>
                     <View style={[styles.pieDot, { backgroundColor: p.color }]} />
-                    <Text variant="meta" color="text" style={styles.pieLegendName} numberOfLines={1}>
+                    <Text variant="caption1" color="label" style={styles.pieLegendName} numberOfLines={1}>
                       {p.label}
                     </Text>
                     <Text style={styles.pieLegendAmount}>{inrCompact(p.value)}</Text>
@@ -292,7 +292,7 @@ export function DashboardCharts({
               </View>
             </View>
           ) : (
-            <Text variant="meta" color="textMuted" style={styles.empty}>
+            <Text variant="caption1" color="secondary" style={styles.empty}>
               No office expenses in this period.
             </Text>
           )}
@@ -306,7 +306,7 @@ function LegendDot({ color: dotColor, label }: { color: string; label: string })
   return (
     <View style={styles.legendCell}>
       <View style={[styles.legendDot, { backgroundColor: dotColor }]} />
-      <Text variant="caption" color="textMuted">{label}</Text>
+      <Text variant="caption1" color="secondary">{label}</Text>
     </View>
   );
 }
@@ -319,9 +319,9 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   sectionLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.4,
   },
@@ -335,7 +335,7 @@ const styles = StyleSheet.create({
   axisText: {
     color: color.textMuted,
     fontSize: 9,
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
   },
 
   legendRow: {
@@ -361,26 +361,24 @@ const styles = StyleSheet.create({
   pieDot: { width: 10, height: 10, borderRadius: 2 },
   pieLegendName: { flex: 1 },
   pieLegendAmount: {
-    fontFamily: fontFamily.mono,
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.text,
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.2,
   },
 
   donutCenterValue: {
-    fontFamily: fontFamily.mono,
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '600',
     color: color.text,
     fontVariant: ['tabular-nums'],
     letterSpacing: -0.3,
   },
   donutCenterLabel: {
-    fontFamily: fontFamily.mono,
+    fontVariant: ['tabular-nums'],
     fontSize: 8,
-    fontWeight: '700',
+    fontWeight: '600',
     color: color.textFaint,
     letterSpacing: 1.0,
     marginTop: 2,

@@ -70,3 +70,10 @@ secrets/
 # release signing properties (sensitive)
 keystore.properties
 *.keystore
+
+# App Store / IAP marketing assets — uploaded to ASC, not source code
+iap-promo-images/
+
+# Local design / spec reference dumps (kept out of repo)
+Ui stytem for Sitexpens/
+DESIGN (1).md

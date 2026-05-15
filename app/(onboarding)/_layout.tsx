@@ -52,11 +52,13 @@ export default function OnboardingLayout() {
   // anyway, so don't even let them reach the form.
   if (mode === 'add' && ownsAnOrg) return <Redirect href={'/(app)' as never} />;
 
+  // No `contentStyle.backgroundColor` — onboarding screens render
+  // their own AmbientBackground; setting a stack-level color would
+  // fight with the gradient and re-introduce the white slab issue.
   return (
     <Stack
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: '#F7F8FA' },
       }}
     />
   );

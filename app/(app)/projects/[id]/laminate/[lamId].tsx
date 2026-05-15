@@ -1,26 +1,38 @@
 /**
- * Laminate detail — read-only preview of a single laminate spec.
+ * Laminate detail / preview — v2 design.
  *
- * Tapping a laminate from the project's Laminate tab lands here
- * (instead of going straight to edit, which was destructive-looking).
- * Edit button (pencil) is in the top-right; tapping the photo opens
- * a full-screen pinch-to-zoom preview.
- *
- * Layout follows the InteriorOS dense / hairline detail pattern used
- * by transaction-detail and party-detail.
+ * Layout:
+ *   1. Header — back · "Laminate" · edit (top-right)
+ *   2. Identity hero card — brand, room, code (mono blue meta)
+ *   3. Photo card (tap to zoom)
+ *   4. FormGroup "Specification" — Brand · Code · Finish · Edge band
+ *   5. Notes card (when present)
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Image,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useLaminates } from '@/src/features/laminates/useLaminates';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
 import { ImageViewer } from '@/src/ui/ImageViewer';
-import { color, fontFamily, radius, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { Row } from '@/src/ui/v2/Row';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 export default function LaminateDetailScreen() {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const { id: projectId, lamId } = useLocalSearchParams<{
     id: string;
     lamId: string;
@@ -36,96 +48,118 @@ export default function LaminateDetailScreen() {
 
   if (loading && !lam) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
+        <AmbientBackground />
+        <Header onBack={() => router.back()} title="Laminate" />
         <View style={styles.center}>
-          <Text variant="meta" color="textMuted">Loading…</Text>
+          <ActivityIndicator color={t.palette.blue.base} />
         </View>
-      </Screen>
+      </View>
     );
   }
 
   if (!lam) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.navBar}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="chevron-back" size={22} color={color.text} />
-          </Pressable>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle}>Laminate</Text>
-          <View style={styles.navBtn} />
-        </View>
+        <AmbientBackground />
+        <Header onBack={() => router.back()} title="Laminate" />
         <View style={styles.center}>
-          <Text variant="meta" color="textMuted">Laminate not found.</Text>
+          <Text variant="body" color="secondary">Laminate not found.</Text>
         </View>
-      </Screen>
+      </View>
     );
   }
 
-  return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
-      <Stack.Screen options={{ headerShown: false }} />
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="chevron-back" size={22} color={color.text} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>
-            LAMINATE
-          </Text>
-          <Text variant="bodyStrong" color="text" style={styles.navTitle} numberOfLines={1}>
-            {lam.roomName}
-          </Text>
-        </View>
-        {/* Edit lives top-right per the user's request — same place as
-            party / transaction detail screens. */}
-        <Pressable
-          onPress={() =>
-            router.push(
-              `/(app)/projects/${projectId}/edit-laminate?lamId=${lam.id}` as never,
-            )
-          }
-          hitSlop={12}
-          style={styles.navBtn}
-          accessibilityLabel="Edit laminate"
-        >
-          <Ionicons name="create-outline" size={20} color={color.primary} />
-        </Pressable>
-      </View>
+  return (
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
+
+      <Header
+        onBack={() => router.back()}
+        title="Laminate"
+        right={
+          <CircleBtn
+            icon="create-outline"
+            onPress={() =>
+              router.push(
+                `/(app)/projects/${projectId}/edit-laminate?lamId=${lam.id}` as never,
+              )
+            }
+            tint={t.palette.blue.base}
+          />
+        }
+      />
 
       <ScrollView
-        contentContainerStyle={styles.scroll}
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* Identity strip — same dense horizontal layout used on
-            party detail. Brand on the title line, room + laminate
-            code in the meta. */}
-        <View style={styles.identityStrip}>
-          <View style={styles.avatarSm}>
-            <Ionicons name="layers-outline" size={20} color={color.primary} />
-          </View>
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text variant="bodyStrong" color="text" numberOfLines={1}>
-              {lam.brand}
-            </Text>
-            <Text style={styles.identityMeta} numberOfLines={1}>
-              {lam.roomName.toUpperCase()}
-              {lam.laminateCode ? `  ·  ${lam.laminateCode.toUpperCase()}` : ''}
-            </Text>
+        {/* Identity hero */}
+        <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+          <View
+            style={[
+              styles.heroCard,
+              {
+                backgroundColor: cardBg,
+                borderRadius: t.radii.hero,
+                borderColor: cardBorder,
+                borderWidth: t.hairline,
+              },
+            ]}
+          >
+            <View
+              style={[
+                styles.heroIcon,
+                {
+                  backgroundColor: t.colors.fill3,
+                },
+              ]}
+            >
+              <Ionicons name="layers" size={20} color={t.colors.secondary} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text variant="title3" color="label" style={{ fontWeight: '700' }} numberOfLines={1}>
+                {lam.brand}
+              </Text>
+              <Text
+                variant="caption2"
+                style={{
+                  color: t.palette.blue.base,
+                  fontWeight: '700',
+                  letterSpacing: 0.6,
+                  marginTop: 4,
+                }}
+                numberOfLines={1}
+              >
+                {lam.roomName.toUpperCase()}
+                {lam.laminateCode ? `  ·  ${lam.laminateCode.toUpperCase()}` : ''}
+              </Text>
+            </View>
           </View>
         </View>
 
-        {/* Photo — tap to zoom. Empty state shows a placeholder. */}
-        <View style={styles.card}>
-          <Text variant="caption" color="textMuted" style={styles.cardLabel}>
-            PHOTO
-          </Text>
+        {/* Photo */}
+        <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
           {lam.photoUrl ? (
             <Pressable
               onPress={() => setPreviewOpen(true)}
-              style={({ pressed }) => [pressed && { opacity: 0.85 }]}
+              style={({ pressed }) => [
+                styles.photoWrap,
+                {
+                  backgroundColor: cardBg,
+                  borderRadius: t.radii.card,
+                  borderColor: cardBorder,
+                  borderWidth: t.hairline,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
               accessibilityLabel="Open photo full-screen"
             >
               <Image
@@ -134,54 +168,64 @@ export default function LaminateDetailScreen() {
                 resizeMode="cover"
               />
               <View style={styles.expandHint}>
-                <Ionicons name="expand-outline" size={14} color="#fff" />
+                <Ionicons name="expand-outline" size={13} color="#fff" />
               </View>
             </Pressable>
           ) : (
-            <View style={styles.photoEmpty}>
-              <Ionicons name="image-outline" size={28} color={color.textFaint} />
-              <Text variant="meta" color="textFaint" style={{ marginTop: 4 }}>
+            <View
+              style={[
+                styles.photoEmpty,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: t.radii.card,
+                },
+              ]}
+            >
+              <Ionicons name="image-outline" size={28} color={t.colors.tertiary} />
+              <Text variant="caption1" color="tertiary" style={{ marginTop: 6 }}>
                 No photo attached
               </Text>
             </View>
           )}
         </View>
 
-        {/* Spec card */}
-        <View style={styles.card}>
-          <Text variant="caption" color="textMuted" style={styles.cardLabel}>
-            SPECIFICATION
-          </Text>
-          <DetailRow icon="ribbon-outline" label="Brand" value={lam.brand} />
-          <Divider />
-          <DetailRow
-            icon="pricetag-outline"
-            label="Code"
-            value={lam.laminateCode || '—'}
-          />
-          <Divider />
-          <DetailRow icon="color-palette-outline" label="Finish" value={lam.finish} />
-          <Divider />
-          <DetailRow
-            icon="resize-outline"
-            label="Edge band"
-            value={lam.edgeBandCode || '—'}
-          />
-        </View>
+        {/* Specification */}
+        <FormGroup header="Specification">
+          <Row label="Brand" value={lam.brand} />
+          <Row label="Code" value={lam.laminateCode || '—'} valueColor={lam.laminateCode ? undefined : t.colors.tertiary} />
+          <Row label="Finish" value={lam.finish} />
+          <Row label="Edge band" value={lam.edgeBandCode || '—'} valueColor={lam.edgeBandCode ? undefined : t.colors.tertiary} divider={false} />
+        </FormGroup>
 
-        {/* Notes (if any) */}
+        {/* Notes */}
         {lam.notes ? (
-          <View style={styles.card}>
-            <Text variant="caption" color="textMuted" style={styles.cardLabel}>
+          <View style={{ marginTop: 22 }}>
+            <Text
+              variant="caption2"
+              color="secondary"
+              style={{ letterSpacing: 0.5, paddingHorizontal: 32, paddingBottom: 8 }}
+            >
               NOTES
             </Text>
-            <Text variant="body" color="text" style={styles.notesText}>
-              {lam.notes}
-            </Text>
+            <View style={{ paddingHorizontal: 16 }}>
+              <View
+                style={[
+                  styles.notesCard,
+                  {
+                    backgroundColor: cardBg,
+                    borderRadius: t.radii.card,
+                    borderColor: cardBorder,
+                    borderWidth: t.hairline,
+                  },
+                ]}
+              >
+                <Text variant="body" color="label" style={{ lineHeight: 22 }}>
+                  {lam.notes}
+                </Text>
+              </View>
+            </View>
           </View>
         ) : null}
-
-        <View style={{ height: space.xl }} />
       </ScrollView>
 
       <ImageViewer
@@ -189,143 +233,136 @@ export default function LaminateDetailScreen() {
         visible={previewOpen}
         onClose={() => setPreviewOpen(false)}
       />
-    </Screen>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────────
-// Sub-components
-// ────────────────────────────────────────────────────────────────────
-
-function DetailRow({
-  icon,
-  label,
-  value,
-}: {
-  icon: keyof typeof import('@expo/vector-icons').Ionicons.glyphMap;
-  label: string;
-  value: string;
-}) {
-  return (
-    <View style={styles.metaRow}>
-      <Ionicons name={icon} size={16} color={color.textMuted} />
-      <Text variant="caption" color="textMuted" style={styles.metaLabel}>
-        {label}
-      </Text>
-      <Text
-        variant="body"
-        color="text"
-        style={styles.metaValue}
-        numberOfLines={2}
-      >
-        {value}
-      </Text>
     </View>
   );
 }
 
-function Divider() {
-  return <View style={styles.divider} />;
+function Header({
+  onBack,
+  title,
+  right,
+}: {
+  onBack: () => void;
+  title: string;
+  right?: React.ReactNode;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      style={[
+        styles.header,
+        {
+          paddingTop: insets.top + 8,
+          borderBottomColor: t.colors.separator,
+          borderBottomWidth: t.hairline,
+        },
+      ]}
+    >
+      <CircleBtn
+        icon="chevron-back"
+        onPress={onBack}
+        tint={t.colors.label}
+      />
+      <Text
+        variant="headline"
+        color="label"
+        style={{ flex: 1, textAlign: 'center', fontWeight: '600' }}
+        numberOfLines={1}
+      >
+        {title}
+      </Text>
+      {right ?? <View style={{ width: 32 }} />}
+    </View>
+  );
 }
 
-// ────────────────────────────────────────────────────────────────────
-// Styles
-// ────────────────────────────────────────────────────────────────────
+function CircleBtn({
+  icon,
+  onPress,
+  tint,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  tint: string;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={10}
+      style={({ pressed }) => [
+        styles.circleBtn,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: 999,
+          borderColor:
+            t.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+          borderWidth: t.hairline,
+        },
+        t.shadows.resting,
+        pressed && { opacity: 0.7 },
+      ]}
+    >
+      <Ionicons name={icon} size={16} color={tint} />
+    </Pressable>
+  );
+}
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-  navBar: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: 8,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    gap: 8,
   },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  navEyebrow: { letterSpacing: 1.1 },
-  navTitle: { textAlign: 'center' },
+  circleBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
-  scroll: { padding: screenInset, gap: space.sm },
+  scroll: {},
 
-  identityStrip: {
+  heroCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    backgroundColor: color.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
+    gap: 14,
+    padding: 16,
   },
-  avatarSm: {
-    width: 36, height: 36,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.primarySoft,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  identityMeta: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 1.2,
-    marginTop: 2,
+  heroIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  card: {
-    backgroundColor: color.bg,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: space.xs,
-  },
-  cardLabel: { marginTop: space.sm, marginBottom: space.xxs },
-
-  // Photo block — full-bleed within the card padding, tap to zoom.
-  photo: {
-    width: '100%',
-    height: 240,
-    backgroundColor: color.surface,
-    marginTop: space.xs,
-    marginBottom: space.sm,
-  },
+  photoWrap: { overflow: 'hidden' },
+  photo: { width: '100%', height: 240 },
   photoEmpty: {
     width: '100%',
-    height: 140,
-    backgroundColor: color.surface,
-    alignItems: 'center', justifyContent: 'center',
-    marginTop: space.xs,
-    marginBottom: space.sm,
+    height: 160,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   expandHint: {
     position: 'absolute',
-    top: space.sm + 6,
-    right: space.sm,
-    width: 26, height: 26,
-    borderRadius: radius.pill,
+    top: 10,
+    right: 10,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     backgroundColor: 'rgba(15,23,42,0.6)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  metaRow: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: space.xs,
-    paddingVertical: space.sm,
+    justifyContent: 'center',
   },
-  metaLabel: { width: 90, marginLeft: 4 },
-  metaValue: { flex: 1, textAlign: 'right' },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: color.separator },
 
-  notesText: {
-    paddingVertical: space.sm,
-    lineHeight: 20,
+  notesCard: {
+    padding: 14,
   },
 });

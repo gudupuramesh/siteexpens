@@ -1,17 +1,26 @@
 /**
- * Add Labour to project. Pick from existing org parties, add from phone
- * contacts (with party type selection), or enter manually.
- * Creates an attendance record for today with 'present' status.
+ * Add Labour — v2 design.
+ *
+ * Pick from existing org parties, add from phone contacts (with party
+ * type), or enter manually. Creates an attendance record for today
+ * with `present` status.
+ *
+ * Layout:
+ *   1. SheetHeader: Cancel · "Add labour" · Save
+ *   2. FormGroup "Worker" — Pick worker (sheet) Row · Manual name InputRow
+ *   3. FormGroup "Job" — Job detail · Pay rate · Pay unit pill row
+ *
+ * Worker sheet shows existing parties (workers first, others below) with
+ * "From contacts" / "Add manually" actions.
  */
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as Contacts from 'expo-contacts';
 import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useGuardedRoute } from "@/src/features/org/useGuardedRoute";
+import { useGuardedRoute } from '@/src/features/org/useGuardedRoute';
 import { Controller, useForm } from 'react-hook-form';
 import { useCallback, useMemo, useState } from 'react';
 import {
   Alert,
-  FlatList,
   InteractionManager,
   Keyboard,
   KeyboardAvoidingView,
@@ -25,6 +34,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { z } from 'zod';
 
 import { useAuth } from '@/src/features/auth/useAuth';
@@ -32,7 +42,6 @@ import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useParties } from '@/src/features/parties/useParties';
 import { createParty } from '@/src/features/parties/parties';
 import {
-  ALL_PARTY_TYPES,
   PARTY_TYPE_GROUPS,
   getPartyTypeLabel,
   type Party,
@@ -40,17 +49,20 @@ import {
 } from '@/src/features/parties/types';
 import { markAttendance } from '@/src/features/attendance/attendance';
 import { useProjectLabour } from '@/src/features/attendance/useProjectLabour';
-import { Button } from '@/src/ui/Button';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { TextField } from '@/src/ui/TextField';
-import { color, radius, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 function toLocalDateString(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`; // local YYYY-MM-DD (timezone-safe, matches AttendanceTab)
+  return `${y}-${m}-${day}`;
 }
 
 const schema = z.object({
@@ -65,6 +77,7 @@ type FormData = z.infer<typeof schema>;
 
 export default function AddLabourScreen() {
   useGuardedRoute({ capability: 'attendance.write' });
+  const t = useThemeV2();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -77,7 +90,6 @@ export default function AddLabourScreen() {
   const [showPartyPicker, setShowPartyPicker] = useState(false);
   const [partySearch, setPartySearch] = useState('');
 
-  // New party from contact
   const [showNewPartyType, setShowNewPartyType] = useState(false);
   const [newPartyName, setNewPartyName] = useState('');
   const [newPartyPhone, setNewPartyPhone] = useState('');
@@ -96,46 +108,30 @@ export default function AddLabourScreen() {
   });
 
   const selectedName = watch('name');
-  const selectedRole = watch('role');
   const selectedPayUnit = watch('payUnit');
 
-  // Parties already registered as labour in this project.
   const projectLabourIds = useMemo(
     () => new Set(projectLabour.map((a) => a.labourId)),
     [projectLabour],
   );
 
-  // Party sections: already in project attendance first, then others
   const partySections = useMemo(() => {
     const search = partySearch.toLowerCase();
     const projectParties: Party[] = [];
     const otherParties: Party[] = [];
-
     for (const p of orgParties) {
       if (search && !p.name.toLowerCase().includes(search)) continue;
-      // Skip parties already added as project labour.
       if (projectLabourIds.has(p.id)) continue;
-
       const type = (p.partyType ?? p.role) as string;
       const isWorker = ['worker', 'staff', 'labour', 'labour_contractor', 'contractor'].includes(type);
-      if (isWorker) {
-        projectParties.push(p);
-      } else {
-        otherParties.push(p);
-      }
+      if (isWorker) projectParties.push(p);
+      else otherParties.push(p);
     }
-
     const sections: { title: string; data: Party[] }[] = [];
-    if (projectParties.length > 0) {
-      sections.push({ title: 'Workers & Labour', data: projectParties });
-    }
-    if (otherParties.length > 0) {
-      sections.push({ title: 'Other Parties', data: otherParties });
-    }
+    if (projectParties.length > 0) sections.push({ title: 'Workers & labour', data: projectParties });
+    if (otherParties.length > 0) sections.push({ title: 'Other parties', data: otherParties });
     return sections;
   }, [orgParties, partySearch, projectLabourIds]);
-
-  // ── Handlers ──
 
   const selectParty = useCallback((party: Party) => {
     const type = (party.partyType ?? party.role) as string;
@@ -162,39 +158,31 @@ export default function AddLabourScreen() {
       if (!result) return;
 
       const contactName =
-        (result.name ?? '').trim() ||
-        [result.firstName, result.lastName].filter(Boolean).join(' ').trim() ||
-        (result.company ?? '').trim() ||
-        '';
+        (result.name ?? '').trim()
+        || [result.firstName, result.lastName].filter(Boolean).join(' ').trim()
+        || (result.company ?? '').trim()
+        || '';
       const rawEntry =
         result.phoneNumbers?.find(
           (p) => (p.number ?? p.digits ?? '').replace(/\D/g, '').length >= 10,
         ) ?? result.phoneNumbers?.[0];
       const rawPhone = rawEntry?.number ?? rawEntry?.digits ?? '';
       const phoneDigits = rawPhone.replace(/\D/g, '');
-
       if (!contactName) {
-        Alert.alert(
-          'Missing name',
-          'That contact has no name or company. Add one in Contacts and try again.',
-        );
+        Alert.alert('Missing name', 'That contact has no name or company. Add one in Contacts and try again.');
         return;
       }
       if (phoneDigits.length < 10) {
         Alert.alert('Missing phone', 'That contact needs a phone with at least 10 digits.');
         return;
       }
-
       setNewPartyName(contactName);
       setNewPartyPhone(phoneDigits);
       InteractionManager.runAfterInteractions(() => {
         setTimeout(() => setShowNewPartyType(true), 120);
       });
     } catch (e) {
-      Alert.alert(
-        'Contacts',
-        e instanceof Error ? e.message : 'Could not open the contact picker.',
-      );
+      Alert.alert('Contacts', e instanceof Error ? e.message : 'Could not open the contact picker.');
     }
   }, []);
 
@@ -238,7 +226,6 @@ export default function AddLabourScreen() {
         status: 'present',
         createdBy: user.uid,
       });
-      // Snapshot-propagation buffer (see add-transaction.tsx).
       await new Promise((r) => setTimeout(r, 300));
       router.back();
     } catch (err) {
@@ -247,20 +234,23 @@ export default function AddLabourScreen() {
   }
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="close" size={22} color={color.text} />
-        </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.navTitle}>Add Labour</Text>
-        <View style={styles.navBtn} />
-      </View>
+      <SheetHeader
+        title="Add labour"
+        cancelLabel="Cancel"
+        saveLabel="Save"
+        saveLoading={isSubmitting}
+        saveDisabled={!isValid || !orgId}
+        onCancel={() => router.back()}
+        onSave={() => void handleSubmit(onSubmit)()}
+      />
 
       <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
           contentContainerStyle={styles.scroll}
@@ -268,550 +258,627 @@ export default function AddLabourScreen() {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          {/* Party selector */}
-          <Pressable
-            onPress={() => setShowPartyPicker(true)}
-            style={styles.partySelector}
-          >
-            <Ionicons name="people-outline" size={20} color={color.textMuted} />
-            <Text
-              variant="body"
-              color={selectedName ? 'text' : 'textFaint'}
-              style={styles.flex}
-              numberOfLines={1}
-            >
-              {selectedName || 'Select Worker / Labour *'}
-            </Text>
-            <Ionicons name="chevron-forward" size={16} color={color.textMuted} />
-          </Pressable>
-
-          {/* Role display (auto-set from party, or manual) */}
-          {selectedRole ? (
-            <View style={styles.roleDisplay}>
-              <Text variant="caption" color="textMuted">JOB DETAIL</Text>
-              <View style={styles.roleBadge}>
-                <Text variant="metaStrong" color="primary">{selectedRole}</Text>
-              </View>
-            </View>
+          {/* Worker */}
+          <FormGroup header="Worker">
+            <Row
+              label="Pick worker"
+              value={selectedName || 'From parties'}
+              valueColor={selectedName ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => setShowPartyPicker(true)}
+            />
+            <Controller
+              control={control}
+              name="name"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Or name"
+                  value={value}
+                  onChangeText={(txt) => {
+                    setValue('partyId', '');
+                    onChange(txt);
+                  }}
+                  onBlur={onBlur}
+                  placeholder="e.g. Suresh Kumar"
+                  autoCapitalize="words"
+                  divider={false}
+                />
+              )}
+            />
+          </FormGroup>
+          {errors.name?.message ? (
+            <FieldNote text={errors.name.message} tone={t.palette.red.base} />
           ) : null}
 
-          {/* Manual name entry */}
-          <View style={styles.orRow}>
-            <View style={styles.orLine} />
-            <Text variant="caption" color="textMuted">OR ENTER MANUALLY</Text>
-            <View style={styles.orLine} />
-          </View>
-
-          <Controller
-            control={control}
-            name="name"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Name"
-                placeholder="e.g. Suresh Kumar"
-                autoCapitalize="words"
-                value={value}
-                onChangeText={(t) => {
-                  setValue('partyId', '');
-                  onChange(t);
-                }}
-                onBlur={onBlur}
-                error={errors.name?.message}
-                square
-                strongBorder
-              />
-            )}
-          />
-
-          {/* Job detail only (not category) */}
-          <Controller
-            control={control}
-            name="role"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Worker job detail"
-                placeholder="e.g. POP worker, Paint worker, Ceiling worker"
-                autoCapitalize="words"
-                value={value}
-                onChangeText={onChange}
-                onBlur={onBlur}
-                error={errors.role?.message}
-                square
-                strongBorder
-              />
-            )}
-          />
-
-          <Controller
-            control={control}
-            name="payRate"
-            render={({ field: { onChange, onBlur, value } }) => (
-              <TextField
-                label="Pay amount"
-                placeholder="e.g. 850"
-                keyboardType="number-pad"
-                value={value}
-                onChangeText={(t) => onChange(t.replace(/[^\d]/g, ''))}
-                onBlur={onBlur}
-                error={errors.payRate?.message}
-                square
-                strongBorder
-              />
-            )}
-          />
-
-          <Text variant="caption" color="textMuted" style={styles.sectionLabel}>PAY UNIT</Text>
-          <View style={styles.unitRow}>
-            <Pressable
-              onPress={() => setValue('payUnit', 'day', { shouldValidate: true })}
-              style={[styles.unitBtn, selectedPayUnit === 'day' && styles.unitBtnActive]}
-            >
-              <Text variant="caption" style={{ color: selectedPayUnit === 'day' ? color.onPrimary : color.text }}>
-                Per day
+          {/* Job */}
+          <FormGroup header="Job">
+            <Controller
+              control={control}
+              name="role"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Job detail"
+                  value={value}
+                  onChangeText={onChange}
+                  onBlur={onBlur}
+                  placeholder="e.g. POP worker, Painter"
+                  autoCapitalize="sentences"
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="payRate"
+              render={({ field: { onChange, onBlur, value } }) => (
+                <InputRow
+                  label="Pay rate"
+                  value={value}
+                  onChangeText={(txt) => onChange(txt.replace(/[^\d]/g, ''))}
+                  onBlur={onBlur}
+                  placeholder="₹0"
+                  keyboardType="number-pad"
+                />
+              )}
+            />
+            <View style={styles.payUnitBlock}>
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingTop: 12 }}
+              >
+                PAY UNIT
               </Text>
-            </Pressable>
-            <Pressable
-              onPress={() => setValue('payUnit', 'hour', { shouldValidate: true })}
-              style={[styles.unitBtn, selectedPayUnit === 'hour' && styles.unitBtnActive]}
-            >
-              <Text variant="caption" style={{ color: selectedPayUnit === 'hour' ? color.onPrimary : color.text }}>
-                Per hour
-              </Text>
-            </Pressable>
-          </View>
+              <View style={styles.payUnitRow}>
+                {(['day', 'hour'] as const).map((u) => {
+                  const active = selectedPayUnit === u;
+                  return (
+                    <Pressable
+                      key={u}
+                      onPress={() => setValue('payUnit', u, { shouldValidate: true })}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.payUnitBtn,
+                        {
+                          backgroundColor: active
+                            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                            : t.colors.fill3,
+                          borderRadius: t.radii.pill,
+                          borderColor: active ? t.palette.blue.base + '33' : 'transparent',
+                          borderWidth: active ? 1 : 0,
+                        },
+                        pressed && { opacity: 0.85 },
+                      ]}
+                    >
+                      <Text
+                        variant="footnote"
+                        style={{
+                          color: active ? t.palette.blue.base : t.colors.secondary,
+                          fontWeight: active ? '700' : '500',
+                        }}
+                      >
+                        {u === 'day' ? 'Per day' : 'Per hour'}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </FormGroup>
+          {(errors.role?.message || errors.payRate?.message) ? (
+            <FieldNote
+              text={errors.role?.message ?? errors.payRate?.message ?? ''}
+              tone={t.palette.red.base}
+            />
+          ) : null}
 
-          {submitError && (
-            <Text variant="caption" color="danger" style={{ marginTop: space.xs }}>
-              {submitError}
-            </Text>
-          )}
+          {submitError ? (
+            <FieldNote text={submitError} tone={t.palette.red.base} />
+          ) : null}
+
+          <Text
+            variant="caption1"
+            color="tertiary"
+            style={{ marginTop: 14, paddingHorizontal: 32, fontStyle: 'italic' }}
+          >
+            Saving will mark this person Present for today.
+          </Text>
+
+          <View style={{ height: 40 }} />
         </ScrollView>
-
-        <View style={styles.footer}>
-          <Button
-            label="Add & Mark Present"
-            onPress={handleSubmit(onSubmit)}
-            loading={isSubmitting}
-            disabled={!isValid || !orgId}
-          />
-        </View>
       </KeyboardAvoidingView>
 
-      {/* ── Party Picker Modal ── */}
-      <Modal
-        visible={showPartyPicker}
-        animationType="slide"
-        transparent
-        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
-        onRequestClose={() => setShowPartyPicker(false)}
-      >
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 12 : 0}
-        >
-          <Pressable
-            style={styles.modalOverlay}
-            onPress={() => {
-              Keyboard.dismiss();
-              setShowPartyPicker(false);
-            }}
-          >
-            <View />
-          </Pressable>
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-              Select Worker
-            </Text>
+      {/* Party picker sheet */}
+      <PartyPickerSheet
+        open={showPartyPicker}
+        partySearch={partySearch}
+        setPartySearch={setPartySearch}
+        sections={partySections}
+        selectedName={selectedName}
+        onSelectParty={selectParty}
+        onClose={() => setShowPartyPicker(false)}
+        onAddFromContact={pickContactAndAdd}
+        onAddManual={() => {
+          if (partySearch.trim()) {
+            setValue('name', partySearch.trim(), { shouldValidate: true });
+            setValue('partyId', '');
+          }
+          setShowPartyPicker(false);
+          setPartySearch('');
+        }}
+      />
 
-            <View style={styles.searchBar}>
-              <Ionicons name="search" size={18} color={color.textMuted} />
+      {/* New party type sheet */}
+      <NewPartyTypeSheet
+        open={showNewPartyType}
+        newPartyName={newPartyName}
+        newPartyPhone={newPartyPhone}
+        creating={creatingParty}
+        onClose={() => setShowNewPartyType(false)}
+        onPickType={createNewPartyAndSelect}
+      />
+    </View>
+  );
+}
+
+function FieldNote({ text, tone }: { text: string; tone: string }) {
+  return (
+    <Text
+      variant="caption2"
+      style={{ color: tone, paddingHorizontal: 32, marginTop: 8 }}
+    >
+      {text}
+    </Text>
+  );
+}
+
+// ── Party picker sheet ────────────────────────────────────────────────
+
+function PartyPickerSheet({
+  open,
+  partySearch,
+  setPartySearch,
+  sections,
+  selectedName,
+  onSelectParty,
+  onClose,
+  onAddFromContact,
+  onAddManual,
+}: {
+  open: boolean;
+  partySearch: string;
+  setPartySearch: (v: string) => void;
+  sections: { title: string; data: Party[] }[];
+  selectedName: string;
+  onSelectParty: (p: Party) => void;
+  onClose: () => void;
+  onAddFromContact: () => void;
+  onAddManual: () => void;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal
+      visible={open}
+      transparent
+      animationType="slide"
+      presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            sheetStyles.sheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 8,
+              maxHeight: '85%',
+            },
+          ]}
+        >
+          <View style={[sheetStyles.grabber, { backgroundColor: t.colors.tertiary }]} />
+          <View
+            style={[
+              sheetStyles.header,
+              {
+                borderBottomColor: t.colors.separator,
+                borderBottomWidth: t.hairline,
+              },
+            ]}
+          >
+            <Pressable onPress={onClose} hitSlop={8} style={sheetStyles.sideBtn}>
+              <Text variant="body" style={{ color: t.palette.blue.base }}>Cancel</Text>
+            </Pressable>
+            <Text
+              variant="headline"
+              color="label"
+              style={[sheetStyles.title, { fontWeight: '600' }]}
+            >
+              Select worker
+            </Text>
+            <View style={sheetStyles.sideBtn} />
+          </View>
+
+          <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+            <View
+              style={[
+                sheetStyles.searchBar,
+                { backgroundColor: t.colors.fill3, borderRadius: t.radii.field },
+              ]}
+            >
+              <Ionicons name="search" size={16} color={t.colors.tertiary} />
               <TextInput
-                placeholder="Search by name..."
-                placeholderTextColor={color.textFaint}
+                placeholder="Search by name…"
+                placeholderTextColor={t.colors.tertiary}
                 value={partySearch}
                 onChangeText={setPartySearch}
-                style={styles.searchInput}
+                style={[
+                  sheetStyles.searchInput,
+                  { color: t.colors.label, ...t.type.callout },
+                ]}
                 autoFocus={Platform.OS !== 'ios'}
                 returnKeyType="search"
               />
+              {partySearch ? (
+                <Pressable onPress={() => setPartySearch('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={16} color={t.colors.tertiary} />
+                </Pressable>
+              ) : null}
             </View>
+          </View>
 
-            <SectionList
-              keyboardShouldPersistTaps="handled"
-              sections={partySections}
-              keyExtractor={(p) => p.id}
+          <SectionList
+            keyboardShouldPersistTaps="handled"
+            sections={sections}
+            keyExtractor={(p) => p.id}
             renderSectionHeader={({ section: { title } }) => (
-              <View style={styles.sectionHeader}>
-                <Text variant="caption" color="textMuted">{title.toUpperCase()}</Text>
+              <View style={sheetStyles.sectionHeader}>
+                <Text variant="caption2" color="secondary" style={{ letterSpacing: 0.5 }}>
+                  {title.toUpperCase()}
+                </Text>
               </View>
             )}
             renderItem={({ item }) => {
               const type = (item.partyType ?? item.role) as string;
               const label = getPartyTypeLabel(type as PartyType);
+              const selected = selectedName === item.name;
               return (
                 <Pressable
-                  onPress={() => selectParty(item)}
-                  style={({ pressed }) => [styles.partyOption, pressed && { opacity: 0.7 }]}
+                  onPress={() => onSelectParty(item)}
+                  style={({ pressed }) => [
+                    sheetStyles.partyOption,
+                    pressed && { backgroundColor: t.colors.fill3 },
+                  ]}
                 >
-                  <View style={styles.partyAvatar}>
-                    <Text variant="metaStrong" style={{ color: color.primary }}>
+                  <View
+                    style={[
+                      sheetStyles.partyAvatar,
+                      {
+                        backgroundColor:
+                          t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                      },
+                    ]}
+                  >
+                    <Text
+                      variant="footnote"
+                      style={{ color: t.palette.blue.base, fontWeight: '700' }}
+                    >
                       {item.name.charAt(0).toUpperCase()}
                     </Text>
                   </View>
-                  <View style={styles.flex}>
-                    <Text variant="body" color="text" numberOfLines={1}>{item.name}</Text>
-                    <Text variant="meta" color="textMuted">{label}</Text>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text
+                      variant="callout"
+                      color="label"
+                     
+                      numberOfLines={1}
+                    >
+                      {item.name}
+                    </Text>
+                    <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+                      {label}
+                    </Text>
                   </View>
-                  {selectedName === item.name && (
-                    <Ionicons name="checkmark-circle" size={20} color={color.primary} />
-                  )}
+                  {selected ? (
+                    <Ionicons name="checkmark-circle" size={18} color={t.palette.blue.base} />
+                  ) : null}
                 </Pressable>
               );
             }}
             ListEmptyComponent={
-              <View style={styles.emptyList}>
-                <Text variant="meta" color="textMuted">
+              <View style={{ paddingTop: 40, alignItems: 'center' }}>
+                <Text variant="footnote" color="secondary">
                   {partySearch ? 'No matching parties' : 'No parties yet'}
                 </Text>
               </View>
             }
             showsVerticalScrollIndicator={false}
-            style={styles.modalList}
+            contentContainerStyle={{ paddingBottom: 12 }}
           />
 
           {/* Bottom actions */}
-          <View style={styles.partyActions}>
+          <View
+            style={[
+              sheetStyles.actions,
+              {
+                borderTopColor: t.colors.separator,
+                borderTopWidth: t.hairline,
+              },
+            ]}
+          >
             <Pressable
-              onPress={() => {
-                Keyboard.dismiss();
-                pickContactAndAdd();
-              }}
-              style={styles.partyActionBtn}
+              onPress={onAddFromContact}
+              hitSlop={6}
+              style={({ pressed }) => [
+                sheetStyles.actionBtn,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
             >
-              <Ionicons name="person-add-outline" size={18} color={color.primary} />
-              <Text variant="metaStrong" color="primary">Add from Contact</Text>
+              <Ionicons name="person-add-outline" size={16} color={t.palette.blue.base} />
+              <Text
+                variant="footnote"
+                style={{ color: t.palette.blue.base, fontWeight: '700', marginLeft: 6 }}
+              >
+                From contacts
+              </Text>
             </Pressable>
-
-            <View style={styles.partyActionDivider} />
-
             <Pressable
-              onPress={() => {
-                if (partySearch.trim()) {
-                  setValue('name', partySearch.trim(), { shouldValidate: true });
-                  setValue('partyId', '');
-                }
-                setShowPartyPicker(false);
-                setPartySearch('');
-              }}
-              style={styles.partyActionBtn}
+              onPress={onAddManual}
+              hitSlop={6}
+              style={({ pressed }) => [
+                sheetStyles.actionBtn,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
             >
-              <Ionicons name="create-outline" size={18} color={color.primary} />
-              <Text variant="metaStrong" color="primary">
-                {partySearch.trim() ? `Add "${partySearch.trim()}"` : 'Enter manually'}
+              <Ionicons name="create-outline" size={16} color={t.colors.label} />
+              <Text
+                variant="footnote"
+                color="label"
+                style={{ fontWeight: '700', marginLeft: 6 }}
+                numberOfLines={1}
+              >
+                {partySearch.trim() ? `Add "${partySearch.trim()}"` : 'Manual'}
               </Text>
             </Pressable>
           </View>
         </View>
-        </KeyboardAvoidingView>
-      </Modal>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
 
-      {/* ── New Party Type Picker Modal ── */}
-      <Modal
-        visible={showNewPartyType}
-        animationType="slide"
-        transparent
-        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
-        onRequestClose={() => setShowNewPartyType(false)}
+// ── New party type sheet ──────────────────────────────────────────────
+
+function NewPartyTypeSheet({
+  open,
+  newPartyName,
+  newPartyPhone,
+  creating,
+  onClose,
+  onPickType,
+}: {
+  open: boolean;
+  newPartyName: string;
+  newPartyPhone: string;
+  creating: boolean;
+  onClose: () => void;
+  onPickType: (k: PartyType) => void;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal
+      visible={open}
+      transparent
+      animationType="slide"
+      presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <Pressable style={styles.modalOverlay} onPress={() => setShowNewPartyType(false)}>
-          <View />
-        </Pressable>
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <Text variant="bodyStrong" color="text" style={styles.modalTitle}>
-            Select Party Type
-          </Text>
-          <Text variant="meta" color="textMuted" align="center" style={{ marginBottom: space.sm }}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            sheetStyles.sheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 8,
+              maxHeight: '85%',
+            },
+          ]}
+        >
+          <View style={[sheetStyles.grabber, { backgroundColor: t.colors.tertiary }]} />
+          <View
+            style={[
+              sheetStyles.header,
+              {
+                borderBottomColor: t.colors.separator,
+                borderBottomWidth: t.hairline,
+              },
+            ]}
+          >
+            <Pressable onPress={onClose} hitSlop={8} style={sheetStyles.sideBtn}>
+              <Text variant="body" style={{ color: t.palette.blue.base }}>Cancel</Text>
+            </Pressable>
+            <Text
+              variant="headline"
+              color="label"
+              style={[sheetStyles.title, { fontWeight: '600' }]}
+            >
+              Party type
+            </Text>
+            <View style={sheetStyles.sideBtn} />
+          </View>
+
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ textAlign: 'center', marginTop: 8, paddingHorizontal: 16 }}
+          >
             Adding: {newPartyName}{newPartyPhone ? ` (${newPartyPhone})` : ''}
           </Text>
 
           <ScrollView
             showsVerticalScrollIndicator={false}
-            style={styles.modalList}
             keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
+            contentContainerStyle={{ paddingBottom: 12 }}
           >
             {PARTY_TYPE_GROUPS.map((group) => (
-              <View key={group.label} style={styles.typeGroup}>
-                <Text variant="caption" color="textMuted" style={styles.typeGroupLabel}>
+              <View key={group.label} style={{ marginTop: 18, paddingHorizontal: 16 }}>
+                <Text
+                  variant="caption2"
+                  color="secondary"
+                  style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingBottom: 8 }}
+                >
                   {group.label.toUpperCase()}
                 </Text>
-                {group.types.map((t) => (
-                  <Pressable
-                    key={t.key}
-                    onPress={() => createNewPartyAndSelect(t.key)}
-                    disabled={creatingParty}
-                    style={({ pressed }) => [
-                      styles.typeOption,
-                      pressed && { opacity: 0.7 },
-                    ]}
-                  >
-                    <View style={styles.typeIconWrap}>
-                      <Ionicons name={t.icon as any} size={18} color={color.textMuted} />
-                    </View>
-                    <Text variant="body" color="text">{t.label}</Text>
-                  </Pressable>
-                ))}
+                <FormGroup>
+                  {group.types.map((tt, idx) => (
+                    <Row
+                      key={tt.key}
+                      leading={
+                        <View
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 999,
+                            backgroundColor: t.colors.fill3,
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <Ionicons
+                            name={tt.icon as keyof typeof Ionicons.glyphMap}
+                            size={14}
+                            color={t.colors.label}
+                          />
+                        </View>
+                      }
+                      label={tt.label}
+                      chevron
+                      onPress={() => onPickType(tt.key)}
+                      divider={idx < group.types.length - 1}
+                    />
+                  ))}
+                </FormGroup>
               </View>
             ))}
           </ScrollView>
 
-          {creatingParty && (
-            <View style={{ alignItems: 'center', paddingVertical: space.sm }}>
-              <Text variant="meta" color="textMuted">Creating party...</Text>
+          {creating ? (
+            <View style={sheetStyles.creatingOverlay}>
+              <Text variant="footnote" color="secondary">Creating party…</Text>
             </View>
-          )}
+          ) : null}
         </View>
-      </Modal>
-
-    </Screen>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  navBar: {
+  scroll: { paddingBottom: 60 },
+
+  payUnitBlock: {},
+  payUnitRow: {
+    flexDirection: 'row',
+    gap: 7,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  payUnitBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingTop: 2,
-    paddingBottom: 8,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
-  navBtn: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bgGrouped,
-  },
-  navTitle: { flex: 1, textAlign: 'center' },
-  scroll: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.md,
-    paddingBottom: space.xl,
-    backgroundColor: color.bgGrouped,
-  },
+});
 
-  // Party selector
-  partySelector: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    backgroundColor: color.bgGrouped,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    minHeight: 52,
-    marginBottom: space.sm,
-  },
-
-  // Role display
-  roleDisplay: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    marginBottom: space.sm,
-  },
-  roleBadge: {
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xxs,
-    borderRadius: 8,
-    backgroundColor: color.primarySoft,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.primary,
-  },
-
-  orRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    marginVertical: space.md,
-  },
-  orLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.separator,
-  },
-
-  sectionLabel: { marginTop: space.md, marginBottom: space.xs },
-  unitRow: {
-    flexDirection: 'row',
-    gap: space.xs,
-    marginBottom: space.md,
-  },
-  unitBtn: {
-    flex: 1,
-    minHeight: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bgGrouped,
-  },
-  unitBtnActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
-  },
-
-
-  footer: {
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    backgroundColor: color.bgGrouped,
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-  },
-
-  // Modal
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  modalSheet: {
-    backgroundColor: color.bgGrouped,
-    borderTopLeftRadius: 0,
-    borderTopRightRadius: 0,
-    paddingTop: space.sm,
-    paddingBottom: space.xxl,
-    maxHeight: '75%',
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-  },
-  modalHandle: {
+const sheetStyles = StyleSheet.create({
+  sheet: { paddingTop: 8 },
+  grabber: {
     width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.border,
+    height: 5,
+    borderRadius: 3,
     alignSelf: 'center',
-    marginBottom: space.sm,
+    marginBottom: 8,
   },
-  modalTitle: {
-    textAlign: 'center',
-    marginBottom: space.sm,
-    fontSize: 16,
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
-  modalList: {
-    paddingHorizontal: screenInset,
-    maxHeight: 350,
-  },
-
+  sideBtn: { minWidth: 70 },
+  title: { flex: 1, textAlign: 'center' },
   searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.xs,
-    marginHorizontal: screenInset,
-    marginBottom: space.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xs,
-    borderRadius: 8,
-    backgroundColor: color.bgGrouped,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 15,
-    lineHeight: 20,
-    color: color.text,
-    paddingVertical: Platform.OS === 'ios' ? 10 : 8,
-  },
-
+  searchInput: { flex: 1, paddingVertical: 0, margin: 0 },
   sectionHeader: {
-    paddingVertical: space.xs,
-    paddingHorizontal: space.xxs,
-    backgroundColor: color.surface,
-    borderRadius: 8,
-    marginTop: space.xs,
-    marginBottom: space.xxs,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: color.border,
+    paddingHorizontal: 32,
+    paddingTop: 18,
+    paddingBottom: 6,
   },
-
   partyOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.xs,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.border,
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
   partyAvatar: {
     width: 36,
     height: 36,
-    borderRadius: 8,
-    backgroundColor: color.primarySoft,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  emptyList: {
-    paddingVertical: space.xxl,
-    alignItems: 'center',
-  },
-
-  partyActions: {
+  actions: {
     flexDirection: 'row',
-    borderTopWidth: 1,
-    borderTopColor: color.borderStrong,
-    marginHorizontal: screenInset,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 8,
+    gap: 8,
   },
-  partyActionBtn: {
+  actionBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space.xs,
-    paddingVertical: space.md,
+    paddingVertical: 10,
   },
-  partyActionDivider: {
-    width: 1,
-    backgroundColor: color.borderStrong,
-    marginVertical: space.xs,
-  },
-
-  // Type picker
-  typeGroup: { marginBottom: space.md },
-  typeGroupLabel: { marginBottom: space.xs, letterSpacing: 0.5 },
-  typeOption: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.xs,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.border,
-    marginBottom: 6,
-  },
-  typeIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    backgroundColor: color.bgGrouped,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
+  creatingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255,255,255,0.7)',
     alignItems: 'center',
     justifyContent: 'center',
   },

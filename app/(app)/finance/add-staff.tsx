@@ -1,32 +1,31 @@
 /**
- * Add Staff — full-screen form. Mirrors the Add Party UX so adding a
- * staff member from the Finance hub also creates the corresponding
- * `parties/{id}` entry with `partyType='staff'`. The two collections
- * stay in sync via `staff.partyId`.
+ * Add Staff — v2 design.
  *
- * Why dual create: a "staff" person is a real party in the studio's
- * roster (they show up in the Party tab inside projects, in transaction
- * party pickers, etc.). Forcing the user to type their name into BOTH
- * the Staff form AND the Party form is the kind of duplicate data
- * entry the user explicitly called out — this single form does both.
+ * Adding a staff member from the Finance hub creates BOTH a staff doc
+ * AND the corresponding `parties/{id}` entry with `partyType='staff'`.
+ * The two stay in sync via `staff.partyId` so the same person doesn't
+ * have to be entered twice.
  *
- * Role uses a dropdown (button + bottom-sheet picker) instead of a
- * chip rail so the form stays compact even when the org has many
- * custom roles in the master library.
+ * Layout:
+ *   1. SheetHeader: Cancel · "New staff" · Save
+ *   2. KeyboardAvoidingView + ScrollView
+ *      a. "Pick from contacts" CTA card (one-tap auto-fill)
+ *      b. FormGroup "Identity" — Name · Phone · Role (sheet)
+ *      c. FormGroup "Salary" — Monthly salary · Pay model pill row
+ *      d. Footer note
  */
 import * as Contacts from 'expo-contacts';
 import { router, Stack } from 'expo-router';
 import { useCallback, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   InteractionManager,
   Keyboard,
-  Modal,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,11 +37,18 @@ import { createParty, InvalidPhoneError } from '@/src/features/parties/parties';
 import { createStaff } from '@/src/features/staff/staff';
 import { type PayUnit } from '@/src/features/staff/types';
 import { useStaffRoles } from '@/src/features/staff/useStaffRoles';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SelectSheet } from '@/src/ui/v2/SelectSheet';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 export default function AddStaffScreen() {
+  const t = useThemeV2();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
@@ -66,8 +72,7 @@ export default function AddStaffScreen() {
         Alert.alert('Permission needed', 'Allow contacts access to pick a contact.');
         return;
       }
-      // Let layout settle before presenting the native picker — avoids
-      // a known iOS freeze when CNContactPicker arrives mid-keyboard.
+      // Let layout settle before presenting the native picker.
       await new Promise<void>((resolve) => {
         InteractionManager.runAfterInteractions(() => {
           setTimeout(resolve, 320);
@@ -150,10 +155,6 @@ export default function AddStaffScreen() {
           createdBy: user.uid,
         });
       } catch (err) {
-        // Staff write failed AFTER party succeeded — surface a clear
-        // message so the user knows the party doc landed and isn't
-        // confused about why the staff didn't appear. Most cases here
-        // are permission-denied (rare for a finance.write user).
         Alert.alert(
           'Staff creation failed',
           'The party was added but the staff record could not be saved. ' +
@@ -175,397 +176,232 @@ export default function AddStaffScreen() {
 
   if (!canWrite) {
     return (
-      <Screen bg="grouped" padded>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={styles.deniedHeader}>
-          <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-            <Ionicons name="arrow-back" size={20} color={color.text} />
-          </Pressable>
+        <AmbientBackground />
+        <SheetHeader
+          title="New staff"
+          onCancel={() => router.back()}
+          onSave={() => undefined}
+          saveDisabled
+        />
+        <View style={styles.centered}>
+          <Text variant="body" color="secondary" style={{ textAlign: 'center', paddingHorizontal: 32 }}>
+            You don't have permission to add staff. Ask a Super Admin or
+            Admin to grant you the Accountant role.
+          </Text>
         </View>
-        <Text variant="title" color="text" style={{ marginTop: 24 }}>Add Staff</Text>
-        <Text variant="body" color="textMuted" style={{ marginTop: 8 }}>
-          You don't have permission to add staff. Ask a Super Admin or Admin to grant you the Accountant role.
-        </Text>
-      </Screen>
+      </View>
     );
   }
 
   return (
-    <Screen bg="grouped" padded={false}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* Nav */}
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="close" size={22} color={color.text} />
-        </Pressable>
-        <View style={styles.navCenter}>
-          <Text variant="caption" color="textMuted" style={styles.navEyebrow}>STUDIO</Text>
-          <Text variant="bodyStrong" color="text">Add Staff</Text>
-        </View>
-        <Pressable
-          onPress={onSave}
-          disabled={busy}
-          hitSlop={12}
-          style={({ pressed }) => [pressed && { opacity: 0.6 }]}
-        >
-          {busy ? (
-            <ActivityIndicator color={color.primary} size="small" />
-          ) : (
-            <Text variant="bodyStrong" color="primary">Save</Text>
-          )}
-        </Pressable>
-      </View>
+      <SheetHeader
+        title="New staff"
+        cancelLabel="Cancel"
+        saveLabel="Save"
+        saveLoading={busy}
+        onCancel={() => router.back()}
+        onSave={() => void onSave()}
+      />
 
-      <ScrollView
-        contentContainerStyle={styles.body}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="on-drag"
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* Pick from Contacts CTA */}
-        <Pressable
-          onPress={pickContact}
-          style={({ pressed }) => [
-            styles.contactsBtn,
-            pressed && { opacity: 0.85 },
-          ]}
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          showsVerticalScrollIndicator={false}
         >
-          <Ionicons name="person-add-outline" size={18} color={color.primary} />
-          <Text variant="bodyStrong" color="primary">Pick from Contacts</Text>
-          <Ionicons
-            name="chevron-forward"
-            size={16}
-            color={color.primary}
-            style={{ marginLeft: 'auto' }}
-          />
-        </Pressable>
-
-        {/* Note: party type is hard-coded to "staff" since that's the
-            entity this form creates. Other party types (vendors,
-            clients, etc.) live in the Add Party flow. */}
-        <Text variant="caption" color="textMuted" style={styles.partyTypeHint}>
-          Adds a staff member AND a party (type: Staff) — they stay linked.
-        </Text>
-
-        {/* Name */}
-        <Text style={styles.fieldLabel}>NAME</Text>
-        <TextInput
-          value={name}
-          onChangeText={setName}
-          placeholder="e.g. Suresh Kumar"
-          placeholderTextColor={color.textFaint}
-          style={styles.input}
-          autoCapitalize="words"
-        />
-
-        {/* Phone */}
-        <Text style={styles.fieldLabel}>PHONE</Text>
-        <TextInput
-          value={phone}
-          onChangeText={setPhone}
-          placeholder="+91 9XXXXXXXXX"
-          placeholderTextColor={color.textFaint}
-          style={styles.input}
-          keyboardType="phone-pad"
-          autoCapitalize="none"
-        />
-
-        {/* Role dropdown */}
-        <View style={styles.roleHeader}>
-          <Text style={styles.fieldLabel}>ROLE / POSITION</Text>
-          <Pressable
-            onPress={() => router.push('/(app)/staff-role-library' as never)}
-            hitSlop={6}
-          >
-            <Text variant="caption" color="primary">Manage roles</Text>
-          </Pressable>
-        </View>
-        <Pressable
-          onPress={() => setRolePickerOpen(true)}
-          style={({ pressed }) => [
-            styles.dropdown,
-            pressed && { opacity: 0.85 },
-          ]}
-        >
-          <Ionicons name="briefcase-outline" size={16} color={color.text} />
-          <Text
-            variant="body"
-            color={role.trim() ? 'text' : 'textMuted'}
-            style={{ flex: 1 }}
-            numberOfLines={1}
-          >
-            {role.trim() || 'Select a role'}
-          </Text>
-          <Ionicons name="chevron-down" size={16} color={color.textMuted} />
-        </Pressable>
-
-        {/* Salary */}
-        <Text style={styles.fieldLabel}>MONTHLY SALARY (₹)</Text>
-        <TextInput
-          value={salary}
-          onChangeText={setSalary}
-          placeholder="0"
-          placeholderTextColor={color.textFaint}
-          style={styles.input}
-          keyboardType="decimal-pad"
-        />
-
-        {/* Pay model */}
-        <Text style={styles.fieldLabel}>PAY MODEL</Text>
-        <View style={styles.rowChips}>
-          {(['month', 'day'] as PayUnit[]).map((p) => {
-            const on = payUnit === p;
-            return (
-              <Pressable
-                key={p}
-                onPress={() => setPayUnit(p)}
-                style={[styles.bigChip, on && styles.bigChipOn]}
-              >
-                <Text variant="metaStrong" color={on ? 'onPrimary' : 'text'}>
-                  {p === 'month' ? 'Monthly' : 'Per-day'}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
-        <Text variant="caption" color="textMuted" style={{ marginTop: 4 }}>
-          {payUnit === 'month'
-            ? 'Full salary if all 22 working days attended; pro-rated otherwise.'
-            : 'Daily rate = monthly ÷ 22. Pays only for days present + half days.'}
-        </Text>
-
-        {/* Save fallback button */}
-        <Pressable
-          onPress={onSave}
-          disabled={busy}
-          style={({ pressed }) => [
-            styles.saveBtn,
-            pressed && { opacity: 0.85 },
-            busy && { opacity: 0.6 },
-          ]}
-        >
-          {busy ? (
-            <ActivityIndicator color={color.onPrimary} size="small" />
-          ) : (
-            <Text variant="bodyStrong" color="onPrimary">Save staff</Text>
-          )}
-        </Pressable>
-
-        <View style={{ height: space.xl }} />
-      </ScrollView>
-
-      {/* Role picker modal — same bottom-sheet pattern used elsewhere */}
-      <Modal
-        visible={rolePickerOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setRolePickerOpen(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <Pressable
-            style={StyleSheet.absoluteFill}
-            onPress={() => setRolePickerOpen(false)}
-          />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <View style={styles.modalHeader}>
-              <Text variant="bodyStrong" color="text">Select role</Text>
-              <Pressable onPress={() => setRolePickerOpen(false)} hitSlop={12}>
-                <Text variant="metaStrong" color="primary">Done</Text>
-              </Pressable>
-            </View>
-            <ScrollView style={{ maxHeight: 460 }}>
-              {roles.map((r) => {
-                const on = role.trim().toLowerCase() === r.label.toLowerCase();
-                return (
-                  <Pressable
-                    key={r.key}
-                    onPress={() => {
-                      setRole(r.label);
-                      setRolePickerOpen(false);
-                    }}
-                    style={({ pressed }) => [
-                      styles.roleRow,
-                      pressed && { backgroundColor: color.bgGrouped },
-                    ]}
-                  >
-                    <Text variant="body" color="text" style={{ flex: 1 }}>
-                      {r.label}
-                    </Text>
-                    {on ? (
-                      <Ionicons name="checkmark" size={18} color={color.primary} />
-                    ) : null}
-                  </Pressable>
-                );
-              })}
-              {/* Footer link to library — same access as the inline link
-                  above, kept here so the sheet is self-contained. */}
-              <Pressable
-                onPress={() => {
-                  setRolePickerOpen(false);
-                  router.push('/(app)/staff-role-library' as never);
+          {/* Pick from Contacts CTA */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+            <Pressable
+              onPress={pickContact}
+              style={({ pressed }) => [
+                styles.contactsBtn,
+                {
+                  backgroundColor:
+                    t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                  borderRadius: t.radii.card,
+                  borderColor: t.palette.blue.base + '33',
+                  borderWidth: t.hairline,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <View
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: t.palette.blue.base,
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
-                style={({ pressed }) => [
-                  styles.roleRow,
-                  styles.roleManageRow,
-                  pressed && { backgroundColor: color.bgGrouped },
-                ]}
               >
-                <Ionicons name="add-circle-outline" size={18} color={color.primary} />
-                <Text variant="metaStrong" color="primary">
-                  Manage roles in master library
+                <Ionicons name="person-add" size={17} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text variant="callout" style={{ color: t.palette.blue.base, fontWeight: '700' }}>
+                  Pick from Contacts
                 </Text>
-              </Pressable>
-            </ScrollView>
+                <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+                  Auto-fills name + phone in one tap.
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={t.palette.blue.base} />
+            </Pressable>
+            <Text
+              variant="caption1"
+              color="tertiary"
+              style={{ paddingHorizontal: 4, marginTop: 8, fontStyle: 'italic' }}
+            >
+              Adds a staff member AND a party (type: Staff) — they stay linked.
+            </Text>
           </View>
-        </View>
-      </Modal>
-    </Screen>
+
+          {/* Identity */}
+          <FormGroup header="Identity">
+            <InputRow
+              label="Name"
+              value={name}
+              onChangeText={setName}
+              placeholder="e.g. Suresh Kumar"
+              autoCapitalize="words"
+            />
+            <InputRow
+              label="Phone"
+              value={phone}
+              onChangeText={setPhone}
+              placeholder="+91 9XXXXXXXXX"
+              keyboardType="phone-pad"
+              autoCapitalize="none"
+            />
+            <Row
+              label="Role"
+              value={role.trim() || 'Pick a role'}
+              chevron
+              onPress={() => setRolePickerOpen(true)}
+              divider={false}
+            />
+          </FormGroup>
+
+          {/* Salary */}
+          <FormGroup
+            header="Salary"
+            footer={
+              payUnit === 'month'
+                ? 'Full salary if all 22 working days attended; pro-rated otherwise.'
+                : 'Daily rate = monthly ÷ 22. Pays only for days present + half days.'
+            }
+          >
+            <InputRow
+              label="Monthly salary"
+              value={salary}
+              onChangeText={setSalary}
+              placeholder="₹0"
+              keyboardType="decimal-pad"
+              autoCapitalize="none"
+            />
+            <View style={styles.payModelBlock}>
+              <Text
+                variant="caption2"
+                color="tertiary"
+                style={{ letterSpacing: 0.5, paddingHorizontal: 16, paddingTop: 12 }}
+              >
+                PAY MODEL
+              </Text>
+              <View style={[styles.pillRow, { paddingHorizontal: 12, paddingVertical: 10 }]}>
+                {(['month', 'day'] as PayUnit[]).map((p) => {
+                  const sel = payUnit === p;
+                  return (
+                    <Pressable
+                      key={p}
+                      onPress={() => setPayUnit(p)}
+                      hitSlop={6}
+                      style={({ pressed }) => [
+                        styles.pillChip,
+                        {
+                          backgroundColor: sel
+                            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+                            : t.colors.fill3,
+                          borderRadius: t.radii.pill,
+                          borderColor: sel ? t.palette.blue.base + '33' : 'transparent',
+                          borderWidth: sel ? 1 : 0,
+                        },
+                        pressed && { opacity: 0.85 },
+                      ]}
+                    >
+                      <Text
+                        variant="footnote"
+                        style={{
+                          color: sel ? t.palette.blue.base : t.colors.secondary,
+                          fontWeight: sel ? '700' : '500',
+                        }}
+                      >
+                        {p === 'month' ? 'Monthly' : 'Per-day'}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </FormGroup>
+
+          <View style={{ height: 24 }} />
+        </ScrollView>
+      </KeyboardAvoidingView>
+
+      {/* Role picker — adds a footer "Manage roles" link inside the sheet */}
+      <SelectSheet
+        open={rolePickerOpen}
+        title="Select role"
+        options={[
+          ...roles.map((r) => ({ key: r.label, label: r.label })),
+          { key: '__manage__', label: 'Manage roles in master library →' },
+        ]}
+        selected={role.trim() || undefined}
+        onPick={(k) => {
+          if (k === '__manage__') {
+            router.push('/(app)/staff-role-library' as never);
+            return;
+          }
+          setRole(k);
+        }}
+        onClose={() => setRolePickerOpen(false)}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  navBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    gap: space.sm,
-    borderBottomWidth: 1,
-    borderBottomColor: color.borderStrong,
-    backgroundColor: color.bg,
-  },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  navEyebrow: { letterSpacing: 1.2 },
-
-  deniedHeader: { flexDirection: 'row' },
-
-  body: {
-    padding: screenInset,
-    paddingBottom: 100,
-  },
+  centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  scroll: { paddingTop: 8, paddingBottom: 60 },
 
   contactsBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
+    padding: 12,
+  },
+
+  payModelBlock: {
+    paddingBottom: 0,
+  },
+  pillRow: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  pillChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 14,
-    paddingVertical: 14,
-    borderRadius: radius.sm,
-    borderWidth: 1,
-    borderColor: color.primary,
-    backgroundColor: color.primarySoft,
-    marginBottom: 6,
-  },
-  partyTypeHint: {
-    fontStyle: 'italic',
-    paddingHorizontal: 4,
-    paddingTop: 4,
-  },
-
-  fieldLabel: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 1.2,
-    marginTop: space.md,
-    marginBottom: 6,
-  },
-  input: {
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: 10,
-    fontSize: 16,
-    color: color.text,
-  },
-
-  roleHeader: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginTop: space.md,
-    marginBottom: 6,
-  },
-  dropdown: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    minHeight: 44,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-    borderRadius: radius.sm,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-
-  rowChips: { flexDirection: 'row', gap: 8 },
-  bigChip: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.bg,
-  },
-  bigChipOn: { backgroundColor: color.primary, borderColor: color.primary },
-
-  saveBtn: {
-    marginTop: space.lg,
-    backgroundColor: color.primary,
-    paddingVertical: 14,
-    borderRadius: radius.sm,
-    alignItems: 'center',
-  },
-
-  // Role picker modal
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  modalSheet: {
-    backgroundColor: color.bg,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    paddingTop: 6,
-    paddingBottom: 24,
-    maxHeight: '80%',
-  },
-  modalHandle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.border,
-    alignSelf: 'center',
-    marginBottom: 8,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.border,
-  },
-  roleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: space.md,
-    paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
-  },
-  roleManageRow: {
-    gap: 8,
-    backgroundColor: color.primarySoft,
+    paddingVertical: 8,
   },
 });

@@ -12,8 +12,8 @@
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -53,12 +53,7 @@ export function LightingCalculator({
   }, [length, width, bulbLumens, room]);
 
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="Lighting Estimator"
-      eyebrow="LUMENS & LAYOUT"
-    >
+    <ToolModal visible={visible} onClose={onClose} title="Lighting estimator">
       {/* ── Room type picker ─────────────────────────────────────────── */}
       <Section title="Room type">
         <ScrollView
@@ -66,35 +61,15 @@ export function LightingCalculator({
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.chipsRow}
         >
-          {LIGHTING_ROOMS.map((r) => {
-            const active = r.key === room.key;
-            return (
-              <Pressable
-                key={r.key}
-                onPress={() => setRoom(r)}
-                style={[styles.chip, active ? styles.chipActive : null]}
-              >
-                <Text
-                  style={
-                    active
-                      ? { ...styles.chipLabel, ...styles.chipLabelActive }
-                      : styles.chipLabel
-                  }
-                >
-                  {r.label.toUpperCase()}
-                </Text>
-                <Text
-                  style={
-                    active
-                      ? { ...styles.chipMeta, color: '#fff' }
-                      : styles.chipMeta
-                  }
-                >
-                  {r.lux} lux
-                </Text>
-              </Pressable>
-            );
-          })}
+          {LIGHTING_ROOMS.map((r) => (
+            <RoomChip
+              key={r.key}
+              label={r.label}
+              meta={`${r.lux} lux`}
+              active={r.key === room.key}
+              onPress={() => setRoom(r)}
+            />
+          ))}
         </ScrollView>
       </Section>
 
@@ -158,6 +133,60 @@ export function LightingCalculator({
   );
 }
 
+function RoomChip({
+  label,
+  meta,
+  active,
+  onPress,
+}: {
+  label: string;
+  meta: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.chip,
+        {
+          backgroundColor: active
+            ? (t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft)
+            : t.colors.surface,
+          borderRadius: t.radii.field,
+          borderColor: active
+            ? t.palette.blue.base + '33'
+            : (t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'),
+          borderWidth: t.hairline,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Text
+        variant="footnote"
+        style={{
+          color: active ? t.palette.blue.base : t.colors.label,
+          fontWeight: '700',
+          letterSpacing: 0.2,
+        }}
+      >
+        {label}
+      </Text>
+      <Text
+        variant="caption2"
+        style={{
+          color: active ? t.palette.blue.base : t.colors.secondary,
+          letterSpacing: 0.2,
+          marginTop: 1,
+        }}
+      >
+        {meta}
+      </Text>
+    </Pressable>
+  );
+}
+
 /** Visual guide for Kelvin colour temperature. Highlights the band that
  *  matches the currently-selected room. Renders six chips on a gradient
  *  background that goes from warm orange (2700K) to cool blue (6500K). */
@@ -168,15 +197,26 @@ function ColorTempGuide({
   recommendedK: number;
   roomLabel: string;
 }) {
-  // Find the recommendation entry to surface the use case copy.
+  const t = useThemeV2();
   const recommended =
     COLOR_TEMPS.find((c) => c.k === recommendedK) ?? COLOR_TEMPS[1];
 
   return (
-    <View style={{ gap: space.sm }}>
-      {/* The gradient bar — emulated with a row of coloured strips so we
-          don't pull in expo-linear-gradient just for this. */}
-      <View style={styles.gradientWrap}>
+    <View style={{ gap: 10 }}>
+      <View
+        style={[
+          styles.gradientWrap,
+          {
+            backgroundColor: t.colors.surface,
+            borderRadius: t.radii.field,
+            borderColor:
+              t.mode === 'dark'
+                ? 'rgba(255,255,255,0.05)'
+                : 'rgba(0,0,0,0.04)',
+            borderWidth: t.hairline,
+          },
+        ]}
+      >
         <View style={styles.gradientRow}>
           {COLOR_TEMPS.map((c, i) => (
             <View
@@ -190,15 +230,21 @@ function ColorTempGuide({
             />
           ))}
         </View>
-        <View style={styles.gradientLabels}>
+        <View
+          style={[
+            styles.gradientLabels,
+            { borderTopColor: t.colors.separator, borderTopWidth: t.hairline },
+          ]}
+        >
           {COLOR_TEMPS.map((c) => (
             <View key={c.k} style={styles.gradientLabelCol}>
               <Text
-                style={
-                  c.k === recommendedK
-                    ? { ...styles.gradientK, ...styles.gradientKActive }
-                    : styles.gradientK
-                }
+                variant="caption2"
+                style={{
+                  color: c.k === recommendedK ? t.palette.blue.base : t.colors.secondary,
+                  fontWeight: c.k === recommendedK ? '700' : '600',
+                  letterSpacing: 0.3,
+                }}
               >
                 {c.k}K
               </Text>
@@ -207,22 +253,49 @@ function ColorTempGuide({
         </View>
       </View>
 
-      <View style={styles.recommendCard}>
-        <Text style={styles.recommendEyebrow}>
-          RECOMMENDED FOR {roomLabel.toUpperCase()}
+      <View
+        style={[
+          styles.recommendCard,
+          {
+            backgroundColor:
+              t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+            borderRadius: t.radii.field,
+            borderColor: t.palette.blue.base + '33',
+            borderWidth: t.hairline,
+          },
+        ]}
+      >
+        <Text
+          variant="caption2"
+          style={{
+            color: t.palette.blue.base,
+            letterSpacing: 0.5,
+          }}
+        >
+          {`RECOMMENDED FOR ${roomLabel.toUpperCase()}`}
         </Text>
         <View style={styles.recommendRow}>
           <View
             style={[
               styles.recommendSwatch,
-              { backgroundColor: kelvinToHex(recommendedK) },
+              {
+                backgroundColor: kelvinToHex(recommendedK),
+                borderRadius: 8,
+                borderColor:
+                  t.mode === 'dark'
+                    ? 'rgba(255,255,255,0.10)'
+                    : 'rgba(0,0,0,0.06)',
+                borderWidth: t.hairline,
+              },
             ]}
           />
           <View style={{ flex: 1 }}>
-            <Text style={styles.recommendTitle}>
+            <Text variant="callout" color="label" style={{ fontWeight: '700' }}>
               {recommended.k}K · {recommended.label}
             </Text>
-            <Text style={styles.recommendUse}>{recommended.use}</Text>
+            <Text variant="caption1" color="secondary" style={{ marginTop: 2 }}>
+              {recommended.use}
+            </Text>
           </View>
         </View>
       </View>
@@ -246,102 +319,41 @@ function kelvinToHex(k: number): string {
 }
 
 const styles = StyleSheet.create({
-  row2: { flexDirection: 'row', gap: space.sm },
+  row2: { flexDirection: 'row', gap: 10 },
   col: { flex: 1 },
 
-  chipsRow: { gap: 8, paddingRight: space.md },
+  chipsRow: { gap: 8, paddingRight: 16 },
   chip: {
-    paddingHorizontal: space.sm,
-    paddingVertical: 8,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
     alignItems: 'flex-start',
-    gap: 2,
-    minWidth: 100,
-  },
-  chipActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
-  },
-  chipLabel: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.text,
-    letterSpacing: 0.8,
-  },
-  chipLabelActive: { color: '#fff' },
-  chipMeta: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    color: color.textMuted,
-    letterSpacing: 0.4,
+    minWidth: 110,
   },
 
   gradientWrap: {
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    borderRadius: radius.sm,
     overflow: 'hidden',
   },
-  gradientRow: { flexDirection: 'row', height: 34 },
+  gradientRow: { flexDirection: 'row', height: 36 },
   gradientLabels: {
     flexDirection: 'row',
-    backgroundColor: color.surface,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.borderStrong,
+    paddingVertical: 6,
   },
   gradientLabelCol: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 4,
-  },
-  gradientK: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '600',
-    color: color.textMuted,
-    letterSpacing: 0.4,
-  },
-  gradientKActive: {
-    color: color.primary,
-    fontSize: 10,
   },
 
   recommendCard: {
-    backgroundColor: color.primarySoft,
-    borderRadius: radius.md,
-    padding: space.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.primary,
-    gap: 6,
+    padding: 12,
+    gap: 8,
   },
-  recommendEyebrow: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '700',
-    color: color.primary,
-    letterSpacing: 1.2,
+  recommendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
   },
-  recommendRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   recommendSwatch: {
-    width: 28,
-    height: 28,
-    borderRadius: radius.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-  },
-  recommendTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    fontWeight: '700',
-    color: color.text,
-  },
-  recommendUse: {
-    fontSize: 12,
-    color: color.textMuted,
-    marginTop: 2,
+    width: 32,
+    height: 32,
   },
 });

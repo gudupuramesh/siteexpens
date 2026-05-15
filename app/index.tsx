@@ -1,7 +1,8 @@
 /**
- * Entry redirect. Decides where the user should land based on auth +
- * onboarding state:
- *   - still checking            -> centered spinner
+ * Entry redirect — v2 design.
+ *
+ * Decides where the user should land based on auth + onboarding state:
+ *   - still checking            -> centered spinner over AmbientBackground
  *   - signed out                -> /(auth)/sign-in
  *   - signed in, no org yet     -> /(onboarding)/organization
  *   - signed in, has an org     -> /(app)
@@ -24,23 +25,24 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { useAuth } from '@/src/features/auth/useAuth';
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { auth } from '@/src/lib/firebase';
-import { color } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { useThemeV2 } from '@/src/theme/v2';
 
 export default function Index() {
+  const t = useThemeV2();
   const { user, loading: authLoading } = useAuth();
   const { data: userDoc, loading: docLoading } = useCurrentUserDoc();
 
-  // Race guard — see file header for details. Mismatch between Firebase's
-  // synchronous `auth().currentUser` and the (slower) AuthProvider context
-  // means we just signed in but the listener hasn't propagated yet.
+  // Race guard — see file header.
   const inTransition = !!auth.currentUser && !user;
-
   const loading = authLoading || inTransition || (user && docLoading);
 
   if (loading) {
     return (
-      <View style={styles.container}>
-        <ActivityIndicator color={color.primary} />
+      <View style={[styles.container, { backgroundColor: t.colors.bg }]}>
+        <AmbientBackground />
+        <ActivityIndicator color={t.palette.blue.base} />
       </View>
     );
   }
@@ -59,6 +61,5 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: color.bg,
   },
 });

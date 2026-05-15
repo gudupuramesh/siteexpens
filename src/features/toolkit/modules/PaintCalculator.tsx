@@ -7,8 +7,7 @@
 import { useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, space } from '@/src/theme';
+import { Text } from '@/src/ui/v2/Text';
 
 import { ToolModal } from '../components/ToolModal';
 import { NumberField, parseNum } from '../components/NumberField';
@@ -26,7 +25,7 @@ export function PaintCalculator({
   // Inputs are in feet because that's what site teams measure in.
   const [length, setLength] = useState('20');
   const [height, setHeight] = useState('10');
-  const [openings, setOpenings] = useState('21');   // ~one door + one window default
+  const [openings, setOpenings] = useState('21'); // ~one door + one window default
 
   const result = useMemo(() => {
     const L = parseNum(length) ?? 0;
@@ -49,12 +48,7 @@ export function PaintCalculator({
   const okInputs = result.netSqft > 0;
 
   return (
-    <ToolModal
-      visible={visible}
-      onClose={onClose}
-      title="Paint Calculator"
-      eyebrow="ESTIMATOR"
-    >
+    <ToolModal visible={visible} onClose={onClose} title="Paint calculator">
       <Section title="Wall dimensions">
         <View style={styles.row2}>
           <View style={styles.col}>
@@ -111,11 +105,10 @@ export function PaintCalculator({
           unit="L"
           tone="primary"
         />
-        <Text style={styles.note}>
-          Add ~10% extra for primer / textured walls / touch-ups.
-          Adjust the coverage constant in{' '}
-          <Text style={styles.code}>src/features/toolkit/constants.ts</Text>{' '}
-          if your supplier quotes differently.
+        <Text variant="caption1" color="secondary" style={styles.note}>
+          Add ~10% extra for primer / textured walls / touch-ups. Adjust the
+          coverage constant in <Text variant="caption1" color="tertiary">src/features/toolkit/constants.ts</Text> if your supplier
+          quotes differently.
         </Text>
       </Section>
     </ToolModal>
@@ -123,18 +116,11 @@ export function PaintCalculator({
 }
 
 const styles = StyleSheet.create({
-  row2: { flexDirection: 'row', gap: space.sm },
+  row2: { flexDirection: 'row', gap: 10 },
   col: { flex: 1 },
   note: {
-    fontSize: 11,
-    color: color.textFaint,
     marginTop: 4,
-    fontFamily: fontFamily.sans,
-    lineHeight: 16,
-  },
-  code: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    color: color.textMuted,
+    paddingHorizontal: 4,
+    lineHeight: 17,
   },
 });

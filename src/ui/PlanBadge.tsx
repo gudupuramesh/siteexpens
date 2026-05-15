@@ -22,7 +22,7 @@ import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { color, radius, space } from '@/src/theme';
-import { Text } from '@/src/ui/Text';
+import { Text } from '@/src/ui/v2/Text';
 import { PLAN_LABELS } from '@/src/features/billing/limits';
 import type { PlanTier } from '@/src/features/billing/types';
 
@@ -78,8 +78,8 @@ export function PlanBadge({
       <Ionicons name={TIER_ICON[tier]} size={iconSize} color={color.primary} />
       {iconOnly ? null : (
         <Text
-          variant={isMd ? 'metaStrong' : 'caption'}
-          color="primary"
+          variant={isMd ? 'footnote' : 'caption2'}
+          color="label"
           style={styles.label}
         >
           {PLAN_LABELS[tier]}

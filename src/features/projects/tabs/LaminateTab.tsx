@@ -1,12 +1,13 @@
 /**
- * Laminate tab — list of laminate specs grouped by room.
+ * Laminate tab — v2 design.
  *
- * Visual language matches the project's TransactionTab / party detail
- * pattern: hairline borders, sharp corners, dense rows, mono meta
- * line. Tapping a row goes to the read-only detail view; the edit
- * pencil there sends to the existing edit-laminate form.
+ * Layout:
+ *   1. Summary KPI strip — Rooms · Laminates · Brands
+ *   2. Per-room sections — small caps room header + laminate row cards
+ *      (thumbnail + brand + mono code/finish/edge-band meta + notes)
+ *   3. FAB — Add laminate (per `laminate.write` capability)
  */
-import { FlatList, Image, Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Image, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -14,20 +15,24 @@ import * as Haptics from 'expo-haptics';
 import { useLaminates } from '@/src/features/laminates/useLaminates';
 import type { Laminate, RoomLaminates } from '@/src/features/laminates/types';
 import { Can } from '@/src/ui/Can';
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, screenInset, shadow, space } from '@/src/theme';
 
-// ── Row ──────────────────────────────────────────────────────────────
+import { FAB } from '@/src/ui/v2/FAB';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
+import { useThemeV2 } from '@/src/theme/v2';
 
 function LaminateRow({
   item,
   projectId,
+  isFirst,
+  isLast,
 }: {
   item: Laminate;
   projectId: string;
+  isFirst: boolean;
+  isLast: boolean;
 }) {
-  // Mono meta line stitched together from the most identifying
-  // fields. Each piece omits cleanly when missing — `filter(Boolean)`.
+  const t = useThemeV2();
   const meta = [
     item.laminateCode,
     item.finish,
@@ -37,19 +42,40 @@ function LaminateRow({
     .join('  ·  ')
     .toUpperCase();
 
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
   return (
     <Pressable
       onPress={() =>
-        router.push(
-          `/(app)/projects/${projectId}/laminate/${item.id}` as never,
-        )
+        router.push(`/(app)/projects/${projectId}/laminate/${item.id}` as never)
       }
-      style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+      style={({ pressed }) => [
+        styles.row,
+        {
+          backgroundColor: t.colors.surface,
+          borderTopLeftRadius: isFirst ? t.radii.card : 0,
+          borderTopRightRadius: isFirst ? t.radii.card : 0,
+          borderBottomLeftRadius: isLast ? t.radii.card : 0,
+          borderBottomRightRadius: isLast ? t.radii.card : 0,
+          borderColor: cardBorder,
+          borderTopWidth: isFirst ? t.hairline : 0,
+          borderBottomWidth: t.hairline,
+          borderLeftWidth: t.hairline,
+          borderRightWidth: t.hairline,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
     >
-      {/* Square hairline-bordered thumbnail (matches TransactionTab
-          icon shape — distinct from the rounded chip language used
-          for parties). */}
-      <View style={styles.thumb}>
+      <View
+        style={[
+          styles.thumb,
+          {
+            backgroundColor: t.colors.fill3,
+            borderRadius: t.radii.tile,
+          },
+        ]}
+      >
         {item.photoUrl ? (
           <Image
             source={{ uri: item.photoUrl }}
@@ -58,33 +84,45 @@ function LaminateRow({
           />
         ) : (
           <View style={styles.thumbEmpty}>
-            <Ionicons name="image-outline" size={16} color={color.textFaint} />
+            <Ionicons name="image-outline" size={18} color={t.colors.tertiary} />
           </View>
         )}
       </View>
 
       <View style={styles.body}>
-        <Text variant="rowTitle" color="text" numberOfLines={1}>
+        <Text variant="callout" color="label" numberOfLines={1}>
           {item.brand}
         </Text>
         {meta ? (
-          <Text style={styles.meta} numberOfLines={1}>
+          <Text
+            variant="caption2"
+            style={{
+              color: t.palette.blue.base,
+              fontWeight: '700',
+              letterSpacing: 0.6,
+              marginTop: 4,
+            }}
+            numberOfLines={1}
+          >
             {meta}
           </Text>
         ) : null}
         {item.notes ? (
-          <Text variant="meta" color="textMuted" numberOfLines={1} style={styles.notes}>
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 4 }}
+            numberOfLines={1}
+          >
             {item.notes}
           </Text>
         ) : null}
       </View>
 
-      <Ionicons name="chevron-forward" size={16} color={color.textFaint} />
+      <Ionicons name="chevron-forward" size={14} color={t.colors.tertiary} />
     </Pressable>
   );
 }
-
-// ── Section ──────────────────────────────────────────────────────────
 
 function RoomSection({
   room,
@@ -96,65 +134,70 @@ function RoomSection({
   return (
     <View style={styles.section}>
       <View style={styles.sectionHeader}>
-        <Text style={styles.sectionLabel}>
+        <Text
+          variant="caption2"
+          color="secondary"
+          style={{ letterSpacing: 0.5 }}
+        >
           {room.roomName.toUpperCase()}
         </Text>
-        <Text style={styles.sectionCount}>
-          {room.laminates.length} {room.laminates.length === 1 ? 'item' : 'items'}
+        <Text
+          variant="caption2"
+          color="tertiary"
+          style={{ letterSpacing: 0.4 }}
+        >
+          {room.laminates.length} {room.laminates.length === 1 ? 'ITEM' : 'ITEMS'}
         </Text>
       </View>
       <View style={styles.sectionBody}>
         {room.laminates.map((lam, i) => (
-          <View key={lam.id}>
-            {i > 0 ? <View style={styles.rowDivider} /> : null}
-            <LaminateRow item={lam} projectId={projectId} />
-          </View>
+          <LaminateRow
+            key={lam.id}
+            item={lam}
+            projectId={projectId}
+            isFirst={i === 0}
+            isLast={i === room.laminates.length - 1}
+          />
         ))}
       </View>
     </View>
   );
 }
 
-// ── Tab ──────────────────────────────────────────────────────────────
-
 export function LaminateTab() {
+  const t = useThemeV2();
+  const refresh = usePullToRefresh();
   const { id: projectId } = useLocalSearchParams<{ id: string }>();
   const { rooms, data, loading } = useLaminates(projectId);
   const brands = new Set(data.map((l) => l.brand));
 
   return (
     <View style={styles.container}>
-      {/* Summary strip — same shape as TransactionTab. */}
-      <View style={styles.summaryBar}>
-        <View style={styles.summaryCell}>
-          <Text style={styles.summaryLabel}>ROOMS</Text>
-          <Text style={styles.summaryValue}>{rooms.length}</Text>
-        </View>
-        <View style={styles.summaryDivider} />
-        <View style={styles.summaryCell}>
-          <Text style={styles.summaryLabel}>LAMINATES</Text>
-          <Text style={styles.summaryValue}>{data.length}</Text>
-        </View>
-        <View style={styles.summaryDivider} />
-        <View style={styles.summaryCell}>
-          <Text style={styles.summaryLabel}>BRANDS</Text>
-          <Text style={styles.summaryValue}>{brands.size}</Text>
-        </View>
+      {/* Summary KPI strip — all neutral per the colour discipline (only
+          blue/red/orange/green carry meaning; metric counts are categorical
+          data, not actionable status). */}
+      <View style={styles.kpiRow}>
+        <KpiTile label="ROOMS" value={String(rooms.length)} />
+        <KpiTile label="LAMINATES" value={String(data.length)} />
+        <KpiTile label="BRANDS" value={String(brands.size)} />
       </View>
 
       {loading && data.length === 0 ? (
         <View style={styles.empty}>
-          <Text variant="meta" color="textMuted">Loading laminates…</Text>
+          <Text variant="footnote" color="secondary">Loading laminates…</Text>
         </View>
       ) : rooms.length === 0 ? (
         <View style={styles.empty}>
-          <Ionicons name="layers-outline" size={32} color={color.textFaint} />
-          <Text variant="bodyStrong" color="text" style={{ marginTop: space.xs }}>
+          <Ionicons name="layers-outline" size={32} color={t.colors.tertiary} />
+          <Text variant="callout" color="label" style={{ marginTop: 12, fontWeight: '600' }}>
             No laminates added
           </Text>
-          <Text variant="meta" color="textMuted" align="center" style={{ maxWidth: 280 }}>
-            Add laminate selections for each room — brand, finish, edge band,
-            and reference photos.
+          <Text
+            variant="caption1"
+            color="secondary"
+            style={{ marginTop: 4, textAlign: 'center', paddingHorizontal: 32, maxWidth: 320 }}
+          >
+            Add laminate selections for each room — brand, finish, edge band, and reference photos.
           </Text>
         </View>
       ) : (
@@ -164,120 +207,150 @@ export function LaminateTab() {
           renderItem={({ item }) => <RoomSection room={item} projectId={projectId!} />}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
+          refreshControl={<RefreshControl {...refresh.props} />}
         />
       )}
 
-      {/* FAB */}
       <Can capability="laminate.write">
-        <Pressable
+        <FAB
+          icon="add"
           onPress={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
             router.push(`/(app)/projects/${projectId}/add-laminate` as never);
           }}
-          style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.94 }] }]}
+          bottomOffset={24}
           accessibilityLabel="Add laminate"
-        >
-          <Ionicons name="add" size={24} color={color.onPrimary} />
-        </Pressable>
+        />
       </Can>
     </View>
   );
 }
 
-// ── Styles ───────────────────────────────────────────────────────────
+/**
+ * KPI metric tile — neutral by design.
+ *
+ * Per the app-wide colour discipline (only blue/red/orange/green carry
+ * meaning), KPI counts render in neutral theme tokens regardless of metric.
+ * The `tone` and `bg` props are kept on the type for back-compat but their
+ * values are ignored.
+ */
+function KpiTile({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+  /** @deprecated value renders in neutral label colour. */
+  tone?: string;
+  /** @deprecated dot renders with neutral fill3 background. */
+  bg?: string;
+}) {
+  const t = useThemeV2();
+  return (
+    <View
+      style={[
+        styles.kpiTile,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: t.radii.card,
+          borderColor:
+            t.mode === 'dark'
+              ? 'rgba(255,255,255,0.05)'
+              : 'rgba(0,0,0,0.04)',
+          borderWidth: t.hairline,
+        },
+      ]}
+    >
+      <View style={[styles.kpiDot, { backgroundColor: t.colors.fill3 }]}>
+        <View style={[styles.kpiDotInner, { backgroundColor: t.colors.tertiary }]} />
+      </View>
+      <View style={styles.kpiText}>
+        <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4, fontSize: 9 }}>
+          {label}
+        </Text>
+        <Text
+          variant="footnote"
+          color="label"
+          style={{
+            fontWeight: '700',
+            fontVariant: ['tabular-nums'],
+            marginTop: 1,
+          }}
+          numberOfLines={1}
+        >
+          {value}
+        </Text>
+      </View>
+    </View>
+  );
+}
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: color.bgGrouped },
+  container: { flex: 1 },
 
-  // Summary strip
-  summaryBar: {
+  kpiRow: {
     flexDirection: 'row',
-    backgroundColor: color.bg,
-    marginHorizontal: screenInset,
-    marginTop: space.sm,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    overflow: 'hidden',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    gap: 8,
   },
-  summaryCell: {
+  kpiTile: {
     flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     paddingVertical: 10,
-    paddingHorizontal: 10,
-    gap: 2,
-    alignItems: 'flex-start',
+    paddingHorizontal: 12,
   },
-  summaryLabel: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 1.2,
+  kpiDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
   },
-  summaryValue: {
-    fontFamily: fontFamily.mono,
-    fontSize: 18,
-    fontWeight: '700',
-    color: color.text,
-    fontVariant: ['tabular-nums'],
-    letterSpacing: -0.3,
+  kpiDotInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
-  summaryDivider: {
-    width: StyleSheet.hairlineWidth,
-    backgroundColor: color.borderStrong,
+  kpiText: {
+    flex: 1,
+    minWidth: 0,
   },
 
-  // Section (room)
+  // Section
   section: {
-    marginTop: space.md,
-    paddingHorizontal: screenInset,
+    marginTop: 18,
+    paddingHorizontal: 16,
   },
   sectionHeader: {
     flexDirection: 'row',
-    alignItems: 'baseline',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
   },
-  sectionLabel: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 1.4,
-  },
-  sectionCount: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    color: color.textFaint,
-    letterSpacing: 1,
-  },
-  sectionBody: {
-    backgroundColor: color.bg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-  },
+  sectionBody: {},
 
   // Row
   row: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-  },
-  rowDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.borderStrong,
+    gap: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   thumb: {
     width: 56,
     height: 56,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
     overflow: 'hidden',
   },
-  thumbImg: { width: '100%', height: '100%' },
+  thumbImg: {
+    width: '100%',
+    height: '100%',
+  },
   thumbEmpty: {
     flex: 1,
     alignItems: 'center',
@@ -286,43 +359,13 @@ const styles = StyleSheet.create({
   body: {
     flex: 1,
     minWidth: 0,
-    gap: 2,
-  },
-  meta: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '600',
-    color: color.primary,
-    letterSpacing: 0.8,
-    marginTop: 2,
-  },
-  notes: {
-    marginTop: 2,
   },
 
-  // List
   listContent: { paddingBottom: 100 },
-
-  // Empty
   empty: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: screenInset * 2,
-    gap: space.xs,
-  },
-
-  // FAB
-  fab: {
-    position: 'absolute',
-    right: screenInset,
-    bottom: space.xl,
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: color.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    ...shadow.fab,
+    paddingHorizontal: 16,
   },
 });

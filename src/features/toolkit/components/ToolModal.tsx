@@ -1,9 +1,13 @@
 /**
- * Modal wrapper for every Toolkit module.
+ * v2 modal wrapper for every Toolkit module.
  *
- * One consistent shell — back/close header, scrollable body, optional
- * sticky footer — so each module focuses on its own form/output and
- * doesn't re-implement chrome.
+ * Pattern: native iOS page-sheet with v2 ambient background, single-line
+ * header (title + close X on the right), KeyboardAvoidingView so the
+ * keyboard never overlaps focused inputs, and a scrollable body that
+ * children can pad freely.
+ *
+ * Drops the v1 eyebrow + left-close conventions in favour of the iOS-26
+ * sheet vocabulary used by the rest of v2 (Account / CRM / Lead / Apt).
  */
 import type { ReactNode } from 'react';
 import {
@@ -16,18 +20,17 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, space } from '@/src/theme';
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 export type ToolModalProps = {
   visible: boolean;
   onClose: () => void;
   title: string;
-  /** Optional small caps eyebrow above the title — e.g. "CONVERTER". */
-  eyebrow?: string;
-  /** Disable the inner ScrollView (e.g. for Bubble Level / Compass which
-   *  fill the viewport with their own UI). */
+  /** Disable the inner ScrollView (e.g. for SectionList screens). */
   scroll?: boolean;
   children: ReactNode;
 };
@@ -36,81 +39,100 @@ export function ToolModal({
   visible,
   onClose,
   title,
-  eyebrow,
   scroll = true,
   children,
 }: ToolModalProps) {
-  const Body = scroll ? ScrollView : View;
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
 
   return (
     <Modal
       visible={visible}
       animationType="slide"
       onRequestClose={onClose}
-      statusBarTranslucent={false}
+      presentationStyle="pageSheet"
     >
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.flex}
-      >
-        <View style={styles.root}>
-          <View style={styles.header}>
-            <Pressable onPress={onClose} hitSlop={12} style={styles.headerBtn}>
-              <Ionicons name="close" size={22} color={color.textMuted} />
-            </Pressable>
-            <View style={styles.titleWrap}>
-              {eyebrow ? (
-                <Text style={styles.eyebrow}>{eyebrow}</Text>
-              ) : null}
-              <Text variant="title" numberOfLines={1}>
-                {title}
-              </Text>
-            </View>
-            <View style={styles.headerBtn} />
-          </View>
+      <View style={[styles.root, { backgroundColor: t.colors.bg }]}>
+        <AmbientBackground />
 
-          <Body
-            style={styles.body}
-            contentContainerStyle={scroll ? styles.scrollContent : undefined}
-            keyboardShouldPersistTaps={scroll ? 'handled' : undefined}
+        {/* Header — title (left) + close X (right). Hairline divider sits
+            beneath so the body content reads as a separate plane. */}
+        <View
+          style={[
+            styles.header,
+            {
+              paddingTop: insets.top > 0 ? insets.top + 6 : 14,
+              borderBottomColor: t.colors.separator,
+              borderBottomWidth: t.hairline,
+            },
+          ]}
+        >
+          <Text
+            variant="headline"
+            color="label"
+            style={{ flex: 1, fontWeight: '700' }}
+            numberOfLines={1}
           >
-            {children}
-          </Body>
+            {title}
+          </Text>
+          <Pressable
+            onPress={onClose}
+            hitSlop={10}
+            style={({ pressed }) => [
+              styles.closeBtn,
+              {
+                backgroundColor: t.colors.fill3,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.7 },
+            ]}
+            accessibilityLabel="Close"
+          >
+            <Ionicons name="close" size={18} color={t.colors.secondary} />
+          </Pressable>
         </View>
-      </KeyboardAvoidingView>
+
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={styles.flex}
+        >
+          {scroll ? (
+            <ScrollView
+              contentContainerStyle={styles.scrollContent}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              showsVerticalScrollIndicator={false}
+            >
+              {children}
+            </ScrollView>
+          ) : (
+            <View style={styles.flex}>{children}</View>
+          )}
+        </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   flex: { flex: 1 },
-  root: { flex: 1, backgroundColor: color.bg },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: space.sm,
-    paddingTop: 50,
-    paddingBottom: space.sm,
-    backgroundColor: color.bg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
-    gap: space.xs,
+    paddingHorizontal: 20,
+    paddingBottom: 12,
+    gap: 12,
   },
-  headerBtn: {
+  closeBtn: {
     width: 32,
     height: 32,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  titleWrap: { flex: 1 },
-  eyebrow: {
-    fontFamily: fontFamily.mono,
-    fontSize: 9,
-    fontWeight: '600',
-    color: color.textFaint,
-    letterSpacing: 1.4,
-    marginBottom: 2,
+  scrollContent: {
+    paddingTop: 20,
+    paddingBottom: 60,
+    gap: 22,
   },
-  body: { flex: 1 },
-  scrollContent: { padding: space.md, paddingBottom: 60, gap: space.md },
 });

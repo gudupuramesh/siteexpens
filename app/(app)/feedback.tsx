@@ -1,36 +1,33 @@
 /**
- * Feedback form — full-screen submission flow.
+ * Send Feedback — v2 design.
  *
  * Layout (top → bottom):
- *   1. Custom nav header with back chevron
- *   2. Type selector — 3-way segmented control (Bug / Feature / General)
- *   3. Module dropdown — opens a sheet picker with all app modules
- *      plus an "Other" option that reveals a free-text label input
- *   4. Description — multiline text area
- *   5. Screenshot grid — up to 4 thumbnails; tap empty slot to add
- *   6. Device info card — read-only, shows what we'll attach
- *   7. Submit button — disabled until type + module + description are present
+ *   1. SheetHeader: Cancel · "Send feedback" · Send
+ *   2. Intro hint
+ *   3. FormGroup "Type" — 3-up tone-tinted segmented control (Bug · Feature · General)
+ *   4. FormGroup "Screen" — Row that opens a bottom-sheet picker; when
+ *      "Other" is picked an extra InputRow appears for free-text label
+ *   5. FormGroup "Description" — multiline InputRow + char counter
+ *   6. Screenshot grid — up to 4 thumbnails + dashed "Add" tile
+ *   7. FormGroup "Device info" — read-only Rows (transparent disclosure)
  *
- * On submit: uploads screenshots to R2, writes `feedback/{id}` doc,
- * shows a success Alert, navigates back. Errors surface as Alerts —
- * the form preserves the user's input so they can retry without
- * re-typing.
+ * On submit: uploads screenshots to R2, writes `feedback/{id}` doc, shows
+ * a success Alert, navigates back. Errors surface as Alerts — the form
+ * preserves the user's input so they can retry without re-typing.
  */
 import * as ImagePicker from 'expo-image-picker';
 import { router, Stack } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
-  FlatList,
   Image,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
-  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -49,8 +46,14 @@ import {
   type FeedbackModuleKey,
   type FeedbackType,
 } from '@/src/features/feedback/types';
-import { Text } from '@/src/ui/Text';
-import { color, fontFamily, radius, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { InputRow } from '@/src/ui/v2/InputRow';
+import { Row } from '@/src/ui/v2/Row';
+import { SheetHeader } from '@/src/ui/v2/SheetHeader';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 const MAX_SCREENSHOTS = 4;
 const MAX_DESCRIPTION = 4000;
@@ -58,14 +61,16 @@ const MAX_DESCRIPTION = 4000;
 const TYPE_OPTIONS: ReadonlyArray<{
   key: FeedbackType;
   label: string;
-  icon: React.ComponentProps<typeof Ionicons>['name'];
+  icon: keyof typeof Ionicons.glyphMap;
+  tone: 'red' | 'yellow' | 'blue';
 }> = [
-  { key: 'bug', label: 'Bug', icon: 'bug-outline' },
-  { key: 'feature', label: 'Feature', icon: 'bulb-outline' },
-  { key: 'general', label: 'Feedback', icon: 'chatbubble-outline' },
+  { key: 'bug', label: 'Bug', icon: 'bug-outline', tone: 'red' },
+  { key: 'feature', label: 'Feature', icon: 'bulb-outline', tone: 'yellow' },
+  { key: 'general', label: 'General', icon: 'chatbubble-outline', tone: 'blue' },
 ];
 
 export default function FeedbackScreen() {
+  const t = useThemeV2();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { data: userDoc } = useCurrentUserDoc();
@@ -73,17 +78,14 @@ export default function FeedbackScreen() {
   const { claims } = useTokenClaims();
   const device = useDeviceInfo();
 
-  // Form state
   const [type, setType] = useState<FeedbackType>('general');
   const [moduleKey, setModuleKey] = useState<FeedbackModuleKey | null>(null);
   const [moduleCustom, setModuleCustom] = useState('');
   const [description, setDescription] = useState('');
-  const [screenshots, setScreenshots] = useState<string[]>([]); // local URIs
+  const [screenshots, setScreenshots] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  // Resolve user role for the active org so the admin portal sees
-  // "Manager in Happy Interior" not just a uid.
   const roleLabel = useMemo(() => {
     if (!org?.id) return '';
     const roleKey = (claims.orgs?.[org.id] ?? null) as RoleKey | null;
@@ -101,8 +103,6 @@ export default function FeedbackScreen() {
     description.trim().length > 0 &&
     (moduleKey !== 'other' || moduleCustom.trim().length > 0);
 
-  // ── Image picker ──────────────────────────────────────────────────
-
   const addScreenshot = useCallback(async () => {
     if (screenshots.length >= MAX_SCREENSHOTS) {
       Alert.alert('Limit reached', `You can attach up to ${MAX_SCREENSHOTS} screenshots.`);
@@ -117,8 +117,6 @@ export default function FeedbackScreen() {
             Alert.alert('Permission needed', 'Allow photo access to attach screenshots.');
             return;
           }
-          // allowsMultipleSelection = true so the user can pick the
-          // remaining N slots in one shot. Cap at the remaining count.
           const remaining = MAX_SCREENSHOTS - screenshots.length;
           const result = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ['images'],
@@ -141,7 +139,9 @@ export default function FeedbackScreen() {
           }
           const result = await ImagePicker.launchCameraAsync({ quality: 0.9 });
           if (result.canceled || !result.assets[0]?.uri) return;
-          setScreenshots((prev) => [...prev, result.assets[0].uri].slice(0, MAX_SCREENSHOTS));
+          setScreenshots((prev) =>
+            [...prev, result.assets[0].uri].slice(0, MAX_SCREENSHOTS),
+          );
         },
       },
       { text: 'Cancel', style: 'cancel' },
@@ -151,8 +151,6 @@ export default function FeedbackScreen() {
   const removeScreenshot = useCallback((uri: string) => {
     setScreenshots((prev) => prev.filter((u) => u !== uri));
   }, []);
-
-  // ── Submit ────────────────────────────────────────────────────────
 
   const onSubmit = useCallback(async () => {
     if (!canSubmit || !user || !moduleKey) return;
@@ -187,70 +185,107 @@ export default function FeedbackScreen() {
     }
   }, [
     canSubmit, user, moduleKey, type, moduleCustom, description, screenshots,
-    userDoc?.phoneNumber, userDoc?.displayName, roleLabel, org?.id, org?.name, device,
+    userDoc?.phoneNumber, userDoc?.displayName, userDoc?.phoneNumber, roleLabel,
+    org?.id, org?.name, device,
   ]);
 
-  // ── Render ────────────────────────────────────────────────────────
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
+  const descriptionPlaceholder =
+    type === 'bug'
+      ? 'Steps to reproduce, what happened vs. what you expected.'
+      : type === 'feature'
+        ? 'What would you like the app to do, and why is it useful?'
+        : "Tell us what's on your mind.";
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top }]}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* Header */}
-      <View style={styles.header}>
-        <Pressable
-          onPress={() => router.back()}
-          hitSlop={12}
-          style={({ pressed }) => [styles.backBtn, pressed && { opacity: 0.6 }]}
-          accessibilityLabel="Back"
-        >
-          <Ionicons name="chevron-back" size={22} color={color.primary} />
-          <Text variant="body" color="primary">Back</Text>
-        </Pressable>
-        <Text variant="rowTitle" color="text" style={styles.headerTitle}>
-          Send feedback
-        </Text>
-        <View style={styles.headerSpacer} />
-      </View>
+      <SheetHeader
+        title="Send feedback"
+        cancelLabel="Cancel"
+        saveLabel="Send"
+        saveLoading={submitting}
+        saveDisabled={!canSubmit}
+        onCancel={() => router.back()}
+        onSave={() => void onSubmit()}
+      />
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={0}
       >
         <ScrollView
-          contentContainerStyle={styles.scroll}
+          contentContainerStyle={{ paddingBottom: 60 + insets.bottom }}
+          keyboardDismissMode="on-drag"
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
           {/* Intro */}
-          <Text variant="caption" color="textMuted" style={styles.intro}>
-            Found a bug, missing a feature, or have a suggestion? Tell us — every
-            submission goes straight to the team.
+          <Text
+            variant="footnote"
+            color="secondary"
+            style={{
+              paddingHorizontal: 24,
+              paddingTop: 18,
+            }}
+          >
+            Found a bug, missing a feature, or have a suggestion? Every
+            submission lands directly with the team.
           </Text>
 
-          {/* Type selector */}
-          <Text style={styles.sectionLabel}>WHAT KIND OF FEEDBACK?</Text>
+          {/* Type */}
+          <Text
+            variant="caption2"
+            color="secondary"
+            style={{
+              paddingHorizontal: 32,
+              paddingTop: 24,
+              paddingBottom: 8,
+              letterSpacing: 0.4,
+            }}
+          >
+            TYPE
+          </Text>
           <View style={styles.typeRow}>
             {TYPE_OPTIONS.map((opt) => {
               const active = type === opt.key;
+              const tone = t.palette[opt.tone];
               return (
                 <Pressable
                   key={opt.key}
                   onPress={() => setType(opt.key)}
-                  style={[styles.typeBtn, active && styles.typeBtnActive]}
+                  style={({ pressed }) => [
+                    styles.typeBtn,
+                    {
+                      backgroundColor: active
+                        ? t.mode === 'dark'
+                          ? tone.softDark
+                          : tone.soft
+                        : cardBg,
+                      borderRadius: t.radii.field,
+                      borderColor: active ? tone.base + '55' : cardBorder,
+                      borderWidth: active ? 1.5 : t.hairline,
+                    },
+                    pressed && { opacity: 0.85 },
+                  ]}
                 >
                   <Ionicons
                     name={opt.icon}
-                    size={16}
-                    color={active ? '#fff' : color.text}
+                    size={18}
+                    color={active ? tone.base : t.colors.tertiary}
                   />
                   <Text
-                    style={
-                      active
-                        ? [styles.typeLabel, styles.typeLabelActive]
-                        : styles.typeLabel
-                    }
+                    variant="footnote"
+                    style={{
+                      color: active ? tone.base : t.colors.label,
+                      fontWeight: active ? '700' : '500',
+                      marginTop: 4,
+                    }}
                   >
                     {opt.label}
                   </Text>
@@ -259,382 +294,315 @@ export default function FeedbackScreen() {
             })}
           </View>
 
-          {/* Module dropdown */}
-          <Text style={styles.sectionLabel}>WHICH SCREEN?</Text>
-          <Pressable
-            onPress={() => setPickerOpen(true)}
-            style={({ pressed }) => [
-              styles.dropdown,
-              pressed && { opacity: 0.85 },
-              !moduleLabel && styles.dropdownPlaceholder,
-            ]}
-          >
-            <Text
-              variant="body"
-              color={moduleLabel ? 'text' : 'textMuted'}
-              style={{ flex: 1 }}
-              numberOfLines={1}
-            >
-              {moduleLabel ?? 'Pick the affected screen…'}
-            </Text>
-            <Ionicons name="chevron-down" size={18} color={color.textMuted} />
-          </Pressable>
-
-          {moduleKey === 'other' ? (
-            <TextInput
-              value={moduleCustom}
-              onChangeText={setModuleCustom}
-              placeholder="Describe the screen (e.g. 'Add Material modal')"
-              placeholderTextColor={color.textFaint}
-              style={[styles.input, { marginTop: 8 }]}
-              maxLength={60}
-              accessibilityLabel="Describe the screen"
+          {/* Screen picker */}
+          <FormGroup header="Affected screen">
+            <Row
+              label="Screen"
+              value={moduleLabel ?? 'Pick one'}
+              valueColor={moduleLabel ? undefined : t.colors.tertiary}
+              chevron
+              onPress={() => {
+                Keyboard.dismiss();
+                setPickerOpen(true);
+              }}
+              divider={moduleKey === 'other'}
             />
-          ) : null}
+            {moduleKey === 'other' ? (
+              <InputRow
+                label="Detail"
+                value={moduleCustom}
+                onChangeText={setModuleCustom}
+                placeholder="e.g. 'Add Material modal'"
+                autoCapitalize="sentences"
+                divider={false}
+              />
+            ) : null}
+          </FormGroup>
 
           {/* Description */}
-          <Text style={styles.sectionLabel}>DESCRIPTION</Text>
-          <TextInput
-            value={description}
-            onChangeText={setDescription}
-            placeholder={
-              type === 'bug'
-                ? 'Steps to reproduce, what happened vs. what you expected.'
-                : type === 'feature'
-                ? 'What would you like the app to do, and why is it useful?'
-                : 'Tell us what’s on your mind.'
-            }
-            placeholderTextColor={color.textFaint}
-            multiline
-            textAlignVertical="top"
-            style={[styles.input, styles.inputMultiline]}
-            maxLength={MAX_DESCRIPTION}
-            accessibilityLabel="Feedback description"
-          />
-          <Text variant="caption" color="textFaint" style={styles.charCount}>
-            {description.length} / {MAX_DESCRIPTION}
-          </Text>
+          <FormGroup
+            header="Description"
+            footer={`${description.length} / ${MAX_DESCRIPTION}`}
+          >
+            <InputRow
+              label="What happened?"
+              value={description}
+              onChangeText={(v) => {
+                if (v.length > MAX_DESCRIPTION) return;
+                setDescription(v);
+              }}
+              placeholder={descriptionPlaceholder}
+              multiline
+              autoCapitalize="sentences"
+              divider={false}
+            />
+          </FormGroup>
 
           {/* Screenshots */}
-          <Text style={styles.sectionLabel}>
-            SCREENSHOTS{' '}
-            <Text variant="caption" color="textFaint">
-              ({screenshots.length}/{MAX_SCREENSHOTS}, optional)
-            </Text>
-          </Text>
-          <View style={styles.shotsRow}>
-            {screenshots.map((uri) => (
-              <View key={uri} style={styles.shotTile}>
-                <Image source={{ uri }} style={styles.shotImage} />
-                <Pressable
-                  onPress={() => removeScreenshot(uri)}
-                  style={styles.shotRemove}
-                  hitSlop={8}
-                  accessibilityLabel="Remove screenshot"
-                >
-                  <Ionicons name="close" size={14} color="#fff" />
-                </Pressable>
-              </View>
-            ))}
-            {screenshots.length < MAX_SCREENSHOTS ? (
-              <Pressable
-                onPress={addScreenshot}
-                style={[styles.shotTile, styles.shotAdd]}
-                accessibilityLabel="Add screenshot"
+          <View style={{ paddingHorizontal: 16, marginTop: 24 }}>
+            <View style={styles.shotsHeader}>
+              <Text
+                variant="caption2"
+                color="secondary"
+                style={{ letterSpacing: 0.4 }}
               >
-                <Ionicons name="add" size={24} color={color.primary} />
-                <Text variant="caption" color="primary">
-                  Add
-                </Text>
-              </Pressable>
-            ) : null}
+                SCREENSHOTS
+              </Text>
+              <Text variant="caption2" color="tertiary">
+                {screenshots.length} / {MAX_SCREENSHOTS} · OPTIONAL
+              </Text>
+            </View>
+            <View style={styles.shotsRow}>
+              {screenshots.map((uri) => (
+                <View key={uri} style={styles.shotTileWrap}>
+                  <Image
+                    source={{ uri }}
+                    style={[
+                      styles.shotImage,
+                      { borderRadius: t.radii.tile },
+                    ]}
+                  />
+                  <Pressable
+                    onPress={() => removeScreenshot(uri)}
+                    style={[
+                      styles.shotRemove,
+                      { backgroundColor: t.palette.red.base },
+                    ]}
+                    hitSlop={6}
+                  >
+                    <Ionicons name="close" size={12} color="#fff" />
+                  </Pressable>
+                </View>
+              ))}
+              {screenshots.length < MAX_SCREENSHOTS ? (
+                <Pressable
+                  onPress={() => void addScreenshot()}
+                  style={({ pressed }) => [
+                    styles.shotAdd,
+                    {
+                      backgroundColor:
+                        t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                      borderRadius: t.radii.tile,
+                      borderColor: t.palette.blue.base + '33',
+                      borderWidth: t.hairline,
+                      borderStyle: 'dashed',
+                    },
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  <Ionicons name="add" size={22} color={t.palette.blue.base} />
+                </Pressable>
+              ) : null}
+            </View>
           </View>
 
-          {/* Device info — read-only, transparency about what we send */}
-          <Text style={styles.sectionLabel}>DEVICE INFO (auto)</Text>
-          <View style={styles.deviceCard}>
-            <DeviceRow label="Device" value={device.modelName || 'Unknown'} />
-            <DeviceRow label="Model id" value={device.modelId || '—'} />
-            <DeviceRow
+          {/* Device info */}
+          <FormGroup
+            header="Device info (auto)"
+            footer="We attach this so we can reproduce issues on the right device + app version."
+          >
+            <Row label="Device" value={device.modelName || 'Unknown'} />
+            {device.modelId ? <Row label="Model id" value={device.modelId} /> : null}
+            <Row
               label="OS"
               value={`${device.platform.toUpperCase()} ${device.osVersion || ''}`.trim()}
             />
-            <DeviceRow
+            <Row
               label="App"
               value={`${device.appVersion} (build ${device.appBuildNumber})`}
+              divider={!!org?.name || !!roleLabel}
             />
-            {org?.name ? <DeviceRow label="Studio" value={org.name} /> : null}
-            {roleLabel ? <DeviceRow label="Your role" value={roleLabel} /> : null}
-          </View>
-
-          {/* Submit */}
-          <Pressable
-            onPress={() => void onSubmit()}
-            disabled={!canSubmit}
-            style={({ pressed }) => [
-              styles.submit,
-              !canSubmit && styles.submitDisabled,
-              pressed && canSubmit && { opacity: 0.85 },
-            ]}
-          >
-            {submitting ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.submitLabel}>Submit feedback</Text>
-            )}
-          </Pressable>
+            {org?.name ? (
+              <Row label="Studio" value={org.name} divider={!!roleLabel} />
+            ) : null}
+            {roleLabel ? <Row label="Your role" value={roleLabel} divider={false} /> : null}
+          </FormGroup>
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Module picker modal */}
+      {/* Module picker bottom sheet */}
       <Modal
         visible={pickerOpen}
         animationType="slide"
         transparent
         onRequestClose={() => setPickerOpen(false)}
+        statusBarTranslucent
       >
-        <Pressable
-          style={styles.modalBackdrop}
-          onPress={() => setPickerOpen(false)}
-        />
-        <View style={[styles.modalSheet, { paddingBottom: insets.bottom + 12 }]}>
-          <View style={styles.modalHandle} />
-          <Text variant="rowTitle" color="text" style={styles.modalTitle}>
-            Pick a screen
-          </Text>
-          <FlatList
-            data={FEEDBACK_MODULES}
-            keyExtractor={(item) => item.key}
-            ItemSeparatorComponent={() => <View style={styles.modalSep} />}
-            renderItem={({ item }) => {
-              const active = item.key === moduleKey;
-              return (
-                <Pressable
-                  onPress={() => {
-                    setModuleKey(item.key);
-                    setPickerOpen(false);
-                  }}
-                  style={({ pressed }) => [
-                    styles.modalRow,
-                    pressed && { opacity: 0.7 },
-                  ]}
-                >
-                  <Text
-                    variant="body"
-                    color={active ? 'primary' : 'text'}
-                    style={{ flex: 1 }}
-                  >
-                    {item.label}
-                  </Text>
-                  {active ? (
-                    <Ionicons name="checkmark" size={18} color={color.primary} />
-                  ) : null}
-                </Pressable>
-              );
-            }}
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setPickerOpen(false)}
           />
+          <View
+            style={[
+              sheetStyles.sheet,
+              {
+                backgroundColor: t.colors.surface,
+                borderTopLeftRadius: t.radii.sheet,
+                borderTopRightRadius: t.radii.sheet,
+                paddingBottom: insets.bottom + 8,
+                maxHeight: '75%',
+              },
+            ]}
+          >
+            <View
+              style={[sheetStyles.grabber, { backgroundColor: t.colors.tertiary }]}
+            />
+            <View
+              style={[
+                sheetStyles.header,
+                {
+                  borderBottomColor: t.colors.separator,
+                  borderBottomWidth: t.hairline,
+                },
+              ]}
+            >
+              <Pressable
+                onPress={() => setPickerOpen(false)}
+                hitSlop={8}
+                style={sheetStyles.sideBtn}
+              >
+                <Text variant="body" style={{ color: t.palette.blue.base }}>
+                  Cancel
+                </Text>
+              </Pressable>
+              <Text
+                variant="headline"
+                color="label"
+                style={[sheetStyles.title, { fontWeight: '600' }]}
+              >
+                Pick a screen
+              </Text>
+              <View style={sheetStyles.sideBtn} />
+            </View>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: 12 }}
+            >
+              {FEEDBACK_MODULES.map((item, idx) => {
+                const active = item.key === moduleKey;
+                const last = idx === FEEDBACK_MODULES.length - 1;
+                return (
+                  <View key={item.key}>
+                    <Pressable
+                      onPress={() => {
+                        setModuleKey(item.key);
+                        setPickerOpen(false);
+                      }}
+                      style={({ pressed }) => [
+                        sheetStyles.optionRow,
+                        pressed && { backgroundColor: t.colors.fill3 },
+                      ]}
+                    >
+                      <Text
+                        variant="body"
+                        color="label"
+                        style={{ flex: 1, fontWeight: active ? '600' : '400' }}
+                      >
+                        {item.label}
+                      </Text>
+                      {active ? (
+                        <Ionicons
+                          name="checkmark"
+                          size={20}
+                          color={t.palette.blue.base}
+                        />
+                      ) : null}
+                    </Pressable>
+                    {!last ? (
+                      <View
+                        style={{
+                          height: t.hairline,
+                          backgroundColor: t.colors.separator,
+                          marginLeft: 16,
+                        }}
+                      />
+                    ) : null}
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </View>
         </View>
       </Modal>
     </View>
   );
 }
 
-function DeviceRow({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.deviceRow}>
-      <Text variant="caption" color="textMuted" style={styles.deviceLabel}>
-        {label}
-      </Text>
-      <Text variant="metaStrong" color="text" style={{ flex: 1 }} numberOfLines={1}>
-        {value}
-      </Text>
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: color.bgGrouped },
-
-  header: {
+  // Type segmented control
+  typeRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
-    backgroundColor: color.bg,
+    paddingHorizontal: 16,
+    gap: 8,
   },
-  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, minWidth: 80 },
-  headerTitle: { flex: 1, textAlign: 'center' },
-  headerSpacer: { minWidth: 80 },
-
-  scroll: {
-    paddingHorizontal: screenInset,
-    paddingTop: space.md,
-    paddingBottom: space.huge,
-  },
-
-  intro: { lineHeight: 17, marginBottom: space.lg },
-
-  sectionLabel: {
-    fontFamily: fontFamily.mono,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.textFaint,
-    letterSpacing: 1.4,
-    marginTop: space.lg,
-    marginBottom: 8,
-  },
-
-  // Type selector
-  typeRow: { flexDirection: 'row', gap: 8 },
   typeBtn: {
     flex: 1,
-    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 12,
-    borderRadius: radius.md,
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-  },
-  typeBtnActive: {
-    backgroundColor: color.primary,
-    borderColor: color.primary,
-  },
-  typeLabel: { fontSize: 13, fontWeight: '600', color: color.text },
-  typeLabelActive: { color: '#fff' },
-
-  // Dropdown
-  dropdown: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: space.md,
     paddingVertical: 14,
-    borderRadius: radius.md,
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
+    paddingHorizontal: 8,
   },
-  dropdownPlaceholder: {},
-
-  // Inputs
-  input: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    color: color.text,
-    backgroundColor: color.bg,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: 12,
-  },
-  inputMultiline: { minHeight: 140, textAlignVertical: 'top' },
-  charCount: { textAlign: 'right', marginTop: 4 },
 
   // Screenshots
-  shotsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  shotTile: {
+  shotsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  shotsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  shotTileWrap: {
+    position: 'relative',
+  },
+  shotImage: {
     width: 80,
     height: 80,
-    borderRadius: radius.md,
-    overflow: 'hidden',
-    backgroundColor: color.surface,
-  },
-  shotImage: { width: '100%', height: '100%' },
-  shotAdd: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: color.primary,
-    borderStyle: 'dashed',
-    backgroundColor: color.primarySoft,
-    gap: 2,
   },
   shotRemove: {
     position: 'absolute',
-    top: 4,
-    right: 4,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    top: -6,
+    right: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
   },
-
-  // Device card
-  deviceCard: {
-    backgroundColor: color.bg,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    paddingHorizontal: space.md,
-    paddingVertical: 8,
-  },
-  deviceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 6,
-  },
-  deviceLabel: { width: 88, letterSpacing: 0.6 },
-
-  // Submit
-  submit: {
-    marginTop: space.xl,
-    minHeight: 50,
-    borderRadius: radius.md,
-    backgroundColor: color.primary,
+  shotAdd: {
+    width: 80,
+    height: 80,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  submitDisabled: { opacity: 0.4 },
-  submitLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#fff',
-    letterSpacing: -0.2,
-  },
+});
 
-  // Modal
-  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)' },
-  modalSheet: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    maxHeight: '70%',
-    backgroundColor: color.bg,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    paddingTop: 8,
-  },
-  modalHandle: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.borderStrong,
+const sheetStyles = StyleSheet.create({
+  sheet: { paddingTop: 8 },
+  grabber: {
+    width: 36,
+    height: 5,
+    borderRadius: 3,
     alignSelf: 'center',
     marginBottom: 8,
   },
-  modalTitle: {
-    paddingHorizontal: screenInset,
-    paddingVertical: 8,
-  },
-  modalRow: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingVertical: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
   },
-  modalSep: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: color.borderStrong,
-    marginLeft: screenInset,
+  sideBtn: { minWidth: 70 },
+  title: { flex: 1, textAlign: 'center' },
+  optionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    minHeight: 48,
   },
 });

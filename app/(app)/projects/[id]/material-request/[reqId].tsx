@@ -1,16 +1,30 @@
 /**
- * Material Request Detail — view items, approve/reject, update delivery status, share to shop.
+ * Material Request detail / preview — v2 design.
+ *
+ * Layout:
+ *   1. Header — back · "Material request" · edit/delete (when creator)
+ *   2. Hero card — title · status pill · created date
+ *   3. Progress sliver (when approved)
+ *   4. KPI strip — Items · Received · Total value
+ *   5. Audit FormGroup — Requested by · Approved by · Designated · Edited
+ *   6. Items list (compact rows with category dot, name, qty/unit/price,
+ *      delivery chip when approved)
+ *   7. Action footer — Reject/Approve · Edit-before-approve · Edit-resubmit ·
+ *      Share to shop
+ *   8. Reject sheet · Delivery picker sheet
  */
 import { router, Stack, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   TextInput,
   View,
@@ -36,9 +50,12 @@ import {
   type DeliveryStatus,
 } from '@/src/features/materialRequests/types';
 import { formatInr } from '@/src/lib/format';
-import { Screen } from '@/src/ui/Screen';
-import { Text } from '@/src/ui/Text';
-import { color, radius, screenInset, space } from '@/src/theme';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { FormGroup } from '@/src/ui/v2/FormGroup';
+import { Row } from '@/src/ui/v2/Row';
+import { Text } from '@/src/ui/v2/Text';
+import { useThemeV2 } from '@/src/theme/v2';
 
 function compactDateTime(ts: { toDate: () => Date } | null | undefined): string {
   if (!ts) return '—';
@@ -47,6 +64,7 @@ function compactDateTime(ts: { toDate: () => Date } | null | undefined): string 
 }
 
 export default function MaterialRequestDetailScreen() {
+  const t = useThemeV2();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ id: string; reqId: string }>();
   const projectId = params.id;
@@ -71,35 +89,21 @@ export default function MaterialRequestDetailScreen() {
   const membersByUid = new Map(members.map((m) => [m.uid, m]));
   const getMemberLabel = (uid?: string): string => {
     if (!uid) return 'Unknown';
-    return membersByUid.get(uid)?.displayName ?? 'Team member';
+    return membersByUid.get(uid)?.displayName ?? 'Team';
   };
   const canShowPrices =
     !!user?.uid && request ? canApproveMat || request.createdBy === user.uid : false;
-  // Creator can edit their own pending request via the nav-bar pencil icon
-  // (existing behavior). The new "Edit" CTA in the action footer is for
-  // approvers who want to clean up items before approving.
   const showPendingNavActions =
-    !!user?.uid &&
-    !!request &&
-    isPending &&
-    isCreator &&
-    can('material.request.write');
-  // Approvers (not creator) get a separate "Edit" button alongside Approve
-  // / Reject when the request is pending. Silent edit — no notification.
+    !!user?.uid && !!request && isPending && isCreator && can('material.request.write');
   const showApproverEditCta = !!request && isPending && canApproveMat && !isCreator;
-  // Rejected request → only the creator gets the "Edit & Re-submit" CTA.
-  // Routes to the same edit form with `?resubmit=1` so the form knows to
-  // show the rejection-note banner and call the resubmit writer on save.
   const showResubmitCta = !!request && isRejected && isCreator;
 
   const receivedCount = request?.items.filter((i) => i.deliveryStatus === 'received_at_site').length ?? 0;
   const totalItems = request?.items.length ?? 0;
 
-  // ── Actions ──
-
   const handleApprove = useCallback(async () => {
     if (!reqId || !user) return;
-    Alert.alert('Approve Request', 'Approve this material request?', [
+    Alert.alert('Approve request', 'Approve this material request?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Approve',
@@ -131,15 +135,18 @@ export default function MaterialRequestDetailScreen() {
     }
   }, [reqId, rejectNote, user]);
 
-  const handleDeliveryUpdate = useCallback(async (idx: number, status: DeliveryStatus) => {
-    if (!reqId || !user) return;
-    try {
-      await updateItemDeliveryStatus(reqId, idx, status, user.uid);
-    } catch (err) {
-      Alert.alert('Error', (err as Error).message);
-    }
-    setShowDeliveryPicker(null);
-  }, [reqId, user]);
+  const handleDeliveryUpdate = useCallback(
+    async (idx: number, status: DeliveryStatus) => {
+      if (!reqId || !user) return;
+      try {
+        await updateItemDeliveryStatus(reqId, idx, status, user.uid);
+      } catch (err) {
+        Alert.alert('Error', (err as Error).message);
+      }
+      setShowDeliveryPicker(null);
+    },
+    [reqId, user],
+  );
 
   const handleShare = useCallback(async () => {
     if (!request || !project) return;
@@ -154,7 +161,7 @@ export default function MaterialRequestDetailScreen() {
   }, [request, project]);
 
   const handleDelete = useCallback(() => {
-    Alert.alert('Delete Request', 'This cannot be undone.', [
+    Alert.alert('Delete request', 'This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete',
@@ -189,129 +196,67 @@ export default function MaterialRequestDetailScreen() {
 
   if (loading || !request) {
     return (
-      <Screen bg="grouped" padded={false}>
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-          <Text variant="meta" color="textMuted">Loading...</Text>
+        <AmbientBackground />
+        <Header onBack={() => router.back()} title="Material request" />
+        <View style={styles.center}>
+          <ActivityIndicator color={t.palette.blue.base} />
         </View>
-      </Screen>
+      </View>
     );
   }
 
-  const badge = statusBadge(request.status);
+  // 90/10 discipline: only states that demand action carry colour.
+  // approved / draft both go neutral; pending stays orange (action awaits)
+  // and rejected stays red (problem the user must address).
+  const statusTone =
+    request.status === 'rejected'
+      ? { fg: t.palette.red.base, bg: t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft, label: 'REJECTED' }
+      : request.status === 'pending'
+        ? { fg: t.palette.orange.base, bg: t.mode === 'dark' ? t.palette.orange.softDark : t.palette.orange.soft, label: 'PENDING' }
+        : { fg: t.colors.secondary, bg: t.colors.fill3, label: request.status === 'approved' ? 'APPROVED' : 'DRAFT' };
+
   const dateStr = request.createdAt
     ? request.createdAt.toDate().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })
     : '—';
-  const requestedMeta = `REQ ${getMemberLabel(request.createdBy)} · ${compactDateTime(request.createdAt)}`;
-  const approvedMeta = request.status === 'approved'
-    ? `APR ${getMemberLabel(request.approvedBy)} · ${compactDateTime(request.approvedAt)}${
-        request.autoApproved ? ' · Auto-approved' : ''
-      }`
-    : null;
-  const designatedMeta =
-    request.status === 'pending' &&
-    request.designatedApproverUids &&
-    request.designatedApproverUids.length > 0
+
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+
+  const designatedNames =
+    isPending && request.designatedApproverUids && request.designatedApproverUids.length > 0
       ? request.designatedApproverUids.map((uid) => getMemberLabel(uid)).join(', ')
       : null;
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.surface }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* Nav */}
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} hitSlop={12} style={styles.navBtn}>
-          <Ionicons name="arrow-back" size={22} color={color.text} />
-        </Pressable>
-        <Text variant="bodyStrong" color="text" style={styles.navTitle} numberOfLines={1}>
-          {request.title || 'Material Request'}
-        </Text>
-        {showPendingNavActions ? (
-          <View style={styles.navActions}>
-            <Pressable onPress={handleEdit} hitSlop={12} style={styles.navBtn}>
-              <Ionicons name="create-outline" size={20} color={color.primary} />
-            </Pressable>
-            <Pressable onPress={handleDelete} hitSlop={12} style={styles.navBtn}>
-              <Ionicons name="trash-outline" size={20} color={color.danger} />
-            </Pressable>
-          </View>
-        ) : (
-          <View style={styles.navBtn} />
-        )}
-      </View>
+      <Header
+        onBack={() => router.back()}
+        title="Material request"
+        right={
+          showPendingNavActions ? (
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+              <CircleBtn
+                icon="create-outline"
+                onPress={handleEdit}
+                tint={t.palette.blue.base}
+              />
+              <CircleBtn
+                icon="trash-outline"
+                onPress={handleDelete}
+                tint={t.palette.red.base}
+              />
+            </View>
+          ) : undefined
+        }
+      />
 
-      {/* Status header */}
-      <View style={[styles.statusBar, { backgroundColor: badge.bg }]}>
-        <View style={[styles.statusDot, { backgroundColor: badge.fg }]} />
-        <Text variant="metaStrong" style={{ color: badge.fg }}>{badge.label}</Text>
-        <View style={{ flex: 1 }} />
-        <Text variant="meta" color="textMuted">{dateStr}</Text>
-      </View>
-
-      {/* Progress (if approved) */}
-      {isApproved && totalItems > 0 && (
-        <View style={styles.progressBar}>
-          <View style={[styles.progressFill, { width: `${(receivedCount / totalItems) * 100}%` }]} />
-          <Text variant="caption" color="text" style={styles.progressText}>
-            {receivedCount}/{totalItems} received at site
-          </Text>
-        </View>
-      )}
-
-      <View style={styles.metricsCard}>
-        <View style={styles.metricsRow}>
-          <Text variant="caption" color="textMuted">ITEMS</Text>
-          <Text variant="metaStrong" color="text">{totalItems}</Text>
-        </View>
-        <View style={styles.metricsDivider} />
-        <View style={styles.metricsRow}>
-          <Text variant="caption" color="textMuted">RECEIVED</Text>
-          <Text variant="metaStrong" color={isApproved ? 'success' : 'text'}>
-            {receivedCount}/{totalItems}
-          </Text>
-        </View>
-        <View style={styles.metricsDivider} />
-        <View style={styles.metricsRow}>
-          <Text variant="caption" color="textMuted">TOTAL VALUE</Text>
-          <Text variant="bodyStrong" color="primary">{formatInr(request.totalValue)}</Text>
-        </View>
-        <View style={styles.metricsDivider} />
-        <View style={styles.metaIconRow}>
-          <Ionicons name="person-outline" size={12} color={color.textFaint} />
-          <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.compactMetaLine}>
-            {requestedMeta}
-          </Text>
-        </View>
-        {approvedMeta ? (
-          <View style={styles.metaIconRow}>
-            <Ionicons name="checkmark-circle-outline" size={12} color={color.success} />
-            <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.compactMetaLine}>
-              {approvedMeta}
-            </Text>
-          </View>
-        ) : null}
-        {designatedMeta ? (
-          <View style={styles.metaIconRow}>
-            <Ionicons name="people-outline" size={12} color={color.textFaint} />
-            <Text variant="caption" color="textMuted" numberOfLines={2} style={styles.compactMetaLine}>
-              Heads-up: {designatedMeta}
-            </Text>
-          </View>
-        ) : null}
-        {request.editedAt ? (
-          <View style={styles.metaIconRow}>
-            <Ionicons name="create-outline" size={12} color={color.textFaint} />
-            <Text variant="caption" color="textMuted" numberOfLines={1} style={styles.compactMetaLine}>
-              EDT {getMemberLabel(request.editedBy)} · {compactDateTime(request.editedAt)}
-            </Text>
-          </View>
-        ) : null}
-      </View>
-
-      {/* Items list */}
       <FlatList
-        style={styles.listFlex}
         data={request.items}
         keyExtractor={(_, idx) => String(idx)}
         renderItem={({ item, index }) => (
@@ -324,151 +269,520 @@ export default function MaterialRequestDetailScreen() {
           />
         )}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
-        ListFooterComponent={null}
-      />
+        ItemSeparatorComponent={() => <View style={{ height: 6 }} />}
+        contentContainerStyle={[
+          styles.scroll,
+          {
+            paddingBottom: insets.bottom + 140,
+          },
+        ]}
+        ListHeaderComponent={
+          <View>
+            {/* Hero card */}
+            <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+              <View
+                style={[
+                  styles.heroCard,
+                  {
+                    backgroundColor: cardBg,
+                    borderRadius: t.radii.hero,
+                    borderColor: cardBorder,
+                    borderWidth: t.hairline,
+                  },
+                ]}
+              >
+                <View style={styles.heroTop}>
+                  <View
+                    style={[
+                      styles.statusPill,
+                      { backgroundColor: statusTone.bg, borderRadius: 999 },
+                    ]}
+                  >
+                    <View
+                      style={{
+                        width: 5,
+                        height: 5,
+                        borderRadius: 3,
+                        backgroundColor: statusTone.fg,
+                        marginRight: 5,
+                      }}
+                    />
+                    <Text
+                      variant="caption2"
+                      style={{
+                        color: statusTone.fg,
+                        fontWeight: '700',
+                        letterSpacing: 0.4,
+                      }}
+                    >
+                      {statusTone.label}
+                    </Text>
+                  </View>
+                  <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4 }}>
+                    {dateStr.toUpperCase()}
+                  </Text>
+                </View>
+                <Text
+                  variant="title3"
+                  color="label"
+                  style={{ marginTop: 8, fontWeight: '700' }}
+                >
+                  {request.title || 'Material request'}
+                </Text>
 
-      {/* Rejection note */}
-      {request.status === 'rejected' && request.rejectionNote && (
-        <View style={styles.rejectionBar}>
-          <Ionicons name="close-circle" size={16} color={color.danger} />
-          <Text variant="meta" color="danger" style={{ flex: 1 }}>{request.rejectionNote}</Text>
-        </View>
-      )}
+                {/* Progress (when approved) */}
+                {isApproved && totalItems > 0 ? (
+                  <View style={styles.progressBlock}>
+                    <View
+                      style={[
+                        styles.progressTrack,
+                        { backgroundColor: t.colors.fill3 },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.progressFill,
+                          {
+                            // Progress bar fill — interactive blue (active state)
+                            // per the 90/10 rule.
+                            width: `${(receivedCount / totalItems) * 100}%`,
+                            backgroundColor: t.palette.blue.base,
+                          },
+                        ]}
+                      />
+                    </View>
+                    <Text
+                      variant="caption2"
+                      color="secondary"
+                      style={{ marginTop: 4, letterSpacing: 0.4 }}
+                    >
+                      {receivedCount}/{totalItems} RECEIVED AT SITE
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+
+            {/* KPI strip — neutral counts per the 90/10 discipline. The
+                labels carry the meaning; numbers don't need colour. */}
+            <View style={styles.kpiRow}>
+              <Kpi label="ITEMS" value={String(totalItems)} />
+              <Kpi label="RECEIVED" value={`${receivedCount}/${totalItems}`} />
+              <Kpi
+                label="VALUE"
+                value={canShowPrices ? formatInr(request.totalValue) : '—'}
+              />
+            </View>
+
+            {/* Audit */}
+            <FormGroup header="Audit">
+              <Row
+                label="Requested by"
+                value={`${getMemberLabel(request.createdBy)} · ${compactDateTime(request.createdAt)}`}
+              />
+              {request.status === 'approved' ? (
+                <Row
+                  label="Approved by"
+                  value={`${getMemberLabel(request.approvedBy)} · ${compactDateTime(request.approvedAt)}${
+                    request.autoApproved ? ' · Auto' : ''
+                  }`}
+                />
+              ) : null}
+              {designatedNames ? (
+                <Row label="Heads-up" value={designatedNames} />
+              ) : null}
+              {request.editedAt ? (
+                <Row
+                  label="Edited"
+                  value={`${getMemberLabel(request.editedBy)} · ${compactDateTime(request.editedAt)}`}
+                  divider={false}
+                />
+              ) : (
+                <Row
+                  label=""
+                  value=""
+                  divider={false}
+                />
+              )}
+            </FormGroup>
+
+            {/* Rejection note */}
+            {isRejected && request.rejectionNote ? (
+              <View style={{ paddingHorizontal: 16, marginTop: 14 }}>
+                <View
+                  style={[
+                    styles.rejectionCard,
+                    {
+                      backgroundColor:
+                        t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                      borderRadius: t.radii.card,
+                      borderColor: t.palette.red.base + '33',
+                      borderWidth: t.hairline,
+                    },
+                  ]}
+                >
+                  <Ionicons name="close-circle" size={14} color={t.palette.red.base} />
+                  <Text
+                    variant="caption1"
+                    style={{
+                      color: t.palette.red.base,
+                      flex: 1,
+                      marginLeft: 6,
+                      fontWeight: '600',
+                    }}
+                  >
+                    {request.rejectionNote}
+                  </Text>
+                </View>
+              </View>
+            ) : null}
+
+            <View style={{ paddingHorizontal: 16, marginTop: 18, marginBottom: 8 }}>
+              <Text
+                variant="caption2"
+                color="secondary"
+                style={{ letterSpacing: 0.5 }}
+              >
+                ITEMS · {totalItems}
+              </Text>
+            </View>
+          </View>
+        }
+      />
 
       {/* Action footer */}
       {(isPending && canApproveMat) || isApproved || showResubmitCta ? (
-        <View style={[styles.footer, { paddingBottom: space.sm + insets.bottom }]}>
-          {isPending && canApproveMat && (
+        <View
+          style={[
+            styles.footer,
+            {
+              paddingBottom: insets.bottom + 12,
+              backgroundColor: t.colors.surface,
+              borderTopColor: t.colors.separator,
+              borderTopWidth: t.hairline,
+            },
+          ]}
+        >
+          {isPending && canApproveMat ? (
             <>
-              {showApproverEditCta && (
+              {showApproverEditCta ? (
                 <Pressable
                   onPress={handleEdit}
-                  style={[styles.actionBtn, styles.editBtn]}
                   disabled={actionLoading}
+                  style={({ pressed }) => [
+                    styles.actionBtn,
+                    {
+                      backgroundColor:
+                        t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                      borderRadius: t.radii.field,
+                      borderColor: t.palette.blue.base + '33',
+                      borderWidth: t.hairline,
+                    },
+                    pressed && { opacity: 0.85 },
+                  ]}
                 >
-                  <Ionicons name="create-outline" size={18} color={color.primary} />
-                  <Text variant="metaStrong" color="primary">
+                  <Ionicons name="create-outline" size={16} color={t.palette.blue.base} />
+                  <Text
+                    variant="footnote"
+                    style={{
+                      color: t.palette.blue.base,
+                      fontWeight: '700',
+                      marginLeft: 6,
+                    }}
+                  >
                     Edit before approving
                   </Text>
                 </Pressable>
-              )}
-              <View style={styles.footerRow}>
+              ) : null}
+              <View style={{ flexDirection: 'row', gap: 8 }}>
                 <Pressable
                   onPress={() => setShowRejectModal(true)}
-                  style={[styles.actionBtn, styles.footerRowBtn, styles.rejectBtn]}
                   disabled={actionLoading}
+                  style={({ pressed }) => [
+                    styles.actionBtn,
+                    {
+                      flex: 1,
+                      backgroundColor:
+                        t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                      borderRadius: t.radii.field,
+                    },
+                    pressed && { opacity: 0.85 },
+                  ]}
                 >
-                  <Ionicons name="close-circle-outline" size={18} color={color.danger} />
-                  <Text variant="metaStrong" color="danger">Reject</Text>
+                  <Ionicons name="close-circle-outline" size={16} color={t.palette.red.base} />
+                  <Text
+                    variant="footnote"
+                    style={{
+                      color: t.palette.red.base,
+                      fontWeight: '700',
+                      marginLeft: 6,
+                    }}
+                  >
+                    Reject
+                  </Text>
                 </Pressable>
                 <Pressable
                   onPress={handleApprove}
-                  style={[styles.actionBtn, styles.footerRowBtn, styles.approveBtn]}
                   disabled={actionLoading}
+                  style={({ pressed }) => [
+                    styles.actionBtn,
+                    {
+                      flex: 1,
+                      backgroundColor: t.palette.green.base,
+                      borderRadius: t.radii.field,
+                    },
+                    pressed && { opacity: 0.85 },
+                  ]}
                 >
-                  <Ionicons name="checkmark-circle-outline" size={18} color={color.onPrimary} />
-                  <Text variant="metaStrong" color="onPrimary">Approve</Text>
+                  {actionLoading ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark-circle-outline" size={16} color="#fff" />
+                      <Text
+                        variant="footnote"
+                        style={{ color: '#fff', fontWeight: '700', marginLeft: 6 }}
+                      >
+                        Approve
+                      </Text>
+                    </>
+                  )}
                 </Pressable>
               </View>
             </>
-          )}
-          {showResubmitCta && (
+          ) : null}
+
+          {showResubmitCta ? (
             <Pressable
               onPress={handleResubmit}
-              style={[styles.actionBtn, styles.shareBtn]}
               disabled={actionLoading}
+              style={({ pressed }) => [
+                styles.actionBtn,
+                {
+                  backgroundColor: t.palette.blue.base,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
             >
-              <Ionicons name="refresh-outline" size={18} color={color.onPrimary} />
-              <Text variant="metaStrong" color="onPrimary">
-                Edit & Re-submit
+              <Ionicons name="refresh-outline" size={16} color="#fff" />
+              <Text
+                variant="footnote"
+                style={{ color: '#fff', fontWeight: '700', marginLeft: 6 }}
+              >
+                Edit & re-submit
               </Text>
             </Pressable>
-          )}
-          {isApproved && (
+          ) : null}
+
+          {isApproved ? (
             <Pressable
               onPress={handleShare}
-              style={[styles.actionBtn, styles.shareBtn]}
               disabled={actionLoading}
+              style={({ pressed }) => [
+                styles.actionBtn,
+                {
+                  backgroundColor: t.palette.blue.base,
+                  borderRadius: t.radii.field,
+                },
+                pressed && { opacity: 0.85 },
+              ]}
             >
-              <Ionicons name="share-outline" size={18} color={color.onPrimary} />
-              <Text variant="metaStrong" color="onPrimary">
-                {actionLoading ? 'Generating...' : 'Share to Shop (No Prices)'}
+              {actionLoading ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Ionicons name="share-outline" size={16} color="#fff" />
+              )}
+              <Text
+                variant="footnote"
+                style={{ color: '#fff', fontWeight: '700', marginLeft: 6 }}
+              >
+                {actionLoading ? 'Generating…' : 'Share to shop (no prices)'}
               </Text>
             </Pressable>
-          )}
+          ) : null}
         </View>
       ) : null}
 
-      {/* Reject Modal */}
+      {/* Reject sheet */}
       <Modal
         visible={showRejectModal}
-        animationType="fade"
         transparent
-        presentationStyle={Platform.OS === 'ios' ? 'overFullScreen' : undefined}
+        animationType="slide"
         onRequestClose={() => setShowRejectModal(false)}
+        statusBarTranslucent
       >
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : 'padding'}
-          style={{ flex: 1 }}
-          keyboardVerticalOffset={0}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          style={{ flex: 1, justifyContent: 'flex-end' }}
         >
-          <Pressable style={styles.modalOverlay} onPress={() => setShowRejectModal(false)}>
-            <View />
-          </Pressable>
-          <View style={styles.rejectSheet}>
-            <Text variant="bodyStrong" color="text" style={{ marginBottom: space.sm }}>Reject Request</Text>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowRejectModal(false)} />
+          <View
+            style={[
+              styles.bottomSheet,
+              {
+                backgroundColor: t.colors.surface,
+                borderTopLeftRadius: t.radii.sheet,
+                borderTopRightRadius: t.radii.sheet,
+                paddingBottom: insets.bottom + 16,
+              },
+            ]}
+          >
+            <View style={[styles.grabber, { backgroundColor: t.colors.tertiary }]} />
+            <Text
+              variant="headline"
+              color="label"
+              style={{ paddingHorizontal: 16, fontWeight: '700' }}
+            >
+              Reject request
+            </Text>
             <TextInput
               placeholder="Reason for rejection (optional)"
-              placeholderTextColor={color.textFaint}
+              placeholderTextColor={t.colors.tertiary}
               value={rejectNote}
               onChangeText={setRejectNote}
               multiline
-              style={styles.rejectInput}
+              style={[
+                styles.rejectInput,
+                {
+                  backgroundColor: t.colors.fill3,
+                  borderRadius: t.radii.field,
+                  color: t.colors.label,
+                  minHeight: 80,
+                  textAlignVertical: 'top',
+                },
+              ]}
             />
-            <View style={styles.rejectActions}>
-              <Pressable onPress={() => setShowRejectModal(false)} style={[styles.actionBtn, styles.footerRowBtn, { borderColor: color.border, borderWidth: 1 }]}>
-                <Text variant="metaStrong" color="text">Cancel</Text>
+            <View style={[styles.sheetActions, { paddingHorizontal: 16, marginTop: 14 }]}>
+              <Pressable
+                onPress={() => setShowRejectModal(false)}
+                style={({ pressed }) => [
+                  styles.actionBtn,
+                  {
+                    flex: 1,
+                    backgroundColor: t.colors.fill3,
+                    borderRadius: t.radii.field,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Text variant="footnote" color="secondary" style={{ fontWeight: '700' }}>
+                  Cancel
+                </Text>
               </Pressable>
-              <Pressable onPress={handleReject} style={[styles.actionBtn, styles.footerRowBtn, styles.rejectBtn]} disabled={actionLoading}>
-                <Text variant="metaStrong" color="danger">{actionLoading ? 'Rejecting...' : 'Reject'}</Text>
+              <Pressable
+                onPress={handleReject}
+                disabled={actionLoading}
+                style={({ pressed }) => [
+                  styles.actionBtn,
+                  {
+                    flex: 1,
+                    backgroundColor: t.palette.red.base,
+                    borderRadius: t.radii.field,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                {actionLoading ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text variant="footnote" style={{ color: '#fff', fontWeight: '700' }}>
+                    Reject
+                  </Text>
+                )}
               </Pressable>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Delivery Status Picker */}
-      <Modal visible={showDeliveryPicker !== null} animationType="fade" transparent onRequestClose={() => setShowDeliveryPicker(null)}>
-        <Pressable style={styles.modalOverlay} onPress={() => setShowDeliveryPicker(null)}><View /></Pressable>
-        <View style={styles.deliverySheet}>
-          <Text variant="bodyStrong" color="text" style={{ marginBottom: space.sm, textAlign: 'center' }}>
-            Update Delivery Status
-          </Text>
-          {DELIVERY_STATUSES.map((s) => {
-            const currentStatus = showDeliveryPicker !== null ? request.items[showDeliveryPicker]?.deliveryStatus : '';
-            const active = currentStatus === s.key;
-            return (
-              <Pressable
-                key={s.key}
-                onPress={() => showDeliveryPicker !== null && handleDeliveryUpdate(showDeliveryPicker, s.key)}
-                style={[styles.deliveryOption, active && { backgroundColor: color.primarySoft }]}
-              >
-                <Ionicons name={s.icon as any} size={20} color={s.color} />
-                <Text variant="body" color={active ? 'primary' : 'text'} style={active ? { fontWeight: '600' } : undefined}>
-                  {s.label}
-                </Text>
-                {active && <Ionicons name="checkmark-circle" size={18} color={color.primary} style={{ marginLeft: 'auto' }} />}
-              </Pressable>
-            );
-          })}
-        </View>
+      {/* Delivery sheet */}
+      <Modal
+        visible={showDeliveryPicker !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowDeliveryPicker(null)}
+        statusBarTranslucent
+      >
+        <Pressable style={styles.sheetBackdrop} onPress={() => setShowDeliveryPicker(null)}>
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={[
+              styles.deliverySheet,
+              {
+                backgroundColor: t.colors.surface,
+                borderTopLeftRadius: t.radii.sheet,
+                borderTopRightRadius: t.radii.sheet,
+                paddingBottom: insets.bottom + 16,
+              },
+            ]}
+          >
+            <View style={[styles.grabber, { backgroundColor: t.colors.tertiary }]} />
+            <Text
+              variant="headline"
+              color="label"
+              style={{ textAlign: 'center', fontWeight: '600', paddingBottom: 12 }}
+            >
+              Delivery status
+            </Text>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {DELIVERY_STATUSES.map((s, i) => {
+                const currentStatus =
+                  showDeliveryPicker !== null
+                    ? request.items[showDeliveryPicker]?.deliveryStatus
+                    : '';
+                const active = currentStatus === s.key;
+                return (
+                  <View key={s.key}>
+                    <Pressable
+                      onPress={() =>
+                        showDeliveryPicker !== null &&
+                        handleDeliveryUpdate(showDeliveryPicker, s.key)
+                      }
+                      style={({ pressed }) => [
+                        styles.deliveryOption,
+                        pressed && { backgroundColor: t.colors.fill3 },
+                      ]}
+                    >
+                      <Ionicons
+                        name={s.icon as keyof typeof Ionicons.glyphMap}
+                        size={18}
+                        color={s.color}
+                      />
+                      <Text
+                        variant="body"
+                        color="label"
+                        style={{ flex: 1, marginLeft: 12, fontWeight: active ? '600' : '400' }}
+                      >
+                        {s.label}
+                      </Text>
+                      {active ? (
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={18}
+                          color={t.palette.blue.base}
+                        />
+                      ) : null}
+                    </Pressable>
+                    {i < DELIVERY_STATUSES.length - 1 ? (
+                      <View
+                        style={{
+                          height: t.hairline,
+                          backgroundColor: t.colors.separator,
+                          marginLeft: 16,
+                        }}
+                      />
+                    ) : null}
+                  </View>
+                );
+              })}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
       </Modal>
-    </Screen>
+    </View>
   );
 }
-
-// ── Item Row ──
 
 function ItemRow({
   item,
@@ -483,130 +797,361 @@ function ItemRow({
   showDelivery: boolean;
   onDeliveryPress: () => void;
 }) {
+  const t = useThemeV2();
   const ds = DELIVERY_STATUSES.find((s) => s.key === item.deliveryStatus) ?? DELIVERY_STATUSES[0];
   const catConfig = item.category ? getCategoryConfig(item.category as MaterialCategory) : null;
-
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
   return (
-    <View style={styles.itemRow}>
-      <View style={styles.itemNum}>
-        <Text variant="caption" color="textMuted">{index + 1}</Text>
-      </View>
-      <View style={styles.itemBody}>
-        <View style={styles.itemNameRow}>
-          {catConfig && (
-            <View style={[styles.catDot, { backgroundColor: catConfig.color }]} />
-          )}
-          <Text variant="rowTitle" color="text" numberOfLines={1} style={{ flex: 1 }}>{item.name}</Text>
+    <View style={{ paddingHorizontal: 16 }}>
+      <View
+        style={[
+          styles.itemRow,
+          {
+            backgroundColor: cardBg,
+            borderRadius: t.radii.card,
+            borderColor: cardBorder,
+            borderWidth: t.hairline,
+          },
+        ]}
+      >
+        <View style={styles.itemNum}>
+          <Text variant="caption2" color="tertiary" style={{ fontWeight: '700' }}>
+            {index + 1}
+          </Text>
         </View>
-        <Text variant="caption" color="textMuted" numberOfLines={1}>
-          {[catConfig?.label, item.brand, item.variety, item.size].filter(Boolean).join(' · ')}
-        </Text>
-        <Text variant="meta" color="text">
-          {item.quantity} {item.unit}
-          {showPrice ? ` × ₹${item.rate} = ${formatInr(item.totalCost)}` : ''}
-        </Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {catConfig ? (
+              <View
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  backgroundColor: t.colors.tertiary,
+                }}
+              />
+            ) : null}
+            <Text
+              variant="callout"
+              color="label"
+              style={{ flex: 1, fontWeight: '600' }}
+              numberOfLines={1}
+            >
+              {item.name}
+            </Text>
+          </View>
+          <Text variant="caption1" color="secondary" numberOfLines={1} style={{ marginTop: 2 }}>
+            {[catConfig?.label, item.brand, item.variety, item.size].filter(Boolean).join(' · ')}
+          </Text>
+          <Text variant="footnote" color="label" style={{ marginTop: 4, fontWeight: '600' }}>
+            {item.quantity} {item.unit}
+            {showPrice ? ` × ₹${item.rate} = ${formatInr(item.totalCost)}` : ''}
+          </Text>
+        </View>
+        {showDelivery ? (
+          <Pressable
+            onPress={onDeliveryPress}
+            hitSlop={6}
+            style={({ pressed }) => [
+              styles.deliveryChip,
+              {
+                backgroundColor: ds.color + '22',
+                borderColor: ds.color + '55',
+                borderWidth: 1,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Ionicons name={ds.icon as keyof typeof Ionicons.glyphMap} size={11} color={ds.color} />
+            <Text
+              variant="caption2"
+              style={{
+                color: ds.color,
+                fontWeight: '700',
+                marginLeft: 4,
+                letterSpacing: 0.3,
+              }}
+            >
+              {ds.label.toUpperCase()}
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
-      {showDelivery && (
-        <Pressable onPress={onDeliveryPress} style={[styles.deliveryChip, { borderColor: ds.color }]}>
-          <Ionicons name={ds.icon as any} size={14} color={ds.color} />
-          <Text variant="caption" style={{ color: ds.color }}>{ds.label}</Text>
-        </Pressable>
-      )}
     </View>
   );
 }
 
-function statusBadge(status: string) {
-  switch (status) {
-    case 'pending': return { bg: color.warningSoft, fg: color.warning, label: 'Pending Approval' };
-    case 'approved': return { bg: color.successSoft, fg: color.success, label: 'Approved' };
-    case 'rejected': return { bg: color.dangerSoft, fg: color.danger, label: 'Rejected' };
-    default: return { bg: color.primarySoft, fg: color.primary, label: 'Draft' };
-  }
+function Header({
+  onBack,
+  title,
+  right,
+}: {
+  onBack: () => void;
+  title: string;
+  right?: React.ReactNode;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      style={[
+        styles.header,
+        {
+          paddingTop: insets.top + 8,
+          borderBottomColor: t.colors.separator,
+          borderBottomWidth: t.hairline,
+        },
+      ]}
+    >
+      <CircleBtn icon="chevron-back" onPress={onBack} tint={t.colors.label} />
+      <Text
+        variant="headline"
+        color="label"
+        style={{ flex: 1, textAlign: 'center', fontWeight: '600' }}
+        numberOfLines={1}
+      >
+        {title}
+      </Text>
+      {right ?? <View style={{ width: 32 }} />}
+    </View>
+  );
+}
+
+function CircleBtn({
+  icon,
+  onPress,
+  tint,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  onPress: () => void;
+  tint: string;
+}) {
+  const t = useThemeV2();
+  return (
+    <Pressable
+      onPress={onPress}
+      hitSlop={10}
+      style={({ pressed }) => [
+        styles.circleBtn,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: 999,
+          borderColor:
+            t.mode === 'dark' ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+          borderWidth: t.hairline,
+        },
+        t.shadows.resting,
+        pressed && { opacity: 0.7 },
+      ]}
+    >
+      <Ionicons name={icon} size={16} color={tint} />
+    </Pressable>
+  );
+}
+
+/** KPI tile — neutral by design (90/10 colour discipline). `tone`/`bg`
+ *  props accepted for back-compat but ignored. */
+function Kpi({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+  /** @deprecated value renders in neutral label colour. */
+  tone?: string;
+  /** @deprecated dot renders with neutral fill3 background. */
+  bg?: string;
+}) {
+  const t = useThemeV2();
+  return (
+    <View
+      style={[
+        styles.kpiTile,
+        {
+          backgroundColor: t.colors.surface,
+          borderRadius: t.radii.card,
+          borderColor:
+            t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+          borderWidth: t.hairline,
+        },
+      ]}
+    >
+      <View style={[styles.kpiDot, { backgroundColor: t.colors.fill3 }]}>
+        <View style={[styles.kpiDotInner, { backgroundColor: t.colors.tertiary }]} />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4, fontSize: 9 }}>
+          {label}
+        </Text>
+        <Text
+          variant="footnote"
+          color="label"
+          style={{
+            fontWeight: '600',
+            fontVariant: ['tabular-nums'],
+            marginTop: 1,
+          }}
+          numberOfLines={1}
+          adjustsFontSizeToFit
+          minimumFontScale={0.7}
+        >
+          {value}
+        </Text>
+      </View>
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
-  navBar: {
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: screenInset,
-    paddingBottom: space.xxs,
-    backgroundColor: color.bgGrouped,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.borderStrong,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    gap: 8,
   },
-  navBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
-  navActions: { flexDirection: 'row', alignItems: 'center' },
-  navTitle: { flex: 1, textAlign: 'center' },
-
-  statusBar: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: space.xs, paddingHorizontal: screenInset, backgroundColor: color.surface },
-  statusDot: { width: 8, height: 8, borderRadius: 4 },
-
-  progressBar: { height: 24, backgroundColor: color.bgGrouped, marginHorizontal: screenInset, marginTop: space.xs, borderRadius: 8, overflow: 'hidden', justifyContent: 'center', borderWidth: 1, borderColor: color.borderStrong },
-  progressFill: { position: 'absolute', left: 0, top: 0, bottom: 0, backgroundColor: color.successSoft },
-  progressText: { textAlign: 'center', zIndex: 1 },
-
-  metricsCard: {
-    marginHorizontal: screenInset,
-    marginTop: 8,
-    marginBottom: 6,
-    borderWidth: 1,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    paddingHorizontal: space.sm,
-    paddingVertical: space.sm,
+  circleBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  metricsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  metricsDivider: { height: StyleSheet.hairlineWidth, backgroundColor: color.borderStrong, marginVertical: 8 },
-  metaIconRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  compactMetaLine: { letterSpacing: 0.2 },
 
-  listFlex: { flex: 1 },
-  listContent: { paddingBottom: 20, paddingTop: 2 },
+  scroll: {},
+
+  heroCard: {
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+  heroTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+  },
+  progressBlock: {
+    marginTop: 14,
+  },
+  progressTrack: {
+    height: 8,
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+
+  kpiRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    gap: 8,
+  },
+  kpiTile: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  kpiDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  kpiDotInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+
+  rejectionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+
   itemRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.xs,
-    paddingHorizontal: screenInset,
-    paddingVertical: space.sm,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    backgroundColor: color.surface,
-    marginHorizontal: screenInset,
-    marginBottom: 6,
+    gap: 8,
+    padding: 12,
   },
-  itemNum: { width: 24, alignItems: 'center' },
-  itemBody: { flex: 1, gap: 1 },
-  itemNameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  catDot: { width: 8, height: 8, borderRadius: 4 },
-  deliveryChip: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingHorizontal: space.xs, paddingVertical: 3, borderRadius: radius.pill, borderWidth: 1 },
+  itemNum: { width: 22, alignItems: 'center' },
+  deliveryChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    flexShrink: 0,
+  },
 
-  rejectionBar: { flexDirection: 'row', alignItems: 'center', gap: space.xs, paddingHorizontal: screenInset, paddingVertical: space.sm, backgroundColor: color.dangerSoft },
-
-  footer: { paddingHorizontal: screenInset, paddingTop: space.sm, backgroundColor: color.bgGrouped, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: color.borderStrong, gap: space.sm },
-  footerRow: { flexDirection: 'row', gap: space.sm },
-  /** Full-width or row cell: never use flex:1 height-wise — only footerRowBtn adds flex in a horizontal row. */
+  // Footer
+  footer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    gap: 8,
+  },
   actionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: space.xs,
-    paddingVertical: 14,
-    minHeight: 48,
-    borderRadius: 10,
-    alignSelf: 'stretch',
+    paddingVertical: 12,
   },
-  footerRowBtn: { flex: 1 },
-  approveBtn: { backgroundColor: color.success },
-  rejectBtn: { backgroundColor: color.dangerSoft, borderWidth: 1, borderColor: color.danger },
-  shareBtn: { backgroundColor: color.primary },
-  editBtn: { backgroundColor: color.primarySoft, borderWidth: 1, borderColor: color.primary },
 
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'center', alignItems: 'center' },
-  rejectSheet: { backgroundColor: color.surface, borderRadius: radius.lg, padding: space.lg, marginHorizontal: screenInset * 2, width: '85%', alignSelf: 'center' },
-  rejectInput: { borderWidth: 1, borderColor: color.border, borderRadius: radius.sm, padding: space.sm, fontSize: 14, color: color.text, minHeight: 80, textAlignVertical: 'top', marginBottom: space.sm },
-  rejectActions: { flexDirection: 'row', gap: space.sm },
+  // Bottom sheets
+  bottomSheet: { paddingTop: 8 },
+  grabber: {
+    width: 36,
+    height: 5,
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+  rejectInput: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  sheetActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
 
-  deliverySheet: { backgroundColor: color.surface, borderRadius: radius.lg, padding: space.lg, marginHorizontal: screenInset * 2, width: '85%', alignSelf: 'center' },
-  deliveryOption: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingVertical: space.sm, paddingHorizontal: space.xs, borderRadius: radius.sm },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+  },
+  deliverySheet: {
+    paddingTop: 8,
+    maxHeight: '70%',
+  },
+  deliveryOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
 });

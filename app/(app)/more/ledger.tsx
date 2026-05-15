@@ -1,24 +1,44 @@
 /**
- * Studio-wide Ledger — every transaction across every project the
- * caller can see. Filters refine the on-screen list AND the generated
- * PDF (same filtered set is exported).
+ * Studio-wide Ledger — v2 design.
+ *
+ * Layout (top → bottom):
+ *   1. v2 header: back · "Ledger" · circular blue PDF icon (when entries exist)
+ *   2. Period chip rail (All / Today / This Week / This Month / Last Month / Custom)
+ *   3. Custom date row (only when Period = Custom) — From + To Row pickers
+ *   4. Combined In / Out / Balance card with hairline dividers
+ *   5. "Filters" Filter button (count badge) → opens FilterSheet
+ *   6. Transactions list — surface card rows, in-tone amount on right
+ *   7. Floating Generate Report bar at the bottom
+ *
+ * Pickers:
+ *   • FilterSheet — bottom sheet with Project / Type / Category /
+ *     Payment Method / Party sections + Clear all
+ *   • PartyPickerSheet (search) and ProjectMultiPickerSheet (search +
+ *     multi-select)
+ *   • DateTimeSheet for the From / To custom-period dates
+ *
+ * Preserves all data hooks (`useProjects`, `useParties`, `useOrgMembers`,
+ * `useProjectTotals`) and the PDF-export pipeline (`generateLedgerReport`).
  */
 import { router, Stack } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   TextInput,
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useCurrentUserDoc } from '@/src/features/org/useCurrentUserDoc';
 import { useOrgMembers } from '@/src/features/org/useOrgMembers';
@@ -38,11 +58,12 @@ import {
   type TransactionType,
   type PaymentMethod,
 } from '@/src/features/transactions/types';
-import { Screen } from '@/src/ui/Screen';
-import { Spinner } from '@/src/ui/Spinner';
-import { Text } from '@/src/ui/Text';
-import { TutorialEmptyState } from '@/src/ui/TutorialEmptyState';
-import { color, fontFamily } from '@/src/theme/tokens';
+
+import { AmbientBackground } from '@/src/ui/v2/AmbientBackground';
+import { DateTimeSheet } from '@/src/ui/v2/DateTimeSheet';
+import { Text } from '@/src/ui/v2/Text';
+import { usePullToRefresh } from '@/src/ui/v2/usePullToRefresh';
+import { inrCompact, useThemeV2, type ThemeV2 } from '@/src/theme/v2';
 
 type PeriodKey = 'all' | 'today' | 'week' | 'month' | 'lastMonth' | 'custom';
 
@@ -69,9 +90,9 @@ const EMPTY_FILTERS: Filters = {
 const PERIOD_OPTIONS: { key: PeriodKey; label: string }[] = [
   { key: 'all', label: 'All' },
   { key: 'today', label: 'Today' },
-  { key: 'week', label: 'This Week' },
-  { key: 'month', label: 'This Month' },
-  { key: 'lastMonth', label: 'Last Month' },
+  { key: 'week', label: 'This week' },
+  { key: 'month', label: 'This month' },
+  { key: 'lastMonth', label: 'Last month' },
   { key: 'custom', label: 'Custom' },
 ];
 
@@ -103,16 +124,21 @@ function fmtShortDate(d: Date): string {
   return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
-function fmtAmount(n: number): string {
-  return `₹${Math.abs(n).toLocaleString('en-IN')}`;
-}
-
-function fmtTxnDate(ts: { toDate: () => Date } | null | undefined): string {
-  if (!ts) return '—';
-  return ts.toDate().toLocaleDateString('en-IN', { day: '2-digit', month: 'short' });
+function fmtTxnDate(ts: { toDate: () => Date } | null | undefined): {
+  day: string;
+  month: string;
+} {
+  if (!ts) return { day: '—', month: '' };
+  const d = ts.toDate();
+  return {
+    day: d.toLocaleDateString('en-IN', { day: '2-digit' }),
+    month: d.toLocaleDateString('en-IN', { month: 'short' }).toUpperCase(),
+  };
 }
 
 export default function LedgerScreen() {
+  const t = useThemeV2();
+  const refresh = usePullToRefresh();
   const { data: userDoc } = useCurrentUserDoc();
   const orgId = userDoc?.primaryOrgId ?? '';
 
@@ -123,7 +149,7 @@ export default function LedgerScreen() {
 
   const [period, setPeriod] = useState<PeriodKey>('all');
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  const [filtersOpen, setFiltersOpen] = useState(true);
+  const [filterSheetOpen, setFilterSheetOpen] = useState(false);
   const [partyPickerOpen, setPartyPickerOpen] = useState(false);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [datePicker, setDatePicker] = useState<'from' | 'to' | null>(null);
@@ -166,18 +192,18 @@ export default function LedgerScreen() {
 
     return txns
       .filter(isTransactionCountedInTotals)
-      .filter((t) => {
-        if (filters.projectIds.length > 0 && !filters.projectIds.includes(t.projectId)) return false;
-        const tt = normalizeTransactionType(t.type);
+      .filter((tx) => {
+        if (filters.projectIds.length > 0 && !filters.projectIds.includes(tx.projectId)) return false;
+        const tt = normalizeTransactionType(tx.type);
         if (filters.type !== 'all' && tt !== filters.type) return false;
-        if (filters.category !== 'all' && t.category !== filters.category) return false;
-        if (filters.paymentMethod !== 'all' && t.paymentMethod !== filters.paymentMethod) return false;
-        if (filters.partyId && t.partyId !== filters.partyId) return false;
-        if (range.from && t.date && t.date.toDate() < range.from) return false;
+        if (filters.category !== 'all' && tx.category !== filters.category) return false;
+        if (filters.paymentMethod !== 'all' && tx.paymentMethod !== filters.paymentMethod) return false;
+        if (filters.partyId && tx.partyId !== filters.partyId) return false;
+        if (range.from && tx.date && tx.date.toDate() < range.from) return false;
         if (range.to) {
           const end = new Date(range.to);
           end.setHours(23, 59, 59, 999);
-          if (t.date && t.date.toDate() > end) return false;
+          if (tx.date && tx.date.toDate() > end) return false;
         }
         return true;
       })
@@ -191,9 +217,9 @@ export default function LedgerScreen() {
   const totals = useMemo(() => {
     let income = 0;
     let expense = 0;
-    for (const t of filteredTxns) {
-      if (normalizeTransactionType(t.type) === 'payment_in') income += t.amount;
-      else expense += t.amount;
+    for (const tx of filteredTxns) {
+      if (normalizeTransactionType(tx.type) === 'payment_in') income += tx.amount;
+      else expense += tx.amount;
     }
     return { income, expense, balance: income - expense };
   }, [filteredTxns]);
@@ -225,9 +251,17 @@ export default function LedgerScreen() {
         dateTo: range.to,
         projectsLabel,
         appliedFilters: {
-          type: filters.type !== 'all' ? (filters.type === 'payment_in' ? 'Payment In' : 'Payment Out') : undefined,
+          type:
+            filters.type !== 'all'
+              ? filters.type === 'payment_in'
+                ? 'Payment In'
+                : 'Payment Out'
+              : undefined,
           category: filters.category !== 'all' ? getCategoryLabel(filters.category) : undefined,
-          paymentMethod: filters.paymentMethod !== 'all' ? getPaymentMethodLabel(filters.paymentMethod) : undefined,
+          paymentMethod:
+            filters.paymentMethod !== 'all'
+              ? getPaymentMethodLabel(filters.paymentMethod)
+              : undefined,
           party: partyName,
         },
       });
@@ -238,111 +272,202 @@ export default function LedgerScreen() {
     }
   }, [orgId, period, filters, filteredTxns, projectsById, partiesById, memberNames]);
 
-  const selectedParty = filters.partyId ? partiesById[filters.partyId] : null;
-
-  const projectsLabel =
-    filters.projectIds.length === 0
-      ? 'All projects'
-      : filters.projectIds.length === 1
-        ? projectsById[filters.projectIds[0]]?.name ?? '1 project'
-        : `${filters.projectIds.length} projects`;
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
 
   const renderRow = useCallback(
-    ({ item: t }: { item: Transaction }) => {
-      const dir = normalizeTransactionType(t.type);
+    ({ item: tx, index }: { item: Transaction; index: number }) => {
+      const dir = normalizeTransactionType(tx.type);
       const isIn = dir === 'payment_in';
-      const projName = projectsById[t.projectId]?.name ?? 'Project';
-      const cat = t.category ? getCategoryLabel(t.category as TransactionCategory) : null;
-      const meth = t.paymentMethod
-        ? getPaymentMethodLabel(t.paymentMethod as PaymentMethod)
+      const projName = projectsById[tx.projectId]?.name ?? 'Project';
+      const cat = tx.category ? getCategoryLabel(tx.category as TransactionCategory) : null;
+      const meth = tx.paymentMethod
+        ? getPaymentMethodLabel(tx.paymentMethod as PaymentMethod)
         : null;
-      const subline = [cat, meth, t.description].filter(Boolean).join(' · ') || '—';
+      const subline = [projName, cat, meth, tx.description].filter(Boolean).join(' · ');
+      const date = fmtTxnDate(tx.date);
+      const tone = isIn ? t.palette.green : t.palette.red;
+
+      const isLast = index === filteredTxns.length - 1;
+      const isFirst = index === 0;
+
       return (
         <Pressable
           onPress={() =>
-            router.push(`/(app)/projects/${t.projectId}/transaction/${t.id}` as never)
+            router.push(`/(app)/projects/${tx.projectId}/transaction/${tx.id}` as never)
           }
-          style={({ pressed }) => [styles.txnRow, pressed && { opacity: 0.7 }]}
+          style={({ pressed }) => [
+            styles.row,
+            {
+              backgroundColor: pressed ? t.colors.fill3 : cardBg,
+              borderTopLeftRadius: isFirst ? t.radii.card : 0,
+              borderTopRightRadius: isFirst ? t.radii.card : 0,
+              borderBottomLeftRadius: isLast ? t.radii.card : 0,
+              borderBottomRightRadius: isLast ? t.radii.card : 0,
+              borderTopWidth: isFirst ? t.hairline : 0,
+              borderBottomWidth: isLast ? t.hairline : 0,
+              borderLeftWidth: t.hairline,
+              borderRightWidth: t.hairline,
+              borderColor: cardBorder,
+            },
+          ]}
         >
-          <View style={styles.txnDateCol}>
-            <Text style={styles.txnDate}>{fmtTxnDate(t.date)}</Text>
-          </View>
-          <View style={styles.txnBody}>
-            <Text style={styles.txnTitle} numberOfLines={1}>
-              {t.partyName || '—'}
-              <Text style={styles.txnProj}> · {projName}</Text>
+          {/* Date pill */}
+          <View
+            style={[
+              styles.datePill,
+              {
+                backgroundColor: t.colors.fill3,
+                borderRadius: t.radii.tile,
+              },
+            ]}
+          >
+            <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4 }}>
+              {date.month}
             </Text>
-            <Text style={styles.txnSub} numberOfLines={1}>
-              {subline}
+            <Text
+              variant="headline"
+              color="label"
+              style={{ fontWeight: '700', marginTop: -1 }}
+            >
+              {date.day}
             </Text>
           </View>
-          <View style={styles.txnAmtCol}>
-            <Text style={[styles.txnAmt, { color: isIn ? '#059669' : '#dc2626' }]}>
-              {isIn ? '+' : '−'}
-              {fmtAmount(t.amount)}
+
+          {/* Body */}
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text variant="body" color="label" numberOfLines={1}>
+              {tx.partyName || projName || '—'}
             </Text>
+            {subline ? (
+              <Text
+                variant="caption1"
+                color="secondary"
+                numberOfLines={1}
+                style={{ marginTop: 2 }}
+              >
+                {subline}
+              </Text>
+            ) : null}
           </View>
+
+          {/* Amount */}
+          <Text
+            variant="callout"
+            style={{
+              color: tone.base,
+              fontWeight: '700',
+              marginLeft: 8,
+            }}
+          >
+            {isIn ? '+' : '−'}
+            {inrCompact(Math.abs(tx.amount))}
+          </Text>
+
+          {/* Divider between rows */}
+          {!isLast ? (
+            <View
+              style={[
+                styles.rowDivider,
+                { backgroundColor: t.colors.separator, left: 76 },
+              ]}
+            />
+          ) : null}
         </Pressable>
       );
     },
-    [projectsById],
+    [filteredTxns.length, projectsById, t, cardBg, cardBorder],
   );
 
   const isLoading = txnsLoading || projectsLoading;
 
   return (
-    <Screen bg="grouped" padded={false} style={{ backgroundColor: color.bgGrouped }}>
+    <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Stack.Screen options={{ headerShown: false }} />
+      <AmbientBackground />
 
-      {/* Nav */}
-      <View style={styles.navBar}>
+      {/* Header — transparent so the AmbientBackground flows through */}
+      <View style={styles.header}>
         <Pressable
           onPress={() => router.back()}
-          hitSlop={12}
-          style={({ pressed }) => [styles.navBtn, pressed && { opacity: 0.6 }]}
-          accessibilityLabel="Back"
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.iconBtn,
+            { backgroundColor: t.colors.fill3, borderRadius: 999 },
+            pressed && { opacity: 0.7 },
+          ]}
         >
-          <Ionicons name="chevron-back" size={20} color={color.textMuted} />
+          <Ionicons name="chevron-back" size={18} color={t.colors.label} />
         </Pressable>
-        <View style={styles.navTitleWrap}>
-          <Text style={styles.navTitle} numberOfLines={1}>Ledger</Text>
-          <Text style={styles.navSub} numberOfLines={1}>
+        <View style={{ flex: 1 }}>
+          <Text variant="headline" color="label">
+            Ledger
+          </Text>
+          <Text variant="caption2" color="secondary" style={{ letterSpacing: 0.5, marginTop: 1 }}>
             STUDIO TRANSACTIONS · {filteredTxns.length}
           </Text>
         </View>
         <Pressable
           onPress={handleGenerate}
           disabled={generating || isLoading || filteredTxns.length === 0}
-          hitSlop={12}
+          hitSlop={10}
           style={({ pressed }) => [
-            styles.navIconBtn,
-            pressed && { opacity: 0.6 },
-            (generating || isLoading || filteredTxns.length === 0) && { opacity: 0.4 },
+            styles.iconBtn,
+            {
+              backgroundColor:
+                generating || isLoading || filteredTxns.length === 0
+                  ? t.colors.fill3
+                  : t.mode === 'dark'
+                    ? t.palette.blue.softDark
+                    : t.palette.blue.soft,
+              borderRadius: 999,
+            },
+            pressed && { opacity: 0.7 },
           ]}
-          accessibilityLabel="Generate PDF"
         >
           {generating ? (
-            <ActivityIndicator size="small" color={color.primary} />
+            <ActivityIndicator size="small" color={t.palette.blue.base} />
           ) : (
-            <Ionicons name="document-text-outline" size={16} color={color.primary} />
+            <Ionicons
+              name="document-text-outline"
+              size={16}
+              color={
+                filteredTxns.length === 0 || isLoading
+                  ? t.colors.tertiary
+                  : t.palette.blue.base
+              }
+            />
           )}
         </Pressable>
       </View>
 
       <FlatList
         data={filteredTxns}
-        keyExtractor={(t) => t.id}
+        keyExtractor={(tx) => tx.id}
         renderItem={renderRow}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={{ paddingBottom: 110 }}
+        refreshControl={<RefreshControl {...refresh.props} />}
         ListHeaderComponent={
           <View>
-            {/* Period chips */}
-            <Text style={styles.sectionLabel}>PERIOD</Text>
+            {/* PERIOD chips */}
+            <Text
+              variant="caption2"
+              color="secondary"
+              style={{
+                paddingHorizontal: 32,
+                paddingTop: 18,
+                paddingBottom: 8,
+                letterSpacing: 0.4,
+              }}
+            >
+              PERIOD
+            </Text>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.chipScroll}
+              contentContainerStyle={{ paddingHorizontal: 16, gap: 6 }}
             >
               {PERIOD_OPTIONS.map((opt) => {
                 const sel = opt.key === period;
@@ -350,14 +475,25 @@ export default function LedgerScreen() {
                   <Pressable
                     key={opt.key}
                     onPress={() => setPeriod(opt.key)}
-                    style={[styles.periodChip, sel ? styles.periodChipActive : undefined]}
+                    style={({ pressed }) => [
+                      styles.chip,
+                      {
+                        backgroundColor: sel
+                          ? t.mode === 'dark'
+                            ? t.palette.blue.softDark
+                            : t.palette.blue.soft
+                          : t.colors.fill3,
+                        borderRadius: 999,
+                      },
+                      pressed && { opacity: 0.85 },
+                    ]}
                   >
                     <Text
-                      style={
-                        sel
-                          ? [styles.periodChipText, styles.periodChipTextActive]
-                          : styles.periodChipText
-                      }
+                      variant="footnote"
+                      style={{
+                        color: sel ? t.palette.blue.base : t.colors.label,
+                        fontWeight: sel ? '700' : '500',
+                      }}
                     >
                       {opt.label}
                     </Text>
@@ -366,234 +502,217 @@ export default function LedgerScreen() {
               })}
             </ScrollView>
 
-            {/* Custom date range (only when period === 'custom') */}
-            {period === 'custom' && (
-              <View style={styles.dateRow}>
-                <Pressable
+            {/* Custom date row */}
+            {period === 'custom' ? (
+              <View style={styles.customDateRow}>
+                <DatePickerBtn
+                  label={filters.dateFrom ? fmtShortDate(filters.dateFrom) : 'From'}
+                  filled={!!filters.dateFrom}
                   onPress={() => setDatePicker('from')}
-                  style={[styles.pickerBtn, { flex: 1 }]}
-                >
-                  <Ionicons name="calendar-outline" size={14} color={color.primary} />
-                  <Text style={styles.pickerBtnText} numberOfLines={1}>
-                    {filters.dateFrom ? fmtShortDate(filters.dateFrom) : 'From'}
-                  </Text>
-                </Pressable>
-                <Pressable
+                  t={t}
+                />
+                <DatePickerBtn
+                  label={filters.dateTo ? fmtShortDate(filters.dateTo) : 'To'}
+                  filled={!!filters.dateTo}
                   onPress={() => setDatePicker('to')}
-                  style={[styles.pickerBtn, { flex: 1 }]}
-                >
-                  <Ionicons name="calendar-outline" size={14} color={color.primary} />
-                  <Text style={styles.pickerBtnText} numberOfLines={1}>
-                    {filters.dateTo ? fmtShortDate(filters.dateTo) : 'To'}
-                  </Text>
-                </Pressable>
+                  t={t}
+                />
               </View>
-            )}
+            ) : null}
 
-            {/* Totals */}
-            <View style={styles.totalsRow}>
-              <View style={[styles.totalCell, styles.totalIn]}>
-                <Text style={styles.totalLabel}>TOTAL IN</Text>
-                <Text style={[styles.totalValue, { color: '#059669' }]}>
-                  +{fmtAmount(totals.income)}
-                </Text>
-              </View>
-              <View style={[styles.totalCell, styles.totalOut]}>
-                <Text style={styles.totalLabel}>TOTAL OUT</Text>
-                <Text style={[styles.totalValue, { color: '#dc2626' }]}>
-                  −{fmtAmount(totals.expense)}
-                </Text>
-              </View>
-              <View style={[styles.totalCell, styles.totalBal]}>
-                <Text style={styles.totalLabel}>BALANCE</Text>
-                <Text style={[styles.totalValue, { color: '#2563eb' }]}>
-                  {totals.balance < 0 ? '−' : ''}
-                  {fmtAmount(totals.balance)}
-                </Text>
+            {/* Combined In / Out / Balance card */}
+            <View style={{ paddingHorizontal: 16, paddingTop: 16 }}>
+              <View
+                style={[
+                  styles.totalsCard,
+                  {
+                    backgroundColor: cardBg,
+                    borderRadius: t.radii.card,
+                    borderColor: cardBorder,
+                    borderWidth: t.hairline,
+                  },
+                ]}
+              >
+                <TotalCol
+                  label="IN"
+                  value={`+${inrCompact(totals.income)}`}
+                  color={t.palette.green.base}
+                />
+                <View
+                  style={[
+                    styles.totalsDivider,
+                    { backgroundColor: t.colors.separator },
+                  ]}
+                />
+                <TotalCol
+                  label="OUT"
+                  value={`−${inrCompact(totals.expense)}`}
+                  color={t.palette.red.base}
+                />
+                <View
+                  style={[
+                    styles.totalsDivider,
+                    { backgroundColor: t.colors.separator },
+                  ]}
+                />
+                <TotalCol
+                  label="BALANCE"
+                  value={`${totals.balance < 0 ? '−' : ''}${inrCompact(Math.abs(totals.balance))}`}
+                  color={t.palette.blue.base}
+                />
               </View>
             </View>
 
-            {/* Filter card header (collapsible) */}
-            <Pressable
-              onPress={() => setFiltersOpen((v) => !v)}
-              style={styles.filterToggle}
-            >
-              <Ionicons name="options-outline" size={15} color={color.text} />
-              <Text style={styles.filterToggleText}>Filters</Text>
-              {activeFilterCount > 0 && (
-                <View style={styles.filterBadge}>
-                  <Text style={styles.filterBadgeText}>{activeFilterCount}</Text>
-                </View>
-              )}
-              <Ionicons
-                name={filtersOpen ? 'chevron-up' : 'chevron-down'}
-                size={14}
-                color={color.textMuted}
-                style={{ marginLeft: 'auto' }}
-              />
-            </Pressable>
-
-            {filtersOpen && (
-              <View style={styles.card}>
-                <FilterSection label="Projects">
-                  <Pressable
-                    onPress={() => setProjectPickerOpen(true)}
-                    style={styles.pickerBtn}
+            {/* Filter button */}
+            <View style={{ paddingHorizontal: 16, marginTop: 12 }}>
+              <Pressable
+                onPress={() => setFilterSheetOpen(true)}
+                style={({ pressed }) => [
+                  styles.filterBtn,
+                  {
+                    backgroundColor: cardBg,
+                    borderRadius: t.radii.field,
+                    borderColor: cardBorder,
+                    borderWidth: t.hairline,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Ionicons name="options-outline" size={16} color={t.colors.label} />
+                <Text
+                  variant="callout"
+                  color="label"
+                  style={{ fontWeight: '600', marginLeft: 8 }}
+                >
+                  Filters
+                </Text>
+                {activeFilterCount > 0 ? (
+                  <View
+                    style={[
+                      styles.countBadge,
+                      { backgroundColor: t.palette.blue.base },
+                    ]}
                   >
-                    <Ionicons name="briefcase-outline" size={15} color={color.primary} />
-                    <Text style={styles.pickerBtnText}>{projectsLabel}</Text>
-                    {filters.projectIds.length > 0 ? (
-                      <Pressable
-                        onPress={() => setFilters((f) => ({ ...f, projectIds: [] }))}
-                        hitSlop={8}
-                        style={{ marginLeft: 'auto' }}
-                      >
-                        <Ionicons name="close-circle" size={16} color={color.textFaint} />
-                      </Pressable>
-                    ) : (
-                      <Ionicons
-                        name="chevron-forward"
-                        size={14}
-                        color={color.textFaint}
-                        style={{ marginLeft: 'auto' }}
-                      />
-                    )}
-                  </Pressable>
-                </FilterSection>
-
-                <FilterSection label="Type">
-                  <ChipRow
-                    options={[
-                      { key: 'all', label: 'All' },
-                      { key: 'payment_in', label: 'Payment In' },
-                      { key: 'payment_out', label: 'Payment Out' },
-                    ]}
-                    value={filters.type}
-                    onChange={(v) =>
-                      setFilters((f) => ({ ...f, type: v as TransactionType | 'all' }))
-                    }
-                  />
-                </FilterSection>
-
-                <FilterSection label="Category">
-                  <ChipRow
-                    options={[
-                      { key: 'all', label: 'All' },
-                      ...TRANSACTION_CATEGORIES.map((c) => ({ key: c.key, label: c.label })),
-                    ]}
-                    value={filters.category}
-                    onChange={(v) =>
-                      setFilters((f) => ({ ...f, category: v as TransactionCategory | 'all' }))
-                    }
-                  />
-                </FilterSection>
-
-                <FilterSection label="Payment Method">
-                  <ChipRow
-                    options={[
-                      { key: 'all', label: 'All' },
-                      ...PAYMENT_METHODS.map((m) => ({ key: m.key, label: m.label })),
-                    ]}
-                    value={filters.paymentMethod}
-                    onChange={(v) =>
-                      setFilters((f) => ({ ...f, paymentMethod: v as PaymentMethod | 'all' }))
-                    }
-                  />
-                </FilterSection>
-
-                <FilterSection label="Party">
-                  <Pressable
-                    onPress={() => setPartyPickerOpen(true)}
-                    style={styles.pickerBtn}
-                  >
-                    <Ionicons name="people-outline" size={15} color={color.primary} />
-                    <Text style={styles.pickerBtnText}>
-                      {selectedParty?.name ?? 'All parties'}
+                    <Text
+                      variant="caption2"
+                      style={{ color: '#fff', fontWeight: '700' }}
+                    >
+                      {activeFilterCount}
                     </Text>
-                    {filters.partyId ? (
-                      <Pressable
-                        onPress={() => setFilters((f) => ({ ...f, partyId: null }))}
-                        hitSlop={8}
-                        style={{ marginLeft: 'auto' }}
-                      >
-                        <Ionicons name="close-circle" size={16} color={color.textFaint} />
-                      </Pressable>
-                    ) : (
-                      <Ionicons
-                        name="chevron-forward"
-                        size={14}
-                        color={color.textFaint}
-                        style={{ marginLeft: 'auto' }}
-                      />
-                    )}
-                  </Pressable>
-                </FilterSection>
+                  </View>
+                ) : null}
+                <Ionicons
+                  name="chevron-forward"
+                  size={14}
+                  color={t.colors.tertiary}
+                  style={{ marginLeft: 'auto' }}
+                />
+              </Pressable>
+            </View>
 
-                {activeFilterCount > 0 && (
-                  <Pressable
-                    onPress={() => {
-                      setFilters(EMPTY_FILTERS);
-                      setPeriod('all');
-                    }}
-                    hitSlop={6}
-                    style={styles.clearAll}
-                  >
-                    <Ionicons name="close-circle-outline" size={14} color={color.primary} />
-                    <Text style={styles.clearAllText}>Clear all filters</Text>
-                  </Pressable>
-                )}
-              </View>
-            )}
-
-            {/* Transactions header */}
-            <View style={styles.txnHeader}>
-              <Text style={styles.sectionLabel}>TRANSACTIONS</Text>
-              {filteredTxns.length > 0 && (
-                <Text style={styles.txnCount}>{filteredTxns.length} entries</Text>
-              )}
+            {/* TRANSACTIONS header */}
+            <View style={styles.txnHeaderRow}>
+              <Text
+                variant="caption2"
+                color="secondary"
+                style={{ letterSpacing: 0.4 }}
+              >
+                TRANSACTIONS
+              </Text>
+              {filteredTxns.length > 0 ? (
+                <Text variant="caption2" color="tertiary">
+                  {filteredTxns.length} entries
+                </Text>
+              ) : null}
             </View>
           </View>
         }
         ListEmptyComponent={
           isLoading ? (
             <View style={styles.empty}>
-              <Spinner size={24} />
+              <ActivityIndicator color={t.palette.blue.base} />
             </View>
           ) : (
-            <TutorialEmptyState
-              pageKey="ledger"
-              fallback={
-                <View style={styles.empty}>
-                  <Ionicons name="receipt-outline" size={32} color={color.textFaint} />
-                  <Text style={styles.emptyTitle}>
-                    {activeFilterCount > 0 ? 'No transactions match these filters' : 'No transactions yet'}
+            <View style={styles.empty}>
+              <View
+                style={[
+                  styles.emptyIcon,
+                  {
+                    backgroundColor:
+                      t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                    borderRadius: t.radii.tile,
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="receipt-outline"
+                  size={28}
+                  color={t.palette.blue.base}
+                />
+              </View>
+              <Text
+                variant="headline"
+                color="label"
+                style={{ marginTop: 12, fontWeight: '600' }}
+              >
+                {activeFilterCount > 0
+                  ? 'No matches'
+                  : 'No transactions yet'}
+              </Text>
+              <Text
+                variant="footnote"
+                color="secondary"
+                style={{ marginTop: 4, textAlign: 'center' }}
+              >
+                {activeFilterCount > 0
+                  ? 'Try widening your filters'
+                  : 'Logged transactions across all your projects appear here'}
+              </Text>
+              {activeFilterCount > 0 ? (
+                <Pressable
+                  onPress={() => {
+                    setFilters(EMPTY_FILTERS);
+                    setPeriod('all');
+                  }}
+                  hitSlop={6}
+                  style={({ pressed }) => [
+                    styles.clearBtn,
+                    {
+                      backgroundColor:
+                        t.mode === 'dark' ? t.palette.blue.softDark : t.palette.blue.soft,
+                      borderRadius: 999,
+                    },
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  <Text
+                    variant="footnote"
+                    style={{
+                      color: t.palette.blue.base,
+                      fontWeight: '700',
+                    }}
+                  >
+                    Clear filters
                   </Text>
-                  {activeFilterCount > 0 && (
-                    <Pressable
-                      onPress={() => {
-                        setFilters(EMPTY_FILTERS);
-                        setPeriod('all');
-                      }}
-                      style={styles.emptyClearBtn}
-                    >
-                      <Text style={styles.emptyClearText}>Clear filters</Text>
-                    </Pressable>
-                  )}
-                </View>
-              }
-            />
+                </Pressable>
+              ) : null}
+            </View>
           )
         }
       />
 
-      {/* Floating Generate Report button */}
-      {filteredTxns.length > 0 && (
+      {/* Floating Generate */}
+      {filteredTxns.length > 0 ? (
         <View style={styles.floatingBar}>
           <Pressable
             onPress={handleGenerate}
             disabled={generating}
             style={({ pressed }) => [
               styles.generateBtn,
+              {
+                backgroundColor: t.palette.blue.base,
+                borderRadius: 999,
+              },
               pressed && { opacity: 0.85 },
               generating && { opacity: 0.6 },
             ]}
@@ -603,15 +722,43 @@ export default function LedgerScreen() {
             ) : (
               <Ionicons name="document-text-outline" size={16} color="#fff" />
             )}
-            <Text style={styles.generateBtnText}>
-              {generating ? 'Generating…' : `Generate Report (${filteredTxns.length})`}
+            <Text
+              variant="callout"
+              style={{ color: '#fff', fontWeight: '700', marginLeft: 8 }}
+            >
+              {generating
+                ? 'Generating…'
+                : `Generate report · ${filteredTxns.length}`}
             </Text>
           </Pressable>
         </View>
-      )}
+      ) : null}
 
-      {/* Project picker modal */}
-      <ProjectMultiPicker
+      {/* Filter sheet */}
+      <FilterSheet
+        open={filterSheetOpen}
+        filters={filters}
+        partiesById={partiesById}
+        projectsById={projectsById}
+        activeCount={activeFilterCount}
+        onChange={setFilters}
+        onPickProjects={() => {
+          setFilterSheetOpen(false);
+          setProjectPickerOpen(true);
+        }}
+        onPickParty={() => {
+          setFilterSheetOpen(false);
+          setPartyPickerOpen(true);
+        }}
+        onClearAll={() => {
+          setFilters(EMPTY_FILTERS);
+          setPeriod('all');
+        }}
+        onClose={() => setFilterSheetOpen(false)}
+      />
+
+      {/* Project multi-picker */}
+      <ProjectMultiPickerSheet
         visible={projectPickerOpen}
         projects={projects.map((p) => ({ id: p.id, name: p.name }))}
         selectedIds={filters.projectIds}
@@ -622,117 +769,475 @@ export default function LedgerScreen() {
         }}
       />
 
-      {/* Party picker modal */}
-      <Modal
+      {/* Party picker */}
+      <PartyPickerSheet
         visible={partyPickerOpen}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setPartyPickerOpen(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setPartyPickerOpen(false)} />
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Select Party</Text>
-              <Pressable onPress={() => setPartyPickerOpen(false)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={color.textMuted} />
-              </Pressable>
-            </View>
-            <ScrollView style={{ maxHeight: 460 }}>
-              <Pressable
-                onPress={() => {
-                  setFilters((f) => ({ ...f, partyId: null }));
-                  setPartyPickerOpen(false);
-                }}
-                style={styles.partyRow}
-              >
-                <Text style={styles.partyName}>All parties</Text>
-                {!filters.partyId ? (
-                  <Ionicons name="checkmark" size={18} color={color.primary} />
-                ) : null}
-              </Pressable>
-              {parties.map((p) => (
-                <Pressable
-                  key={p.id}
-                  onPress={() => {
-                    setFilters((f) => ({ ...f, partyId: p.id }));
-                    setPartyPickerOpen(false);
-                  }}
-                  style={styles.partyRow}
-                >
-                  <Text style={styles.partyName}>{p.name}</Text>
-                  {filters.partyId === p.id ? (
-                    <Ionicons name="checkmark" size={18} color={color.primary} />
-                  ) : null}
-                </Pressable>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
+        parties={parties.map((p) => ({ id: p.id, name: p.name }))}
+        selectedId={filters.partyId}
+        onPick={(id) => {
+          setFilters((f) => ({ ...f, partyId: id }));
+          setPartyPickerOpen(false);
+        }}
+        onClose={() => setPartyPickerOpen(false)}
+      />
 
-      {/* Date picker — Android shows native dialog (auto-closes); iOS uses an
-          inline calendar inside a modal sheet so we get an explicit Done button. */}
-      {datePicker && Platform.OS === 'android' ? (
-        <DateTimePicker
-          value={(datePicker === 'from' ? filters.dateFrom : filters.dateTo) ?? new Date()}
-          mode="date"
-          display="default"
-          onChange={(_, d) => {
-            const which = datePicker;
-            setDatePicker(null);
-            if (d) {
-              setFilters((f) => ({
-                ...f,
-                ...(which === 'from' ? { dateFrom: d } : { dateTo: d }),
-              }));
-            }
-          }}
-        />
-      ) : null}
-
-      {Platform.OS === 'ios' && (
-        <Modal
-          visible={datePicker !== null}
-          transparent
-          animationType="slide"
-          onRequestClose={() => setDatePicker(null)}
-        >
-          <View style={styles.modalBackdrop}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => setDatePicker(null)} />
-            <View style={styles.modalSheet}>
-              <View style={styles.modalHandle} />
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>
-                  {datePicker === 'from' ? 'From Date' : 'To Date'}
-                </Text>
-                <Pressable onPress={() => setDatePicker(null)} hitSlop={12}>
-                  <Text style={styles.doneText}>Done</Text>
-                </Pressable>
-              </View>
-              <DateTimePicker
-                value={(datePicker === 'from' ? filters.dateFrom : filters.dateTo) ?? new Date()}
-                mode="date"
-                display="inline"
-                onChange={(_, d) => {
-                  if (!d) return;
-                  const which = datePicker;
-                  setFilters((f) => ({
-                    ...f,
-                    ...(which === 'from' ? { dateFrom: d } : { dateTo: d }),
-                  }));
-                }}
-              />
-            </View>
-          </View>
-        </Modal>
-      )}
-    </Screen>
+      {/* Date picker */}
+      <DateTimeSheet
+        open={datePicker === 'from'}
+        value={filters.dateFrom ?? new Date()}
+        mode="date"
+        title="From date"
+        onChange={(d) => setFilters((f) => ({ ...f, dateFrom: d }))}
+        onClose={() => setDatePicker(null)}
+      />
+      <DateTimeSheet
+        open={datePicker === 'to'}
+        value={filters.dateTo ?? new Date()}
+        mode="date"
+        title="To date"
+        onChange={(d) => setFilters((f) => ({ ...f, dateTo: d }))}
+        onClose={() => setDatePicker(null)}
+      />
+    </View>
   );
 }
 
-function ProjectMultiPicker({
+// ── Subcomponents ──
+
+function TotalCol({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: string;
+  color: string;
+}) {
+  return (
+    <View style={styles.totalCol}>
+      <Text variant="caption2" color="tertiary" style={{ letterSpacing: 0.4 }}>
+        {label}
+      </Text>
+      <Text
+        variant="callout"
+        style={{ color, fontWeight: '700', marginTop: 4 }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function DatePickerBtn({
+  label,
+  filled,
+  onPress,
+  t,
+}: {
+  label: string;
+  filled: boolean;
+  onPress: () => void;
+  t: ThemeV2;
+}) {
+  const cardBg = t.colors.surface;
+  const cardBorder =
+    t.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)';
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.datePickerBtn,
+        {
+          backgroundColor: cardBg,
+          borderRadius: t.radii.field,
+          borderColor: cardBorder,
+          borderWidth: t.hairline,
+        },
+        pressed && { opacity: 0.85 },
+      ]}
+    >
+      <Ionicons
+        name="calendar-outline"
+        size={14}
+        color={filled ? t.palette.blue.base : t.colors.tertiary}
+      />
+      <Text
+        variant="footnote"
+        style={{
+          color: filled ? t.colors.label : t.colors.tertiary,
+          fontWeight: filled ? '600' : '400',
+          marginLeft: 6,
+        }}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+// ── Filter Sheet ──
+
+function FilterSheet({
+  open,
+  filters,
+  partiesById,
+  projectsById,
+  activeCount,
+  onChange,
+  onPickProjects,
+  onPickParty,
+  onClearAll,
+  onClose,
+}: {
+  open: boolean;
+  filters: Filters;
+  partiesById: Record<string, { id: string; name: string }>;
+  projectsById: Record<string, { id: string; name: string }>;
+  activeCount: number;
+  onChange: (next: Filters) => void;
+  onPickProjects: () => void;
+  onPickParty: () => void;
+  onClearAll: () => void;
+  onClose: () => void;
+}) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+
+  const projectsLabel =
+    filters.projectIds.length === 0
+      ? 'All projects'
+      : filters.projectIds.length === 1
+        ? projectsById[filters.projectIds[0]]?.name ?? '1 project'
+        : `${filters.projectIds.length} projects`;
+
+  const selectedParty = filters.partyId ? partiesById[filters.partyId] : null;
+
+  return (
+    <Modal
+      visible={open}
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            sheetStyles.sheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 8,
+              maxHeight: '88%',
+            },
+          ]}
+        >
+          <View
+            style={[
+              sheetStyles.grabber,
+              { backgroundColor: t.colors.tertiary },
+            ]}
+          />
+          <View
+            style={[
+              sheetStyles.header,
+              {
+                borderBottomColor: t.colors.separator,
+                borderBottomWidth: t.hairline,
+              },
+            ]}
+          >
+            <Pressable onPress={onClose} hitSlop={8} style={sheetStyles.sideBtn}>
+              <Text variant="body" style={{ color: t.palette.blue.base }}>
+                Cancel
+              </Text>
+            </Pressable>
+            <Text
+              variant="headline"
+              color="label"
+              style={[sheetStyles.title, { fontWeight: '600' }]}
+            >
+              Filters
+            </Text>
+            <Pressable
+              onPress={onClose}
+              hitSlop={8}
+              style={[sheetStyles.sideBtn, { alignItems: 'flex-end' }]}
+            >
+              <Text
+                variant="body"
+                style={{ color: t.palette.blue.base, fontWeight: '600' }}
+              >
+                Done
+              </Text>
+            </Pressable>
+          </View>
+
+          <ScrollView
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={{ paddingBottom: 12 }}
+          >
+            {/* Projects */}
+            <Section label="PROJECTS">
+              <Pressable
+                onPress={onPickProjects}
+                style={({ pressed }) => [
+                  sheetStyles.pickerRow,
+                  {
+                    backgroundColor: t.colors.fill3,
+                    borderRadius: t.radii.field,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Ionicons
+                  name="briefcase-outline"
+                  size={15}
+                  color={t.palette.blue.base}
+                />
+                <Text
+                  variant="callout"
+                  color="label"
+                  style={{ flex: 1, marginLeft: 8 }}
+                  numberOfLines={1}
+                >
+                  {projectsLabel}
+                </Text>
+                {filters.projectIds.length > 0 ? (
+                  <Pressable
+                    onPress={() => onChange({ ...filters, projectIds: [] })}
+                    hitSlop={8}
+                  >
+                    <Ionicons
+                      name="close-circle"
+                      size={16}
+                      color={t.colors.tertiary}
+                    />
+                  </Pressable>
+                ) : (
+                  <Ionicons
+                    name="chevron-forward"
+                    size={14}
+                    color={t.colors.tertiary}
+                  />
+                )}
+              </Pressable>
+            </Section>
+
+            {/* Type */}
+            <Section label="TYPE">
+              <ChipRow
+                options={[
+                  { key: 'all', label: 'All' },
+                  { key: 'payment_in', label: 'Payment in' },
+                  { key: 'payment_out', label: 'Payment out' },
+                ]}
+                value={filters.type}
+                onChange={(v) =>
+                  onChange({ ...filters, type: v as TransactionType | 'all' })
+                }
+              />
+            </Section>
+
+            {/* Category */}
+            <Section label="CATEGORY">
+              <ChipRow
+                options={[
+                  { key: 'all', label: 'All' },
+                  ...TRANSACTION_CATEGORIES.map((c) => ({ key: c.key, label: c.label })),
+                ]}
+                value={filters.category}
+                onChange={(v) =>
+                  onChange({ ...filters, category: v as TransactionCategory | 'all' })
+                }
+              />
+            </Section>
+
+            {/* Method */}
+            <Section label="METHOD">
+              <ChipRow
+                options={[
+                  { key: 'all', label: 'All' },
+                  ...PAYMENT_METHODS.map((m) => ({ key: m.key, label: m.label })),
+                ]}
+                value={filters.paymentMethod}
+                onChange={(v) =>
+                  onChange({ ...filters, paymentMethod: v as PaymentMethod | 'all' })
+                }
+              />
+            </Section>
+
+            {/* Party */}
+            <Section label="PARTY">
+              <Pressable
+                onPress={onPickParty}
+                style={({ pressed }) => [
+                  sheetStyles.pickerRow,
+                  {
+                    backgroundColor: t.colors.fill3,
+                    borderRadius: t.radii.field,
+                  },
+                  pressed && { opacity: 0.85 },
+                ]}
+              >
+                <Ionicons
+                  name="people-outline"
+                  size={15}
+                  color={t.palette.blue.base}
+                />
+                <Text
+                  variant="callout"
+                  color="label"
+                  style={{ flex: 1, marginLeft: 8 }}
+                  numberOfLines={1}
+                >
+                  {selectedParty?.name ?? 'All parties'}
+                </Text>
+                {filters.partyId ? (
+                  <Pressable
+                    onPress={() => onChange({ ...filters, partyId: null })}
+                    hitSlop={8}
+                  >
+                    <Ionicons
+                      name="close-circle"
+                      size={16}
+                      color={t.colors.tertiary}
+                    />
+                  </Pressable>
+                ) : (
+                  <Ionicons
+                    name="chevron-forward"
+                    size={14}
+                    color={t.colors.tertiary}
+                  />
+                )}
+              </Pressable>
+            </Section>
+
+            {/* Clear all */}
+            {activeCount > 0 ? (
+              <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+                <Pressable
+                  onPress={onClearAll}
+                  style={({ pressed }) => [
+                    sheetStyles.clearBtn,
+                    {
+                      backgroundColor:
+                        t.mode === 'dark' ? t.palette.red.softDark : t.palette.red.soft,
+                      borderRadius: t.radii.field,
+                    },
+                    pressed && { opacity: 0.85 },
+                  ]}
+                >
+                  <Ionicons
+                    name="close-circle-outline"
+                    size={14}
+                    color={t.palette.red.base}
+                  />
+                  <Text
+                    variant="footnote"
+                    style={{
+                      color: t.palette.red.base,
+                      fontWeight: '700',
+                      marginLeft: 6,
+                    }}
+                  >
+                    Clear all filters
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+}
+
+function Section({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+      <Text
+        variant="caption2"
+        color="secondary"
+        style={{ letterSpacing: 0.4, marginBottom: 8, paddingHorizontal: 4 }}
+      >
+        {label}
+      </Text>
+      {children}
+    </View>
+  );
+}
+
+function ChipRow({
+  options,
+  value,
+  onChange,
+}: {
+  options: { key: string; label: string }[];
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const t = useThemeV2();
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ gap: 6 }}
+    >
+      {options.map((opt) => {
+        const sel = opt.key === value;
+        return (
+          <Pressable
+            key={opt.key}
+            onPress={() => onChange(opt.key)}
+            style={({ pressed }) => [
+              styles.chip,
+              {
+                backgroundColor: sel
+                  ? t.mode === 'dark'
+                    ? t.palette.blue.softDark
+                    : t.palette.blue.soft
+                  : t.colors.fill3,
+                borderRadius: 999,
+              },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Text
+              variant="footnote"
+              style={{
+                color: sel ? t.palette.blue.base : t.colors.label,
+                fontWeight: sel ? '700' : '500',
+              }}
+            >
+              {opt.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
+// ── Project multi-picker (search + multi-select) ──
+
+function ProjectMultiPickerSheet({
   visible,
   projects,
   selectedIds,
@@ -745,11 +1250,12 @@ function ProjectMultiPicker({
   onClose: () => void;
   onSave: (ids: string[]) => void;
 }) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState<Set<string>>(new Set(selectedIds));
   const [search, setSearch] = useState('');
 
-  // Re-sync when sheet opens
-  useMemo(() => {
+  useEffect(() => {
     if (visible) {
       setDraft(new Set(selectedIds));
       setSearch('');
@@ -773,533 +1279,538 @@ function ProjectMultiPicker({
     });
   };
 
+  const close = () => {
+    Keyboard.dismiss();
+    onClose();
+  };
+
   return (
-    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <View style={styles.modalBackdrop}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
-        <View style={styles.modalSheet}>
-          <View style={styles.modalHandle} />
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>Select Projects</Text>
-            <Pressable onPress={onClose} hitSlop={12}>
-              <Ionicons name="close" size={22} color={color.textMuted} />
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={close}
+      statusBarTranslucent
+    >
+      <KeyboardAvoidingView
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={close} />
+        <View
+          style={[
+            sheetStyles.sheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 8,
+              maxHeight: '88%',
+            },
+          ]}
+        >
+          <View
+            style={[sheetStyles.grabber, { backgroundColor: t.colors.tertiary }]}
+          />
+          <View
+            style={[
+              sheetStyles.header,
+              {
+                borderBottomColor: t.colors.separator,
+                borderBottomWidth: t.hairline,
+              },
+            ]}
+          >
+            <Pressable onPress={close} hitSlop={8} style={sheetStyles.sideBtn}>
+              <Text variant="body" style={{ color: t.palette.blue.base }}>
+                Cancel
+              </Text>
+            </Pressable>
+            <Text
+              variant="headline"
+              color="label"
+              style={[sheetStyles.title, { fontWeight: '600' }]}
+            >
+              Select projects
+            </Text>
+            <Pressable
+              onPress={() => onSave(Array.from(draft))}
+              hitSlop={8}
+              style={[sheetStyles.sideBtn, { alignItems: 'flex-end' }]}
+            >
+              <Text
+                variant="body"
+                style={{ color: t.palette.blue.base, fontWeight: '600' }}
+              >
+                Apply
+              </Text>
             </Pressable>
           </View>
 
-          <View style={styles.searchWrap}>
-            <Ionicons name="search-outline" size={16} color={color.textMuted} />
-            <TextInput
-              value={search}
-              onChangeText={setSearch}
-              placeholder="Search projects"
-              placeholderTextColor={color.textMuted}
-              style={styles.searchInput}
-            />
+          {/* Search */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+            <View
+              style={[
+                sheetStyles.searchBar,
+                { backgroundColor: t.colors.fill3, borderRadius: t.radii.field },
+              ]}
+            >
+              <Ionicons name="search" size={16} color={t.colors.tertiary} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search projects"
+                placeholderTextColor={t.colors.tertiary}
+                style={[
+                  sheetStyles.searchInput,
+                  { color: t.colors.label, ...t.type.callout },
+                ]}
+                returnKeyType="search"
+              />
+              {search ? (
+                <Pressable onPress={() => setSearch('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={16} color={t.colors.tertiary} />
+                </Pressable>
+              ) : null}
+            </View>
           </View>
 
-          <Pressable
-            onPress={() => setDraft(new Set())}
-            style={styles.partyRow}
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            contentContainerStyle={{ paddingBottom: 12 }}
           >
-            <Text style={[styles.partyName, { fontWeight: '700' }]}>All projects</Text>
-            {allSelected ? (
-              <Ionicons name="checkmark-circle" size={18} color={color.primary} />
-            ) : (
-              <Ionicons name="ellipse-outline" size={18} color={color.textFaint} />
-            )}
-          </Pressable>
+            {/* All projects toggle */}
+            <Pressable
+              onPress={() => setDraft(new Set())}
+              style={({ pressed }) => [
+                sheetStyles.optionRow,
+                pressed && { backgroundColor: t.colors.fill3 },
+              ]}
+            >
+              <Text variant="body" color="label" style={{ flex: 1, fontWeight: '600' }}>
+                All projects
+              </Text>
+              {allSelected ? (
+                <Ionicons
+                  name="checkmark-circle"
+                  size={20}
+                  color={t.palette.blue.base}
+                />
+              ) : (
+                <Ionicons
+                  name="ellipse-outline"
+                  size={20}
+                  color={t.colors.tertiary}
+                />
+              )}
+            </Pressable>
 
-          <ScrollView style={{ maxHeight: 360 }}>
             {filtered.map((p) => {
               const checked = draft.has(p.id);
               return (
-                <Pressable key={p.id} onPress={() => toggle(p.id)} style={styles.partyRow}>
-                  <Text style={styles.partyName} numberOfLines={1}>{p.name}</Text>
+                <Pressable
+                  key={p.id}
+                  onPress={() => toggle(p.id)}
+                  style={({ pressed }) => [
+                    sheetStyles.optionRow,
+                    pressed && { backgroundColor: t.colors.fill3 },
+                  ]}
+                >
+                  <Text
+                    variant="body"
+                    color="label"
+                    style={{ flex: 1 }}
+                    numberOfLines={1}
+                  >
+                    {p.name}
+                  </Text>
                   <Ionicons
                     name={checked ? 'checkbox' : 'square-outline'}
                     size={20}
-                    color={checked ? color.primary : color.textFaint}
+                    color={checked ? t.palette.blue.base : t.colors.tertiary}
                   />
                 </Pressable>
               );
             })}
-            {filtered.length === 0 && (
-              <View style={{ padding: 24, alignItems: 'center' }}>
-                <Text style={{ color: color.textMuted }}>No projects found</Text>
+            {filtered.length === 0 ? (
+              <View style={{ paddingVertical: 32, alignItems: 'center' }}>
+                <Text variant="callout" color="secondary">
+                  No projects found
+                </Text>
               </View>
-            )}
+            ) : null}
           </ScrollView>
-
-          <View style={styles.modalFooter}>
-            <Pressable onPress={() => onSave(Array.from(draft))} style={styles.saveBtn}>
-              <Text style={styles.saveBtnText}>
-                {draft.size === 0
-                  ? 'Apply (All)'
-                  : draft.size === 1
-                    ? 'Apply (1 project)'
-                    : `Apply (${draft.size} projects)`}
-              </Text>
-            </Pressable>
-          </View>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
-function FilterSection({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <View style={styles.filterSection}>
-      <Text style={styles.filterLabel}>{label}</Text>
-      {children}
-    </View>
-  );
-}
+// ── Party picker (search + single-select) ──
 
-function ChipRow({
-  options,
-  value,
-  onChange,
+function PartyPickerSheet({
+  visible,
+  parties,
+  selectedId,
+  onPick,
+  onClose,
 }: {
-  options: { key: string; label: string }[];
-  value: string;
-  onChange: (v: string) => void;
+  visible: boolean;
+  parties: { id: string; name: string }[];
+  selectedId: string | null;
+  onPick: (id: string | null) => void;
+  onClose: () => void;
 }) {
+  const t = useThemeV2();
+  const insets = useSafeAreaInsets();
+  const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    if (visible) setSearch('');
+  }, [visible]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return parties;
+    return parties.filter((p) => p.name.toLowerCase().includes(q));
+  }, [parties, search]);
+
+  const close = () => {
+    Keyboard.dismiss();
+    onClose();
+  };
+
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={{ gap: 6 }}
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      onRequestClose={close}
+      statusBarTranslucent
     >
-      {options.map((opt) => {
-        const sel = opt.key === value;
-        return (
-          <Pressable
-            key={opt.key}
-            onPress={() => onChange(opt.key)}
-            style={[styles.chip, sel ? styles.chipActive : undefined]}
+      <KeyboardAvoidingView
+        style={{ flex: 1, justifyContent: 'flex-end' }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      >
+        <Pressable style={StyleSheet.absoluteFill} onPress={close} />
+        <View
+          style={[
+            sheetStyles.sheet,
+            {
+              backgroundColor: t.colors.surface,
+              borderTopLeftRadius: t.radii.sheet,
+              borderTopRightRadius: t.radii.sheet,
+              paddingBottom: insets.bottom + 8,
+              maxHeight: '88%',
+            },
+          ]}
+        >
+          <View
+            style={[sheetStyles.grabber, { backgroundColor: t.colors.tertiary }]}
+          />
+          <View
+            style={[
+              sheetStyles.header,
+              {
+                borderBottomColor: t.colors.separator,
+                borderBottomWidth: t.hairline,
+              },
+            ]}
           >
-            <Text style={sel ? [styles.chipText, styles.chipTextActive] : styles.chipText}>
-              {opt.label}
+            <Pressable onPress={close} hitSlop={8} style={sheetStyles.sideBtn}>
+              <Text variant="body" style={{ color: t.palette.blue.base }}>
+                Cancel
+              </Text>
+            </Pressable>
+            <Text
+              variant="headline"
+              color="label"
+              style={[sheetStyles.title, { fontWeight: '600' }]}
+            >
+              Select party
             </Text>
-          </Pressable>
-        );
-      })}
-    </ScrollView>
+            <View style={sheetStyles.sideBtn} />
+          </View>
+
+          <View style={{ paddingHorizontal: 16, paddingTop: 12 }}>
+            <View
+              style={[
+                sheetStyles.searchBar,
+                { backgroundColor: t.colors.fill3, borderRadius: t.radii.field },
+              ]}
+            >
+              <Ionicons name="search" size={16} color={t.colors.tertiary} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Search parties"
+                placeholderTextColor={t.colors.tertiary}
+                style={[
+                  sheetStyles.searchInput,
+                  { color: t.colors.label, ...t.type.callout },
+                ]}
+                returnKeyType="search"
+              />
+              {search ? (
+                <Pressable onPress={() => setSearch('')} hitSlop={8}>
+                  <Ionicons name="close-circle" size={16} color={t.colors.tertiary} />
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            contentContainerStyle={{ paddingBottom: 12 }}
+          >
+            <Pressable
+              onPress={() => onPick(null)}
+              style={({ pressed }) => [
+                sheetStyles.optionRow,
+                pressed && { backgroundColor: t.colors.fill3 },
+              ]}
+            >
+              <Text
+                variant="body"
+                color="label"
+                style={{ flex: 1, fontWeight: !selectedId ? '600' : '400' }}
+              >
+                All parties
+              </Text>
+              {!selectedId ? (
+                <Ionicons name="checkmark" size={20} color={t.palette.blue.base} />
+              ) : null}
+            </Pressable>
+            {filtered.map((p) => {
+              const sel = selectedId === p.id;
+              return (
+                <Pressable
+                  key={p.id}
+                  onPress={() => onPick(p.id)}
+                  style={({ pressed }) => [
+                    sheetStyles.optionRow,
+                    pressed && { backgroundColor: t.colors.fill3 },
+                  ]}
+                >
+                  <Text
+                    variant="body"
+                    color="label"
+                    style={{ flex: 1, fontWeight: sel ? '600' : '400' }}
+                    numberOfLines={1}
+                  >
+                    {p.name}
+                  </Text>
+                  {sel ? (
+                    <Ionicons name="checkmark" size={20} color={t.palette.blue.base} />
+                  ) : null}
+                </Pressable>
+              );
+            })}
+            {filtered.length === 0 ? (
+              <View style={{ paddingVertical: 32, alignItems: 'center' }}>
+                <Text variant="callout" color="secondary">
+                  No parties found
+                </Text>
+              </View>
+            ) : null}
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
   );
 }
 
 const styles = StyleSheet.create({
-  navBar: {
+  // Header
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: color.bg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.border,
-    gap: 8,
-  },
-  navBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
-  navIconBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.borderStrong,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  navTitleWrap: { flex: 1 },
-  navTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 16,
-    fontWeight: '700',
-    color: color.text,
-    letterSpacing: -0.3,
-  },
-  navSub: {
-    fontFamily: fontFamily.sans,
-    fontSize: 9,
-    fontWeight: '500',
-    color: color.textMuted,
-    letterSpacing: 0.6,
-    marginTop: 1,
-  },
-
-  listContent: {
-    padding: 12,
-    paddingBottom: 100,
-    gap: 8,
-  },
-
-  sectionLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.textMuted,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    marginTop: 2,
-  },
-  chipScroll: {
-    gap: 6,
-    paddingVertical: 6,
-  },
-  periodChip: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 18,
-    backgroundColor: color.bg,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  periodChipActive: { backgroundColor: color.primary, borderColor: color.primary },
-  periodChipText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 12,
-    fontWeight: '600',
-    color: color.textMuted,
-  },
-  periodChipTextActive: { color: '#fff' },
-
-  dateRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
-
-  totalsRow: { flexDirection: 'row', gap: 8, marginTop: 6, marginBottom: 10 },
-  totalCell: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    alignItems: 'center',
-  },
-  totalIn: { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' },
-  totalOut: { backgroundColor: '#fef2f2', borderColor: '#fecaca' },
-  totalBal: { backgroundColor: '#eff6ff', borderColor: '#bfdbfe' },
-  totalLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 0.6,
-    color: color.textMuted,
-    marginBottom: 4,
-  },
-  totalValue: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-
-  filterToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: color.bg,
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 8,
-  },
-  filterToggleText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.text,
-  },
-  filterBadge: {
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 9,
-    backgroundColor: color.primary,
-  },
-  filterBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-
-  card: {
-    backgroundColor: color.bg,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 10,
-  },
-
-  filterSection: { marginTop: 10 },
-  filterLabel: {
-    fontFamily: fontFamily.sans,
-    fontSize: 10,
-    fontWeight: '700',
-    color: color.textMuted,
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-    marginBottom: 6,
-  },
-  chip: {
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: 'transparent',
-  },
-  chipActive: { backgroundColor: '#EEF2FF', borderColor: color.primary },
-  chipText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 12,
-    fontWeight: '500',
-    color: color.textMuted,
-  },
-  chipTextActive: { color: color.primary, fontWeight: '600' },
-
-  pickerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#F8FAFC',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  pickerBtnText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    color: color.text,
-    flexShrink: 1,
-  },
-
-  clearAll: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginTop: 12,
-    alignSelf: 'flex-start',
-  },
-  clearAllText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 12,
-    color: color.primary,
-    fontWeight: '600',
-  },
-
-  txnHeader: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    marginTop: 6,
-    marginBottom: 4,
-  },
-  txnCount: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    color: color.textMuted,
-  },
-
-  txnRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: color.bg,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: color.border,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    gap: 12,
-    marginBottom: 6,
-  },
-  txnDateCol: {
-    width: 44,
-    alignItems: 'center',
-  },
-  txnDate: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    fontWeight: '600',
-    color: color.textMuted,
-  },
-  txnBody: {
-    flex: 1,
-    minWidth: 0,
-  },
-  txnTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '600',
-    color: color.text,
-  },
-  txnProj: {
-    fontWeight: '400',
-    color: color.textMuted,
-    fontSize: 11,
-  },
-  txnSub: {
-    fontFamily: fontFamily.sans,
-    fontSize: 11,
-    color: color.textMuted,
-    marginTop: 2,
-  },
-  txnAmtCol: {
-    alignItems: 'flex-end',
-  },
-  txnAmt: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    fontWeight: '700',
-    fontVariant: ['tabular-nums'],
-  },
-
-  empty: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 40,
+    paddingHorizontal: 16,
+    paddingTop: 50,
+    paddingBottom: 12,
     gap: 10,
   },
-  emptyTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    color: color.textMuted,
-    textAlign: 'center',
-  },
-  emptyClearBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: color.primary,
-  },
-  emptyClearText: {
-    color: '#fff',
-    fontWeight: '600',
-    fontSize: 12,
+  iconBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
+  // Period chip
+  chip: {
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+
+  // Custom date row
+  customDateRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    gap: 8,
+  },
+  datePickerBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+
+  // Combined In/Out/Balance card
+  totalsCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  totalCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  totalsDivider: {
+    width: StyleSheet.hairlineWidth,
+    alignSelf: 'stretch',
+    marginHorizontal: 6,
+  },
+
+  // Filter button
+  filterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 4,
+  },
+  countBadge: {
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+
+  // Transactions header
+  txnHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 32,
+    paddingTop: 24,
+    paddingBottom: 8,
+  },
+
+  // Row
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginHorizontal: 16,
+    position: 'relative',
+  },
+  datePill: {
+    width: 48,
+    paddingVertical: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowDivider: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    height: 0.5,
+  },
+
+  // Empty
+  empty: {
+    paddingVertical: 48,
+    paddingHorizontal: 32,
+    alignItems: 'center',
+  },
+  emptyIcon: {
+    width: 56,
+    height: 56,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  clearBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    marginTop: 14,
+  },
+
+  // Floating
   floatingBar: {
     position: 'absolute',
-    bottom: 16,
-    left: 12,
-    right: 12,
+    left: 16,
+    right: 16,
+    bottom: 24,
   },
   generateBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    backgroundColor: color.primary,
-    borderRadius: 12,
     paddingVertical: 14,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowOpacity: 0.18,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 6,
   },
-  generateBtnText: {
-    color: '#fff',
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    fontWeight: '700',
-  },
+});
 
-  modalBackdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.4)',
-  },
-  modalSheet: {
-    backgroundColor: color.bg,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
-    paddingTop: 6,
-    paddingBottom: 24,
-    maxHeight: '85%',
-  },
-  modalHandle: {
+const sheetStyles = StyleSheet.create({
+  sheet: { paddingTop: 8 },
+  grabber: {
     width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: color.border,
+    height: 5,
+    borderRadius: 3,
     alignSelf: 'center',
     marginBottom: 8,
   },
-  modalHeader: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.border,
+    paddingVertical: 10,
   },
-  modalTitle: {
-    fontFamily: fontFamily.sans,
-    fontSize: 16,
-    fontWeight: '700',
-    color: color.text,
-  },
-  doneText: {
-    fontFamily: fontFamily.sans,
-    fontSize: 15,
-    fontWeight: '700',
-    color: color.primary,
-  },
-  modalFooter: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: color.border,
-  },
-  saveBtn: {
-    backgroundColor: color.primary,
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  saveBtnText: {
-    color: '#fff',
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  searchWrap: {
+  sideBtn: { minWidth: 70 },
+  title: { flex: 1, textAlign: 'center' },
+
+  searchBar: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: '#F1F5F9',
-    marginHorizontal: 16,
-    marginVertical: 10,
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingVertical: 10,
   },
-  searchInput: {
-    flex: 1,
-    fontFamily: fontFamily.sans,
-    fontSize: 13,
-    color: color.text,
-    padding: 0,
-  },
-  partyRow: {
+  searchInput: { flex: 1, paddingVertical: 0, margin: 0 },
+
+  pickerRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+  },
+  optionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: color.border,
+    minHeight: 48,
   },
-  partyName: {
-    fontFamily: fontFamily.sans,
-    fontSize: 14,
-    color: color.text,
-    flex: 1,
-    marginRight: 12,
+  clearBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
   },
 });
